@@ -93,12 +93,20 @@ app.whenReady().then(() => {
 
   ipcMain.handle('profiles:list', () => {
     const result = profiles.list()
-    const line = `${new Date().toISOString()} profiles:list -> ${result.length} from ${app.getPath('userData')}`
+    // Durable breadcrumb (userData/diag.log): the parsed count plus the RAW
+    // directory read with error text. The raw view is what cracked the
+    // vanishing-profiles case — keep it.
+    const userData = app.getPath('userData')
+    let raw: string
+    try {
+      raw = fs.readdirSync(path.join(userData, 'profiles')).join('|') || '(empty)'
+    } catch (e) {
+      raw = 'READDIR-ERR ' + String(e)
+    }
+    const line = `${new Date().toISOString()} profiles:list -> ${result.length} raw=[${raw}] userData=${userData}`
     console.log(`[diag] ${line}`)
     try {
-      // Durable breadcrumb: if profiles ever look missing again, this file
-      // records what the backend actually saw at that moment.
-      fs.appendFileSync(path.join(app.getPath('userData'), 'diag.log'), line + '\n')
+      fs.appendFileSync(path.join(userData, 'diag.log'), line + '\n')
     } catch {
       // diagnostics must never break the answer
     }

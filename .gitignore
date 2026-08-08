@@ -2,5 +2,7 @@ node_modules/
 out/
 dist/
 release/
+recovery-data/
+recovery-result.txt
 *.log
 .DS_Store
