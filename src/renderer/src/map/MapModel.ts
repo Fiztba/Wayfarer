@@ -52,7 +52,7 @@ export class MapModel {
 
   getVersion = (): number => this.version
 
-  private touch(): void {
+  protected touch(): void {
     this.version++
     for (const fn of this.subs) fn()
     if (this.saveTimer) clearTimeout(this.saveTimer)
@@ -72,13 +72,18 @@ export class MapModel {
 
   // ---- zones --------------------------------------------------------------
 
-  createZone(name: string): string {
+  createZone(name: string, id?: string): string {
     const existing = this.map.zones.find((z) => z.name.toLowerCase() === name.toLowerCase())
     if (existing) return existing.id
-    const id = uuid()
-    this.map.zones.push({ id, name })
+    const zoneId = id ?? uuid()
+    this.map.zones.push({ id: zoneId, name })
     this.touch()
-    return id
+    return zoneId
+  }
+
+  /** Arm/disarm the pending zone (see pendingZoneId). */
+  setPendingZone(id: string | null): void {
+    this.pendingZoneId = id
   }
 
   renameZone(id: string, name: string): void {
@@ -263,6 +268,21 @@ export class MapModel {
     const room = this.map.rooms[roomId]
     if (!room) return
     room.exits = room.exits.filter((e) => e !== exit)
+    this.touch()
+  }
+
+  /** Index-based exit edits (serializable — usable over the pop-out RPC). */
+  setExitAt(roomId: string, index: number, patch: Partial<MapExit>): void {
+    const exit = this.map.rooms[roomId]?.exits[index]
+    if (!exit) return
+    Object.assign(exit, patch)
+    this.touch()
+  }
+
+  removeExitAt(roomId: string, index: number): void {
+    const room = this.map.rooms[roomId]
+    if (!room || index < 0 || index >= room.exits.length) return
+    room.exits.splice(index, 1)
     this.touch()
   }
 

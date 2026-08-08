@@ -1,13 +1,25 @@
 /**
- * MapPane — the docked mapper UI for one session: toolbar (mode, zone, level,
- * waypoints, pop-out), the canvas, the right-click editor, and the exits &
- * doors editor.
+ * MapPane — the full mapper UI (toolbar, canvas, right-click editor, exits &
+ * doors). Driven by a plain model + tracker + callbacks so it serves BOTH the
+ * docked pane (live SessionStore model) and the pop-out window (RemoteMapModel
+ * mirroring over IPC). Every mutation goes through MapModel methods, which the
+ * remote variant forwards to the owning session.
  */
-import React, { useCallback, useEffect, useState, useSyncExternalStore } from 'react'
-import type { SessionStore } from '../SessionStore'
+import React, { useCallback, useEffect, useState } from 'react'
 import { MapCanvas, type MapContextInfo } from './MapCanvas'
 import { ClampedMenu } from './ClampedMenu'
+import type { MapModel } from '../map/MapModel'
+import type { TrackerControl } from '../map/RemoteMap'
 import { DIR_FULL, type Direction, type MapExit } from '../map/types'
+
+export interface MapPaneProps {
+  model: MapModel
+  tracker: TrackerControl
+  walkTo(roomId: string, fast?: boolean): void
+  /** Shown only in the docked pane. */
+  onPopout?(): void
+  onClose?(): void
+}
 
 type MenuState =
   | { kind: 'closed' }
@@ -18,13 +30,9 @@ type MenuState =
 
 const ROOM_COLORS = ['', '#7c2d2d', '#7c5a2d', '#2d5a2d', '#2d4a7c', '#5a2d7c', '#2d6b6b']
 
-export function MapPane({ store }: { store: SessionStore }) {
-  useSyncExternalStore(store.subscribe, store.getVersion)
-  const model = store.mapModel
-  const tracker = store.tracker
+export function MapPane({ model, tracker, walkTo, onPopout, onClose }: MapPaneProps) {
   const [, force] = useState(0)
   useEffect(() => {
-    if (!model || !tracker) return
     const off1 = model.subscribe(() => force((n) => n + 1))
     const off2 = tracker.subscribe(() => force((n) => n + 1))
     return () => {
@@ -47,18 +55,21 @@ export function MapPane({ store }: { store: SessionStore }) {
     value: string
   } | null>(null)
 
-  const locateRoom = useCallback((roomId: string) => {
-    const room = store.mapModel?.room(roomId)
-    if (!room) return
-    setViewZoneId(room.zoneId)
-    setViewZ(room.z)
-    setSelectedId(roomId)
-    setCenterRoomId(roomId)
-    setCenterToken((t) => t + 1)
-  }, [store])
+  const locateRoom = useCallback(
+    (roomId: string) => {
+      const room = model.room(roomId)
+      if (!room) return
+      setViewZoneId(room.zoneId)
+      setViewZ(room.z)
+      setSelectedId(roomId)
+      setCenterRoomId(roomId)
+      setCenterToken((t) => t + 1)
+    },
+    [model]
+  )
 
-  const current = tracker?.currentRoom ?? null
-  const zoneId = viewZoneId ?? current?.zoneId ?? model?.activeZoneId ?? ''
+  const current = tracker.currentRoom
+  const zoneId = viewZoneId ?? current?.zoneId ?? model.activeZoneId ?? ''
   const z = viewZ ?? current?.z ?? 0
 
   // Auto-follow: when the player moves, snap the view to their zone/level.
@@ -74,18 +85,8 @@ export function MapPane({ store }: { store: SessionStore }) {
 
   const closeMenu = useCallback(() => setMenu({ kind: 'closed' }), [])
 
-  if (!model || !tracker) {
-    return (
-      <div className="map-pane">
-        <div className="map-toolbar">Loading map…</div>
-      </div>
-    )
-  }
-
   const menuRoom =
-    menu.kind === 'menu' || menu.kind === 'input'
-      ? model.room(menu.info.roomId)
-      : null
+    menu.kind === 'menu' || menu.kind === 'input' ? model.room(menu.info.roomId) : null
 
   const commitInput = () => {
     if (menu.kind !== 'input') return
@@ -123,7 +124,7 @@ export function MapPane({ store }: { store: SessionStore }) {
             } else {
               setViewZoneId(e.target.value)
               model.setActiveZone(e.target.value)
-              model.pendingZoneId = e.target.value
+              model.setPendingZone(e.target.value)
             }
           }}
         >
@@ -171,36 +172,26 @@ export function MapPane({ store }: { store: SessionStore }) {
         >
           ⌖
         </button>
-        <button
-          className="map-btn"
-          title="Waypoints"
-          onClick={() => setShowWaypoints((s) => !s)}
-        >
+        <button className="map-btn" title="Waypoints" onClick={() => setShowWaypoints((s) => !s)}>
           ★
         </button>
-        <button
-          className="map-btn"
-          title="Find duplicate rooms"
-          onClick={() => setShowDupes((s) => !s)}
-        >
+        <button className="map-btn" title="Find duplicate rooms" onClick={() => setShowDupes((s) => !s)}>
           🧹
         </button>
-        <button
-          className="map-btn"
-          title="Open map in its own window"
-          onClick={() => window.mud.map.popout(store.id, store.name)}
-        >
-          ⧉
-        </button>
-        <button className="map-btn" title="Close map pane (#map)" onClick={() => store.toggleMap()}>
-          ✕
-        </button>
+        {onPopout && (
+          <button className="map-btn" title="Open map in its own window" onClick={onPopout}>
+            ⧉
+          </button>
+        )}
+        {onClose && (
+          <button className="map-btn" title="Close map pane (#map)" onClick={onClose}>
+            ✕
+          </button>
+        )}
       </div>
 
       {tracker.lost && (
-        <div className="map-lost">
-          Position unknown — right-click your room → “I am here”.
-        </div>
+        <div className="map-lost">Position unknown — right-click your room → “I am here”.</div>
       )}
 
       {zoneDialog?.mode === 'delete' && (
@@ -247,7 +238,7 @@ export function MapPane({ store }: { store: SessionStore }) {
                   if (zoneDialog.mode === 'create') {
                     const id = model.createZone(name)
                     model.setActiveZone(id)
-                    model.pendingZoneId = id
+                    model.setPendingZone(id)
                     setViewZoneId(id)
                   } else {
                     model.renameZone(zoneId, name)
@@ -265,7 +256,7 @@ export function MapPane({ store }: { store: SessionStore }) {
                 if (zoneDialog.mode === 'create') {
                   const id = model.createZone(name)
                   model.setActiveZone(id)
-                  model.pendingZoneId = id
+                  model.setPendingZone(id)
                   setViewZoneId(id)
                 } else {
                   model.renameZone(zoneId, name)
@@ -299,7 +290,7 @@ export function MapPane({ store }: { store: SessionStore }) {
                 title="Walk there"
                 onClick={() => {
                   const room = model.room(wp.roomId)
-                  if (room) store.walkTo(room.id)
+                  if (room) walkTo(room.id)
                   setShowWaypoints(false)
                 }}
               >
@@ -386,17 +377,13 @@ export function MapPane({ store }: { store: SessionStore }) {
             setMultiSel(ids)
             setSelectedId(null)
           }}
-          onWalkRoom={(id) => store.walkTo(id)}
+          onWalkRoom={(id) => walkTo(id)}
           onMoveRoom={(id, x, y) => model.moveRoom(id, x, y)}
           onContextMenu={(info) => setMenu({ kind: 'menu', info })}
         />
 
         {menu.kind === 'menu' && (
-          <ClampedMenu
-            x={menu.info.clientX}
-            y={menu.info.clientY}
-            onClick={(e) => e.stopPropagation()}
-          >
+          <ClampedMenu x={menu.info.clientX} y={menu.info.clientY} onClick={(e) => e.stopPropagation()}>
             {menuRoom && multiSel.length > 1 && multiSel.includes(menuRoom.id) ? (
               <>
                 <div className="map-menu-title">{multiSel.length} rooms selected</div>
@@ -432,10 +419,8 @@ export function MapPane({ store }: { store: SessionStore }) {
                 <button onClick={() => { tracker.setCurrentRoom(menuRoom.id); closeMenu() }}>
                   ⌖ I am here
                 </button>
-                <button onClick={() => { store.walkTo(menuRoom.id); closeMenu() }}>
-                  🚶 Walk here
-                </button>
-                <button onClick={() => { store.walkTo(menuRoom.id, true); closeMenu() }}>
+                <button onClick={() => { walkTo(menuRoom.id); closeMenu() }}>🚶 Walk here</button>
+                <button onClick={() => { walkTo(menuRoom.id, true); closeMenu() }}>
                   ⚡ Walk here (fast)
                 </button>
                 <button onClick={() => setMenu({ kind: 'input', info: menu.info, mode: 'waypoint', value: '' })}>
@@ -450,7 +435,7 @@ export function MapPane({ store }: { store: SessionStore }) {
                 <button onClick={() => setMenu({ kind: 'input', info: menu.info, mode: 'special', value: '' })}>
                   ◈ Add special exit…
                 </button>
-                <button onClick={() => { setMenu({ kind: 'exits', roomId: menuRoom.id }) }}>
+                <button onClick={() => setMenu({ kind: 'exits', roomId: menuRoom.id })}>
                   🚪 Exits &amp; doors…
                 </button>
                 <button
@@ -472,9 +457,7 @@ export function MapPane({ store }: { store: SessionStore }) {
                   ))}
                 </div>
                 {selectedId && selectedId !== menuRoom.id && (
-                  <button
-                    onClick={() => { model.mergeRooms(selectedId, menuRoom.id); closeMenu() }}
-                  >
+                  <button onClick={() => { model.mergeRooms(selectedId, menuRoom.id); closeMenu() }}>
                     ⇥ Merge into selected room
                   </button>
                 )}
@@ -506,11 +489,7 @@ export function MapPane({ store }: { store: SessionStore }) {
         )}
 
         {menu.kind === 'input' && (
-          <ClampedMenu
-            x={menu.info.clientX}
-            y={menu.info.clientY}
-            onClick={(e) => e.stopPropagation()}
-          >
+          <ClampedMenu x={menu.info.clientX} y={menu.info.clientY} onClick={(e) => e.stopPropagation()}>
             <div className="map-menu-title">
               {menu.mode === 'waypoint' && 'Waypoint name'}
               {menu.mode === 'rename' && 'Room name'}
@@ -537,11 +516,7 @@ export function MapPane({ store }: { store: SessionStore }) {
         )}
 
         {menu.kind === 'zonepick' && (
-          <ClampedMenu
-            x={menu.info.clientX}
-            y={menu.info.clientY}
-            onClick={(e) => e.stopPropagation()}
-          >
+          <ClampedMenu x={menu.info.clientX} y={menu.info.clientY} onClick={(e) => e.stopPropagation()}>
             <div className="map-menu-title">
               Move {menu.roomIds.length === 1 ? 'room' : `${menu.roomIds.length} rooms`} to zone
             </div>
@@ -590,12 +565,7 @@ export function MapPane({ store }: { store: SessionStore }) {
         )}
 
         {menu.kind === 'exits' && (
-          <ExitsEditor
-            store={store}
-            roomId={menu.roomId}
-            selectedId={selectedId}
-            onClose={closeMenu}
-          />
+          <ExitsEditor model={model} roomId={menu.roomId} selectedId={selectedId} onClose={closeMenu} />
         )}
       </div>
     </div>
@@ -603,17 +573,16 @@ export function MapPane({ store }: { store: SessionStore }) {
 }
 
 function ExitsEditor({
-  store,
+  model,
   roomId,
   selectedId,
   onClose
 }: {
-  store: SessionStore
+  model: MapModel
   roomId: string
   selectedId: string | null
   onClose(): void
 }) {
-  const model = store.mapModel!
   const [, force] = useState(0)
   useEffect(() => model.subscribe(() => force((n) => n + 1)), [model])
   const room = model.room(roomId)
@@ -647,10 +616,7 @@ function ExitsEditor({
               checked={exit.door}
               onChange={(e) => {
                 if (exit.dir) model.setDoor(room.id, exit.dir, e.target.checked)
-                else {
-                  exit.door = e.target.checked
-                  model.updateRoom(room.id, {})
-                }
+                else model.setExitAt(room.id, i, { door: e.target.checked })
               }}
             />
             🚪
@@ -663,6 +629,7 @@ function ExitsEditor({
               title='What to open (e.g. "gate")'
               onChange={(e) => {
                 if (exit.dir) model.setDoor(room.id, exit.dir, true, e.target.value)
+                else model.setExitAt(room.id, i, { doorName: e.target.value })
               }}
             />
           )}
@@ -672,12 +639,13 @@ function ExitsEditor({
               title="Link to the selected room"
               onClick={() => {
                 if (exit.dir) model.linkRooms(room.id, exit.dir, selectedId, false)
+                else model.setExitAt(room.id, i, { to: selectedId })
               }}
             >
               ⇥
             </button>
           )}
-          <button className="row-delete" title="Delete exit" onClick={() => model.removeExit(room.id, exit)}>
+          <button className="row-delete" title="Delete exit" onClick={() => model.removeExitAt(room.id, i)}>
             ✕
           </button>
         </div>

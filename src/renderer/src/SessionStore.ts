@@ -15,6 +15,7 @@ import { settingsManager } from './SettingsManager'
 import { uiState } from './uiState'
 import { MapModel } from './map/MapModel.ts'
 import { MapTracker } from './map/MapTracker.ts'
+import { MODEL_ACTION_METHODS } from './map/RemoteMap.ts'
 import { Walker } from './map/Walker.ts'
 import { findPath } from './map/Pathfinder.ts'
 import { wordToDirection, type MudMap, type ServerRoomInfo } from './map/types.ts'
@@ -213,9 +214,28 @@ export class SessionStore {
   }
 
   applyMapAction(action: unknown): void {
-    const a = action as { type: string; roomId?: string; fast?: boolean }
-    if (a.type === 'walkTo' && a.roomId) this.walkTo(a.roomId, a.fast ?? false)
-    else if (a.type === 'setCurrent' && a.roomId) this.tracker?.setCurrentRoom(a.roomId)
+    const a = action as {
+      type?: string
+      method?: string
+      args?: unknown[]
+      roomId?: string
+      fast?: boolean
+    }
+    if (a.type === 'walkTo' && a.roomId) {
+      this.walkTo(a.roomId, a.fast ?? false)
+      return
+    }
+    if (!this.mapModel || !this.tracker) return
+    if (a.type === 'tracker' && (a.method === 'setMode' || a.method === 'setCurrentRoom')) {
+      const fn = this.tracker[a.method] as (...args: unknown[]) => void
+      fn.apply(this.tracker, a.args ?? [])
+      return
+    }
+    if (a.type === 'model' && a.method && MODEL_ACTION_METHODS.has(a.method)) {
+      const target = this.mapModel as unknown as Record<string, (...args: unknown[]) => void>
+      const fn = target[a.method]
+      if (typeof fn === 'function') fn.apply(this.mapModel, a.args ?? [])
+    }
   }
 
   // ---- mapper commands (#map, #go, #wp, #zone, #lost) ---------------------
@@ -293,7 +313,7 @@ export class SessionStore {
       } else {
         const id = this.mapModel.createZone(arg)
         this.mapModel.setActiveZone(id)
-        this.mapModel.pendingZoneId = id
+        this.mapModel.setPendingZone(id)
         this.addSystemLine(
           `Zone armed: ${arg}. The next room you map starts it; rooms after that inherit their neighbor's zone.`,
           'system'

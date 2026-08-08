@@ -472,7 +472,19 @@ export function SessionView({
           <>
             <div className="map-divider" onMouseDown={onDividerDown} />
             <div style={{ width: mapWidth, flex: 'none', display: 'flex' }}>
-              <MapPane store={store} />
+              {store.mapModel && store.tracker ? (
+                <MapPane
+                  model={store.mapModel}
+                  tracker={store.tracker}
+                  walkTo={(id, fast) => store.walkTo(id, fast)}
+                  onPopout={() => window.mud.map.popout(store.id, store.name)}
+                  onClose={() => store.toggleMap()}
+                />
+              ) : (
+                <div className="map-pane">
+                  <div className="map-toolbar">Loading map…</div>
+                </div>
+              )}
             </div>
           </>
         )}

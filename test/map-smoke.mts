@@ -4,6 +4,11 @@
  */
 import { parseExitsLine, RoomCapture } from '../src/renderer/src/map/capture.ts'
 import { MapModel } from '../src/renderer/src/map/MapModel.ts'
+import {
+  MODEL_ACTION_METHODS,
+  RemoteMapModel,
+  type MapAction
+} from '../src/renderer/src/map/RemoteMap.ts'
 import { MapTracker } from '../src/renderer/src/map/MapTracker.ts'
 import { findPath } from '../src/renderer/src/map/Pathfinder.ts'
 import { emptyMap, stripPromptPrefix } from '../src/renderer/src/map/types.ts'
@@ -601,6 +606,47 @@ function makeWorld() {
   savedStale.lastRoomId = 'nonexistent-room'
   const tracker4 = new MapTracker(new MapModel(savedStale, () => {}), { info: () => {} })
   check('stale lastRoomId ignored', tracker4.currentRoomId, null)
+}
+
+// ---- pop-out RPC: remote edits land identically on the real model ----
+{
+  const real = new MapModel(emptyMap(), () => {})
+  const dispatch = (a: MapAction) => {
+    if (a.type === 'model' && MODEL_ACTION_METHODS.has(a.method)) {
+      const target = real as unknown as Record<string, (...args: unknown[]) => void>
+      target[a.method](...a.args)
+    }
+  }
+  const remote = new RemoteMapModel(JSON.parse(JSON.stringify(real.map)), dispatch)
+
+  const room = remote.createRoom({ name: 'Alpha', x: 0, y: 0, z: 0 })
+  check('rpc: room created remotely exists locally', real.room(room.id)?.name, 'Alpha')
+
+  const other = remote.createRoom({ name: 'Beta', x: 1, y: 0, z: 0 })
+  remote.linkRooms(room.id, 'e', other.id, true)
+  check('rpc: link forwarded', real.exitOf(real.room(room.id)!, 'e')?.to, other.id)
+  check('rpc: reverse link forwarded', real.exitOf(real.room(other.id)!, 'w')?.to, room.id)
+
+  remote.setDoor(room.id, 'e', true, 'gate')
+  check('rpc: door forwarded', real.exitOf(real.room(room.id)!, 'e')?.doorName, 'gate')
+
+  const zid = remote.createZone('Sewers')
+  check('rpc: zone id agrees', real.map.zones.some((z) => z.id === zid && z.name === 'Sewers'), true)
+  remote.moveRoomsToZone([room.id], zid)
+  check('rpc: zone move forwarded', real.room(room.id)?.zoneId, zid)
+
+  remote.setWaypoint('home', other.id)
+  check('rpc: waypoint forwarded', real.waypoint('home')?.id, other.id)
+
+  remote.updateRoom(other.id, { name: 'Beta Prime', color: '#123456' })
+  check('rpc: update forwarded', real.room(other.id)?.name, 'Beta Prime')
+
+  remote.removeExitAt(room.id, 0)
+  check('rpc: exit removal forwarded', real.room(room.id)?.exits.length, 0)
+
+  remote.deleteRoom(other.id)
+  check('rpc: delete forwarded', real.room(other.id), null)
+  check('rpc: models agree at the end', JSON.stringify(remote.map.rooms), JSON.stringify(real.map.rooms))
 }
 
 console.log(failures === 0 ? '\nALL PASS' : `\n${failures} FAILURES`)
