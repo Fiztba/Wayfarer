@@ -27,6 +27,7 @@ const sent: string[] = []
 const echoed: string[] = []
 // eslint-disable-next-line prefer-const
 let engine: AutomationEngine
+const beeps: number[] = []
 const runtime = new ScriptRuntime({
   send: (t) => engine.processInput(t),
   sendRaw: (t) => sent.push('RAW:' + t),
@@ -34,6 +35,7 @@ const runtime = new ScriptRuntime({
   echoError: (t) => echoed.push('ERR:' + t),
   getVar: (n) => engine.variables[n],
   setVar: (n, v) => engine.setVar(n, v),
+  beep: (times) => beeps.push(times),
   session: () => ({ name: 'DoD', host: 'tdod.org', port: 4000, connected: true })
 })
 engine = new AutomationEngine(
@@ -109,6 +111,7 @@ feedRoll([9, 9, 8, 10, 10, 9, 9]) // roll #4 hits the cap
 await settle()
 check('cap: autoroll disarmed', engine.variables.autoroll, '0')
 check('cap: best reported', echoed.some((t) => t.includes('Best seen: total 77')), true)
+check('cap: gave-up beep', beeps.includes(2), true)
 check('cap: ranges reported', echoed.some((t) => t.includes('Observed ranges')), true)
 check('cap: ceiling reported', echoed.some((t) => t.includes('ceiling if every stat maxed')), true)
 engine.setVar('rollmax', '1000')
@@ -121,6 +124,7 @@ feedRoll([16, 12, 10, 14, 15, 11, 12]) // str 16, total 90
 await settle()
 check('keeper: no reroll', sent, [])
 check('keeper: announced', echoed.some((t) => t.includes('AUTOROLL KEEPER')), true)
+check('keeper: triple beep', beeps.includes(3), true)
 check('keeper: autoroll disarmed', engine.variables.autoroll, '0')
 check('keeper: best record reset for next character', engine.variables.roll_best_total, '0')
 

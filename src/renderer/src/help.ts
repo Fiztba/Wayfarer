@@ -235,7 +235,7 @@ export const HELP_TOPICS: HelpTopic[] = [
       },
       { h: 'The API (both languages)' },
       {
-        code: 'send(text)      send through the full pipeline (aliases etc.)\nsendRaw(text)   transmit exactly as written\necho(text)      print a local line to this session\ngetVar(name)    read a variable\nsetVar(n, v)    write a variable (persists)\nsession()       { name, host, port, connected }'
+        code: 'send(text)      send through the full pipeline (aliases etc.)\nsendRaw(text)   transmit exactly as written\necho(text)      print a local line to this session\ngetVar(name)    read a variable\nsetVar(n, v)    write a variable (persists)\nbeep(times)     audible attention chime (no sound files needed)\nsession()       { name, host, port, connected }'
       },
       {
         p: 'In JavaScript everything hangs off the client object (client.send(...)); in Lua they are globals (send(...)).'
