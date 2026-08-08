@@ -303,7 +303,7 @@ export const HELP_TOPICS: HelpTopic[] = [
     title: 'The Mapper',
     blocks: [
       {
-        p: 'Wayfarer draws a map of the world as you explore. Open it with the 🗺 Map button or #map; the ⧉ button pops it into its own window (handy for a second monitor — editing stays in the docked pane).'
+        p: 'Wayfarer draws a map of the world as you explore. Open it with the 🗺 Map button or #map; the ⧉ button pops it into its own window — the pop-out is the full editor, so you can keep the map on a second monitor and do everything there: edit rooms and exits, manage zones and waypoints, merge duplicates, walk.'
       },
       { h: 'How it tracks you' },
       {

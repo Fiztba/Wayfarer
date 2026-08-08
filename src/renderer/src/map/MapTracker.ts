@@ -23,6 +23,8 @@ import {
   type ServerRoomInfo
 } from './types.ts'
 
+import type { TrackerControl } from './RemoteMap.ts'
+
 export type TrackerMode = 'map' | 'follow' | 'off'
 
 interface PendingMove {
@@ -38,7 +40,7 @@ export interface TrackerHost {
   info(text: string): void
 }
 
-export class MapTracker {
+export class MapTracker implements TrackerControl {
   mode: TrackerMode = 'map'
   lost = false
   currentRoomId: string | null = null
