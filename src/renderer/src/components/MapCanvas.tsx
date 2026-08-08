@@ -1,0 +1,434 @@
+/**
+ * MapCanvas — pure canvas renderer + interactions for one zone/level of a map.
+ * Driven entirely by props so the docked pane (live model) and the pop-out
+ * window (IPC mirror) can share it.
+ */
+import React, { useCallback, useEffect, useRef } from 'react'
+import type { MapRoom, MudMap } from '../map/types'
+
+const CELL = 46
+const ROOM = 26
+
+export interface MapContextInfo {
+  roomId: string | null
+  clientX: number
+  clientY: number
+  worldX: number
+  worldY: number
+}
+
+interface Props {
+  map: MudMap
+  zoneId: string
+  z: number
+  currentRoomId: string | null
+  selectedRoomId: string | null
+  /** Additional multi-selection (shift-click / shift-drag marquee). */
+  selectedRoomIds?: string[]
+  onSelectRoom(id: string | null): void
+  /** Shift-click: toggle a room in/out of the multi-selection. */
+  onToggleSelect?(id: string): void
+  /** Shift-drag marquee finished: rooms inside the box. */
+  onMarqueeSelect?(ids: string[]): void
+  onWalkRoom(id: string): void
+  onContextMenu(info: MapContextInfo): void
+  onMoveRoom?(id: string, x: number, y: number): void
+  /** Incremented externally to request centering. */
+  centerToken: number
+  /** Room to center on when centerToken changes; falls back to current room. */
+  centerRoomId?: string | null
+}
+
+interface View {
+  panX: number
+  panY: number
+  scale: number
+}
+
+export function MapCanvas(props: Props) {
+  const canvasRef = useRef<HTMLCanvasElement>(null)
+  const viewRef = useRef<View>({ panX: 0, panY: 0, scale: 1 })
+  const dragRef = useRef<{
+    mode: 'pan' | 'room' | 'marquee'
+    startX: number
+    startY: number
+    origPanX: number
+    origPanY: number
+    roomId?: string
+    moved: boolean
+    ghostX?: number
+    ghostY?: number
+    curX?: number
+    curY?: number
+  } | null>(null)
+  const propsRef = useRef(props)
+  propsRef.current = props
+
+  const draw = useCallback(() => {
+    const canvas = canvasRef.current
+    if (!canvas) return
+    const { map, zoneId, z, currentRoomId, selectedRoomId, selectedRoomIds } = propsRef.current
+    const multiSelected = new Set(selectedRoomIds ?? [])
+    const view = viewRef.current
+    const dpr = window.devicePixelRatio || 1
+    const w = canvas.clientWidth
+    const h = canvas.clientHeight
+    if (canvas.width !== w * dpr || canvas.height !== h * dpr) {
+      canvas.width = w * dpr
+      canvas.height = h * dpr
+    }
+    const ctx = canvas.getContext('2d')
+    if (!ctx) return
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
+    ctx.clearRect(0, 0, w, h)
+
+    const cell = CELL * view.scale
+    const half = (ROOM * view.scale) / 2
+    const toScreen = (rx: number, ry: number): [number, number] => [
+      w / 2 + view.panX + rx * cell,
+      h / 2 + view.panY + ry * cell
+    ]
+
+    const waypointIds = new Set(map.waypoints.map((wp) => wp.roomId))
+    const rooms = Object.values(map.rooms).filter((r) => r.zoneId === zoneId && r.z === z)
+    const visibleById = new Map(rooms.map((r) => [r.id, r]))
+    const drag = dragRef.current
+
+    const roomPos = (r: MapRoom): [number, number] => {
+      if (drag?.mode === 'room' && drag.roomId === r.id && drag.moved) {
+        return [drag.ghostX ?? r.x, drag.ghostY ?? r.y]
+      }
+      return [r.x, r.y]
+    }
+
+    // ---- exits ----
+    ctx.lineWidth = Math.max(1, 1.4 * view.scale)
+    for (const room of rooms) {
+      const [rx, ry] = roomPos(room)
+      const [sx, sy] = toScreen(rx, ry)
+      for (const exit of room.exits) {
+        if (exit.dir === 'u' || exit.dir === 'd') continue // drawn as glyphs
+        const dest = exit.to ? map.rooms[exit.to] : null
+        let ex: number
+        let ey: number
+        let stub = false
+        if (dest && visibleById.has(dest.id)) {
+          const [dx, dy] = roomPos(dest)
+          ;[ex, ey] = toScreen(dx, dy)
+        } else if (exit.dir) {
+          const delta: Record<string, [number, number]> = {
+            n: [0, -1], s: [0, 1], e: [1, 0], w: [-1, 0],
+            ne: [1, -1], nw: [-1, -1], se: [1, 1], sw: [-1, 1]
+          }
+          const d = delta[exit.dir] ?? [0, 0]
+          ex = sx + d[0] * cell * 0.55
+          ey = sy + d[1] * cell * 0.55
+          stub = true
+        } else {
+          continue // special exit to elsewhere: glyph only
+        }
+        ctx.strokeStyle = stub
+          ? dest
+            ? '#8b6f47' // leads off-view (other zone/level)
+            : '#4a5568' // unexplored stub
+          : '#5c6370'
+        ctx.setLineDash(exit.to === null ? [3, 3] : [])
+        ctx.beginPath()
+        ctx.moveTo(sx, sy)
+        ctx.lineTo(ex, ey)
+        ctx.stroke()
+        ctx.setLineDash([])
+        if (exit.door) {
+          // Door tick: short perpendicular bar at the midpoint.
+          const mx = (sx + ex) / 2
+          const my = (sy + ey) / 2
+          const angle = Math.atan2(ey - sy, ex - sx) + Math.PI / 2
+          const t = 5 * view.scale
+          ctx.strokeStyle = '#e5c07b'
+          ctx.lineWidth = Math.max(1.5, 2 * view.scale)
+          ctx.beginPath()
+          ctx.moveTo(mx - Math.cos(angle) * t, my - Math.sin(angle) * t)
+          ctx.lineTo(mx + Math.cos(angle) * t, my + Math.sin(angle) * t)
+          ctx.stroke()
+          ctx.lineWidth = Math.max(1, 1.4 * view.scale)
+        }
+      }
+    }
+
+    // ---- rooms ----
+    for (const room of rooms) {
+      const [rx, ry] = roomPos(room)
+      const [sx, sy] = toScreen(rx, ry)
+      if (sx < -cell || sy < -cell || sx > w + cell || sy > h + cell) continue
+
+      const isSelected = room.id === selectedRoomId || multiSelected.has(room.id)
+      ctx.fillStyle = room.color || '#1c2128'
+      ctx.strokeStyle = isSelected ? '#ffffff' : '#8b949e'
+      ctx.lineWidth = isSelected ? 2 : 1
+      ctx.beginPath()
+      ctx.roundRect(sx - half, sy - half, half * 2, half * 2, 4 * view.scale)
+      ctx.fill()
+      ctx.stroke()
+
+      if (room.id === currentRoomId) {
+        ctx.strokeStyle = '#61afef'
+        ctx.lineWidth = 2.5
+        ctx.beginPath()
+        ctx.roundRect(sx - half - 3, sy - half - 3, half * 2 + 6, half * 2 + 6, 6 * view.scale)
+        ctx.stroke()
+      }
+
+      // Up/down/special markers.
+      const glyphSize = Math.max(7, 9 * view.scale)
+      ctx.font = `${glyphSize}px sans-serif`
+      ctx.textAlign = 'center'
+      const hasUp = room.exits.some((e) => e.dir === 'u')
+      const hasDown = room.exits.some((e) => e.dir === 'd')
+      const hasSpecial = room.exits.some((e) => e.dir === null)
+      ctx.fillStyle = '#c8ccd4'
+      if (hasUp) ctx.fillText('▲', sx + half - 4 * view.scale, sy - half + glyphSize - 2)
+      if (hasDown) ctx.fillText('▼', sx + half - 4 * view.scale, sy + half - 2)
+      if (hasSpecial) {
+        ctx.fillStyle = '#c678dd'
+        ctx.fillText('◈', sx - half + 4 * view.scale, sy - half + glyphSize - 2)
+      }
+      if (waypointIds.has(room.id)) {
+        ctx.fillStyle = '#ffd68a'
+        ctx.fillText('★', sx, sy - half - 3)
+      }
+    }
+
+    // ---- marquee rectangle ----
+    const dragState = dragRef.current
+    if (dragState?.mode === 'marquee' && dragState.moved) {
+      const rect = canvas.getBoundingClientRect()
+      const x0 = dragState.startX - rect.left
+      const y0 = dragState.startY - rect.top
+      const x1 = (dragState.curX ?? dragState.startX) - rect.left
+      const y1 = (dragState.curY ?? dragState.startY) - rect.top
+      ctx.strokeStyle = '#61afef'
+      ctx.fillStyle = 'rgba(97, 175, 239, 0.12)'
+      ctx.lineWidth = 1
+      ctx.setLineDash([4, 3])
+      ctx.fillRect(Math.min(x0, x1), Math.min(y0, y1), Math.abs(x1 - x0), Math.abs(y1 - y0))
+      ctx.strokeRect(Math.min(x0, x1), Math.min(y0, y1), Math.abs(x1 - x0), Math.abs(y1 - y0))
+      ctx.setLineDash([])
+    }
+
+    // ---- room name of current/selected at bottom ----
+    const label =
+      (selectedRoomId && map.rooms[selectedRoomId]) ||
+      (currentRoomId && map.rooms[currentRoomId]) ||
+      null
+    if (label) {
+      ctx.font = '12px sans-serif'
+      ctx.textAlign = 'left'
+      ctx.fillStyle = '#8b949e'
+      ctx.fillText(label.name, 8, h - 8)
+    }
+  }, [])
+
+  // Redraw on any prop change.
+  useEffect(() => {
+    draw()
+  })
+
+  // Resize observer keeps the canvas crisp.
+  useEffect(() => {
+    const canvas = canvasRef.current
+    if (!canvas) return
+    const obs = new ResizeObserver(() => draw())
+    obs.observe(canvas)
+    return () => obs.disconnect()
+  }, [draw])
+
+  // Center on request (a specific room, or wherever the player is).
+  const lastCenter = useRef(-1)
+  useEffect(() => {
+    if (props.centerToken === lastCenter.current) return
+    lastCenter.current = props.centerToken
+    const targetId = props.centerRoomId ?? props.currentRoomId
+    const target = targetId ? props.map.rooms[targetId] : null
+    if (target) {
+      const view = viewRef.current
+      view.panX = -target.x * CELL * view.scale
+      view.panY = -target.y * CELL * view.scale
+      draw()
+    }
+  }, [props.centerToken, props.centerRoomId, props.currentRoomId, props.map, draw])
+
+  const hitTest = useCallback((clientX: number, clientY: number) => {
+    const canvas = canvasRef.current!
+    const rect = canvas.getBoundingClientRect()
+    const view = viewRef.current
+    const cell = CELL * view.scale
+    const x = clientX - rect.left
+    const y = clientY - rect.top
+    const worldX = (x - rect.width / 2 - view.panX) / cell
+    const worldY = (y - rect.height / 2 - view.panY) / cell
+    const { map, zoneId, z } = propsRef.current
+    const half = ROOM / 2 / CELL + 0.06
+    let hit: MapRoom | null = null
+    for (const room of Object.values(map.rooms)) {
+      if (room.zoneId !== zoneId || room.z !== z) continue
+      if (Math.abs(room.x - worldX) <= half && Math.abs(room.y - worldY) <= half) {
+        hit = room
+        break
+      }
+    }
+    return { room: hit, worldX: Math.round(worldX), worldY: Math.round(worldY) }
+  }, [])
+
+  const onMouseDown = useCallback(
+    (e: React.MouseEvent) => {
+      if (e.button !== 0) return
+      const { room } = hitTest(e.clientX, e.clientY)
+      const view = viewRef.current
+      if (e.shiftKey) {
+        if (room) {
+          propsRef.current.onToggleSelect?.(room.id)
+        } else {
+          dragRef.current = {
+            mode: 'marquee',
+            startX: e.clientX,
+            startY: e.clientY,
+            origPanX: view.panX,
+            origPanY: view.panY,
+            moved: false,
+            curX: e.clientX,
+            curY: e.clientY
+          }
+        }
+        return
+      }
+      dragRef.current = {
+        mode: room && propsRef.current.onMoveRoom ? 'room' : 'pan',
+        startX: e.clientX,
+        startY: e.clientY,
+        origPanX: view.panX,
+        origPanY: view.panY,
+        roomId: room?.id,
+        moved: false
+      }
+      if (room) propsRef.current.onSelectRoom(room.id)
+    },
+    [hitTest]
+  )
+
+  const onMouseMove = useCallback(
+    (e: React.MouseEvent) => {
+      const drag = dragRef.current
+      if (!drag) return
+      const dx = e.clientX - drag.startX
+      const dy = e.clientY - drag.startY
+      if (!drag.moved && Math.abs(dx) + Math.abs(dy) < 5) return
+      drag.moved = true
+      const view = viewRef.current
+      if (drag.mode === 'pan') {
+        view.panX = drag.origPanX + dx
+        view.panY = drag.origPanY + dy
+      } else if (drag.mode === 'marquee') {
+        drag.curX = e.clientX
+        drag.curY = e.clientY
+      } else if (drag.roomId) {
+        const { worldX, worldY } = hitTest(e.clientX, e.clientY)
+        drag.ghostX = worldX
+        drag.ghostY = worldY
+      }
+      draw()
+    },
+    [draw, hitTest]
+  )
+
+  const onMouseUp = useCallback(() => {
+    const drag = dragRef.current
+    dragRef.current = null
+    if (
+      drag?.mode === 'room' &&
+      drag.moved &&
+      drag.roomId &&
+      drag.ghostX !== undefined &&
+      drag.ghostY !== undefined
+    ) {
+      propsRef.current.onMoveRoom?.(drag.roomId, drag.ghostX, drag.ghostY)
+    } else if (drag?.mode === 'marquee' && drag.moved) {
+      // Collect rooms of this zone/level whose centers fall inside the box.
+      const canvas = canvasRef.current!
+      const rect = canvas.getBoundingClientRect()
+      const view = viewRef.current
+      const cell = CELL * view.scale
+      const minX = Math.min(drag.startX, drag.curX ?? drag.startX) - rect.left
+      const maxX = Math.max(drag.startX, drag.curX ?? drag.startX) - rect.left
+      const minY = Math.min(drag.startY, drag.curY ?? drag.startY) - rect.top
+      const maxY = Math.max(drag.startY, drag.curY ?? drag.startY) - rect.top
+      const { map, zoneId, z } = propsRef.current
+      const ids: string[] = []
+      for (const room of Object.values(map.rooms)) {
+        if (room.zoneId !== zoneId || room.z !== z) continue
+        const sx = rect.width / 2 + view.panX + room.x * cell
+        const sy = rect.height / 2 + view.panY + room.y * cell
+        if (sx >= minX && sx <= maxX && sy >= minY && sy <= maxY) ids.push(room.id)
+      }
+      propsRef.current.onMarqueeSelect?.(ids)
+    } else if (drag && !drag.moved && drag.mode === 'pan') {
+      propsRef.current.onSelectRoom(null)
+    }
+    draw()
+  }, [draw])
+
+  const onDoubleClick = useCallback(
+    (e: React.MouseEvent) => {
+      const { room } = hitTest(e.clientX, e.clientY)
+      if (room) propsRef.current.onWalkRoom(room.id)
+    },
+    [hitTest]
+  )
+
+  const onContextMenu = useCallback(
+    (e: React.MouseEvent) => {
+      e.preventDefault()
+      const { room, worldX, worldY } = hitTest(e.clientX, e.clientY)
+      propsRef.current.onContextMenu({
+        roomId: room?.id ?? null,
+        clientX: e.clientX,
+        clientY: e.clientY,
+        worldX,
+        worldY
+      })
+    },
+    [hitTest]
+  )
+
+  const onWheel = useCallback(
+    (e: React.WheelEvent) => {
+      const view = viewRef.current
+      const factor = e.deltaY < 0 ? 1.15 : 1 / 1.15
+      const next = Math.min(3, Math.max(0.3, view.scale * factor))
+      // Zoom around the cursor.
+      const canvas = canvasRef.current!
+      const rect = canvas.getBoundingClientRect()
+      const cx = e.clientX - rect.left - rect.width / 2
+      const cy = e.clientY - rect.top - rect.height / 2
+      const ratio = next / view.scale
+      view.panX = cx - (cx - view.panX) * ratio
+      view.panY = cy - (cy - view.panY) * ratio
+      view.scale = next
+      draw()
+    },
+    [draw]
+  )
+
+  return (
+    <canvas
+      ref={canvasRef}
+      className="map-canvas"
+      onMouseDown={onMouseDown}
+      onMouseMove={onMouseMove}
+      onMouseUp={onMouseUp}
+      onMouseLeave={onMouseUp}
+      onDoubleClick={onDoubleClick}
+      onContextMenu={onContextMenu}
+      onWheel={onWheel}
+    />
+  )
+}
