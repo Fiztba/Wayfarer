@@ -8,7 +8,8 @@ export interface WalkStep {
   command: string
   /** Open this before moving, when the exit has a door. */
   openCommand?: string
-  toRoomId: string
+  /** Expected destination; null = unmapped, any confirmed arrival counts. */
+  toRoomId: string | null
 }
 
 export function exitCommand(exit: MapExit): string {

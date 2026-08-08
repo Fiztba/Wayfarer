@@ -9,7 +9,7 @@
  */
 import { AnsiParser, type Span } from './ansi'
 import { parseMspLine, playBeep, SoundPlayer } from './sound'
-import { AutomationEngine } from './automation/AutomationEngine'
+import { AutomationEngine, parseSpeedwalk } from './automation/AutomationEngine'
 import { ScriptRuntime } from './scripting/ScriptRuntime'
 import { settingsManager } from './SettingsManager'
 import { uiState } from './uiState'
@@ -17,8 +17,14 @@ import { MapModel } from './map/MapModel.ts'
 import { MapTracker } from './map/MapTracker.ts'
 import { MODEL_ACTION_METHODS } from './map/RemoteMap.ts'
 import { Walker } from './map/Walker.ts'
-import { findPath } from './map/Pathfinder.ts'
-import { wordToDirection, type MudMap, type ServerRoomInfo } from './map/types.ts'
+import { exitOpenCommand, findPath, type WalkStep } from './map/Pathfinder.ts'
+import {
+  DIR_FULL,
+  wordToDirection,
+  type Direction,
+  type MudMap,
+  type ServerRoomInfo
+} from './map/types.ts'
 import type { ScriptDef, SessionEvent } from '../../shared/types'
 import luaWasmUrl from 'wasmoon/dist/glue.wasm?url'
 
@@ -148,7 +154,8 @@ export class SessionStore {
     }
     const model = await modelPromise
     const tracker = new MapTracker(model, {
-      info: (text) => this.addSystemLine(text, 'system')
+      info: (text) => this.addSystemLine(text, 'system'),
+      onMoveFailed: (dir, closedDoor) => this.handleMoveFailed(dir, closedDoor)
     })
     this.walker = new Walker(tracker, {
       transmit: (command) => this.transmitRaw(command),
@@ -172,6 +179,52 @@ export class SessionStore {
   toggleMap(): void {
     this.showMap = !this.showMap
     this.notify()
+  }
+
+  /**
+   * A movement bounced. Closed door (even a hidden one the map doesn't show):
+   * open it and retry the move once. Anything else — or a door that stays
+   * shut — halts any active walk with the reason.
+   */
+  private lastAutoOpen: { dir: Direction; at: number } | null = null
+
+  private handleMoveFailed(dir: Direction, closedDoor: boolean): void {
+    if (!closedDoor) {
+      this.walker?.notifyStepFailed(`the way ${DIR_FULL[dir]} is blocked`)
+      return
+    }
+    const now = Date.now()
+    if (this.lastAutoOpen && this.lastAutoOpen.dir === dir && now - this.lastAutoOpen.at < 4000) {
+      // We already tried once — probably locked.
+      this.lastAutoOpen = null
+      this.addSystemLine(`Auto-open ${DIR_FULL[dir]} didn't work — the door may be locked.`, 'error')
+      this.walker?.notifyStepFailed(`the door ${DIR_FULL[dir]} won't open`)
+      return
+    }
+    this.lastAutoOpen = { dir, at: now }
+    const room = this.tracker?.currentRoom
+    const exit = room && this.mapModel ? this.mapModel.exitOf(room, dir) : undefined
+    const doorName = exit?.doorName?.trim() || 'door'
+    this.addSystemLine(`Blocked by a door ${DIR_FULL[dir]} — opening it and retrying.`, 'system')
+    this.transmitRaw(`open ${doorName} ${DIR_FULL[dir]}`)
+    this.transmitRaw(dir)
+  }
+
+  /** Speedwalk steps with map knowledge where it exists (doors pre-opened,
+   *  arrivals confirmed) and open expectations where it doesn't. */
+  private buildSpeedwalkSteps(dirs: Direction[]): WalkStep[] {
+    const steps: WalkStep[] = []
+    let room = this.tracker?.currentRoom ?? null
+    for (const dir of dirs) {
+      const exit = room && this.mapModel ? this.mapModel.exitOf(room, dir) : undefined
+      steps.push({
+        command: dir,
+        openCommand: exit?.door ? exitOpenCommand(exit) : undefined,
+        toRoomId: exit?.to ?? null
+      })
+      room = exit?.to && this.mapModel ? this.mapModel.room(exit.to) : null
+    }
+    return steps
   }
 
   /** Pathfind + walk to a room; reports problems as session lines. */
@@ -563,6 +616,27 @@ export class SessionStore {
           'error'
         )
       }
+      return
+    }
+    // Dot-speedwalks run as CONFIRMED walks when the mapper knows where we
+    // are: each step waits for arrival, hidden doors get auto-opened, and a
+    // real blockage halts instead of desyncing the rest of the route.
+    const speedwalk = parseSpeedwalk(raw.trim())
+    if (
+      speedwalk &&
+      this.walker &&
+      this.mapModel &&
+      this.tracker &&
+      this.tracker.currentRoomId &&
+      !this.tracker.lost &&
+      this.tracker.mode !== 'off'
+    ) {
+      this.echoInput(raw)
+      this.walker.start(
+        this.buildSpeedwalkSteps(speedwalk as Direction[]),
+        `the end of ${raw.trim()}`,
+        false
+      )
       return
     }
     if (/^#stop$/i.test(raw.trim()) && this.walker?.walking) {

@@ -38,6 +38,8 @@ const PENDING_TTL_MS = 15_000
 export interface TrackerHost {
   /** Informational output to the session (system-style line). */
   info(text: string): void
+  /** A movement command failed; closedDoor = blocked by a shut door. */
+  onMoveFailed?(dir: Direction, closedDoor: boolean): void
 }
 
 export class MapTracker implements TrackerControl {
@@ -147,9 +149,13 @@ export class MapTracker implements TrackerControl {
 
     if (isMoveFailure(plain)) {
       const failed = this.pending.shift()
-      if (failed && isClosedDoorFailure(plain) && this.currentRoomId && !this.lost) {
-        // Door in the way: record it (and a stub exit) without moving.
-        this.model.setDoor(this.currentRoomId, failed.dir, true)
+      if (failed) {
+        const closedDoor = isClosedDoorFailure(plain)
+        if (closedDoor && this.currentRoomId && !this.lost) {
+          // Door in the way: record it (and a stub exit) without moving.
+          this.model.setDoor(this.currentRoomId, failed.dir, true)
+        }
+        this.host.onMoveFailed?.(failed.dir, closedDoor)
       }
       return
     }

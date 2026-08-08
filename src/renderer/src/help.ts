@@ -85,6 +85,9 @@ export const HELP_TOPICS: HelpTopic[] = [
       { code: '.3n2e     →  n n n e e\n.2ne      →  ne ne\n.4wud     →  w w w w u d' },
       {
         p: 'Directions: n s e w u d and the diagonals ne nw se sw. Counts above 100 per step are capped. Anything that is not purely directions (like ".chat hi") is sent as a normal command.'
+      },
+      {
+        p: 'When the mapper knows where you are, speedwalks run as confirmed walks: each step waits for arrival, hidden doors along the way are opened automatically and the step retried, and a genuine blockage halts the walk with the reason instead of desyncing the rest of the route. #stop cancels. With the mapper off or lost, speedwalks fall back to sending every step instantly.'
       }
     ]
   },
@@ -324,6 +327,7 @@ export const HELP_TOPICS: HelpTopic[] = [
       {
         list: [
           'Double-click any room to walk there. Default is a confirmed walk: one step at a time, verifying each room, halting visibly if anything is off. Right-click offers "Walk here (fast)" to blast all steps at once.',
+          'Hidden doors self-heal: if a step bounces off a closed door the map never knew about, the walk opens it, retries, records the door for next time, and carries on. A door that stays shut (locked) or a hard "no way there" halts the walk with the reason.',
           '#stop cancels a walk in progress.'
         ]
       },
