@@ -41,6 +41,38 @@ export function parseMspLine(line: string): MspCommand | null {
   return cmd
 }
 
+// ---- attention beep (scripting API) ----------------------------------------
+
+let beepCtx: AudioContext | null = null
+
+/** Synthesized two-tone chime, repeated `times` (1–10). No files involved. */
+export function playBeep(times = 1): void {
+  if (typeof AudioContext === 'undefined') return
+  const count = Math.max(1, Math.min(10, Math.floor(times) || 1))
+  beepCtx ??= new AudioContext()
+  const ctx = beepCtx
+  const start = ctx.currentTime + 0.02
+  for (let i = 0; i < count; i++) {
+    const t = start + i * 0.45
+    const notes: Array<[number, number, number]> = [
+      [880, 0, 0.15], // A5
+      [1318.5, 0.16, 0.2] // E6
+    ]
+    for (const [freq, offset, dur] of notes) {
+      const osc = ctx.createOscillator()
+      const gain = ctx.createGain()
+      osc.type = 'sine'
+      osc.frequency.value = freq
+      gain.gain.setValueAtTime(0, t + offset)
+      gain.gain.linearRampToValueAtTime(0.25, t + offset + 0.02)
+      gain.gain.exponentialRampToValueAtTime(0.001, t + offset + dur)
+      osc.connect(gain).connect(ctx.destination)
+      osc.start(t + offset)
+      osc.stop(t + offset + dur + 0.05)
+    }
+  }
+}
+
 const MAX_CONCURRENT_SOUNDS = 8
 
 export class SoundPlayer {

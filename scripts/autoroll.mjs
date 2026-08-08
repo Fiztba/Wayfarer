@@ -44,6 +44,7 @@ if (total > Number(client.getVar('roll_best_total') || 0)) {
 const best = client.getVar('roll_best_total') || '0'
 const ok = total >= minTotal && stats.every((s) => val(s) >= min(s))
 if (ok) {
+  client.beep(3)
   client.echo('*** AUTOROLL KEEPER (roll #' + globals.rolls + '): ' + summary + ' ***')
   globals.rolls = 0
   client.setVar('roll_best_total', '0')
@@ -57,6 +58,7 @@ if (ok) {
 } else {
   const cap = Number(client.getVar('rollmax') || 1000)
   if (globals.rolls >= cap) {
+    client.beep(2)
     client.echo('Autoroll: stopping after ' + globals.rolls + ' rolls without a keeper.')
     client.echo('Best seen: total ' + best + ' — ' + (client.getVar('roll_best') || '(none)'))
     client.echo('Observed ranges (' + n + ' rolls): ' + ranges)

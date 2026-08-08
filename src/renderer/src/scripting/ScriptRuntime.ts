@@ -24,6 +24,8 @@ export interface ScriptApiHost {
   getVar(name: string): string | undefined
   setVar(name: string, value: string): void
   session(): { name: string; host: string; port: number; connected: boolean }
+  /** Audible attention chime (synthesized; independent of MSP sounds). */
+  beep(times: number): void
 }
 
 export interface ScriptContext {
@@ -96,6 +98,7 @@ export class ScriptRuntime {
       print: (t: unknown) => this.host.echo(String(t)),
       getVar: (n: unknown) => this.host.getVar(String(n)),
       setVar: (n: unknown, v: unknown) => this.host.setVar(String(n), String(v)),
+      beep: (times: unknown = 1) => this.host.beep(Number(times) || 1),
       session: this.host.session(),
       globals: this.globalsObj,
       gag: ctx.gag ?? noop,
@@ -134,6 +137,7 @@ export class ScriptRuntime {
         engine.global.set('setVar', (n: unknown, v: unknown) =>
           this.host.setVar(String(n), String(v))
         )
+        engine.global.set('beep', (times: unknown = 1) => this.host.beep(Number(times) || 1))
         engine.global.set('session', () => this.host.session())
         this.lua = engine
         return engine

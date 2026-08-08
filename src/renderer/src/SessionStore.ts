@@ -8,7 +8,7 @@
  * triggers (gag, highlight, fired commands) before display.
  */
 import { AnsiParser, type Span } from './ansi'
-import { parseMspLine, SoundPlayer } from './sound'
+import { parseMspLine, playBeep, SoundPlayer } from './sound'
 import { AutomationEngine } from './automation/AutomationEngine'
 import { ScriptRuntime } from './scripting/ScriptRuntime'
 import { settingsManager } from './SettingsManager'
@@ -98,6 +98,7 @@ export class SessionStore {
         echoError: (text) => this.addSystemLine(text, 'error'),
         getVar: (name) => this.engine.variables[name],
         setVar: (name, value) => this.setVariable(name, value),
+        beep: (times) => playBeep(times),
         session: () => ({
           name: this.name,
           host: this.host,

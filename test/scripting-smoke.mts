@@ -20,6 +20,7 @@ const echoed: string[] = []
 const errors: string[] = []
 const vars: Record<string, string> = { target: 'goblin' }
 
+const beeps: number[] = []
 const rt = new ScriptRuntime({
   send: (t) => sent.push(t),
   sendRaw: (t) => sent.push('RAW:' + t),
@@ -27,6 +28,7 @@ const rt = new ScriptRuntime({
   echoError: (t) => errors.push(t),
   getVar: (n) => vars[n],
   setVar: (n, v) => (vars[n] = v),
+  beep: (times) => beeps.push(times),
   session: () => ({ name: 'Test', host: 'example.org', port: 4000, connected: true })
 })
 
@@ -46,6 +48,9 @@ check('js shared globals across runs', sent, ['helped bob'])
 
 rt.run('js', 'this is not valid javascript(')
 check('js compile error reported', errors.length > 0, true)
+
+rt.run('js', 'client.beep(3)')
+check('js beep', beeps, [3])
 
 // ---- trigger context ----
 sent.length = 0
@@ -70,6 +75,7 @@ rt.run('lua', 'send("m=" .. matches[1] .. "/" .. matches[2])', {
   matches: ['whole', 'cap1'],
   line: 'whole'
 })
+rt.run('lua', 'beep(2)')
 rt.run('lua', 'this is invalid lua (((')
 
 await new Promise((r) => setTimeout(r, 4000))
@@ -80,6 +86,7 @@ check('lua echo', echoed, ['mana=99'])
 check('lua globals persist', sent[1], 'x is 10')
 check('lua trigger matches (Mudlet-style)', sent[2], 'm=whole/cap1')
 check('lua error reported', errors.some((e) => e.startsWith('Lua error')), true)
+check('lua beep', beeps, [3, 2])
 
 rt.dispose()
 console.log(failures === 0 ? '\nALL PASS' : `\n${failures} FAILURES`)
