@@ -1,0 +1,52 @@
+<svg width="512" height="512" viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg">
+  <!-- Wayfarer: a compass rose on the client's dark terminal palette. -->
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#1d2634"/>
+      <stop offset="1" stop-color="#0d1117"/>
+    </linearGradient>
+    <linearGradient id="north" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#8ecbff"/>
+      <stop offset="1" stop-color="#4a92d6"/>
+    </linearGradient>
+    <linearGradient id="gold" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#ffe1a3"/>
+      <stop offset="1" stop-color="#d9a955"/>
+    </linearGradient>
+  </defs>
+
+  <rect x="14" y="14" width="484" height="484" rx="100" fill="url(#bg)" stroke="#3a4454" stroke-width="10"/>
+
+  <!-- degree ring -->
+  <circle cx="256" cy="256" r="176" fill="none" stroke="#4a5568" stroke-width="6" opacity="0.55"/>
+  <circle cx="256" cy="256" r="150" fill="none" stroke="#8b949e" stroke-width="4" opacity="0.35"/>
+
+  <!-- intercardinal (short) points -->
+  <g fill="#5f6b7d" transform="rotate(45 256 256)">
+    <path d="M256 122 L278 234 L256 256 L234 234 Z"/>
+    <path d="M256 390 L278 278 L256 256 L234 278 Z"/>
+    <path d="M122 256 L234 278 L256 256 L234 234 Z"/>
+    <path d="M390 256 L278 278 L256 256 L278 234 Z"/>
+  </g>
+
+  <!-- cardinal points: E S W in gold -->
+  <g fill="url(#gold)">
+    <path d="M256 424 L284 284 L256 256 L228 284 Z"/>
+    <path d="M88 256 L228 284 L256 256 L228 228 Z"/>
+    <path d="M424 256 L284 284 L256 256 L284 228 Z"/>
+  </g>
+  <!-- shading halves for depth -->
+  <g fill="#a87f3d" opacity="0.85">
+    <path d="M256 424 L256 256 L228 284 Z"/>
+    <path d="M88 256 L256 256 L228 228 Z"/>
+    <path d="M424 256 L256 256 L284 284 Z"/>
+  </g>
+
+  <!-- north needle in Wayfarer blue -->
+  <path d="M256 74 L288 288 L256 256 L224 288 Z" fill="url(#north)"/>
+  <path d="M256 74 L256 256 L224 288 Z" fill="#2d6bb0" opacity="0.9"/>
+
+  <!-- hub -->
+  <circle cx="256" cy="256" r="34" fill="#0d1117" stroke="url(#gold)" stroke-width="10"/>
+  <circle cx="256" cy="256" r="10" fill="#8ecbff"/>
+</svg>

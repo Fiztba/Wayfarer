@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <!-- 'unsafe-eval' / 'wasm-unsafe-eval' are required for user scripting
+         (JS action bodies and the embedded Lua VM). No remote content is
+         ever loaded: script-src remains restricted to 'self'. -->
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self' 'unsafe-eval' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; media-src 'self' msp-sound:"
+    />
+    <title>Wayfarer</title>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
