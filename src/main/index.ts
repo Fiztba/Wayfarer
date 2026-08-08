@@ -93,7 +93,15 @@ app.whenReady().then(() => {
 
   ipcMain.handle('profiles:list', () => {
     const result = profiles.list()
-    console.log(`[diag] profiles:list -> ${result.length} from ${app.getPath('userData')}`)
+    const line = `${new Date().toISOString()} profiles:list -> ${result.length} from ${app.getPath('userData')}`
+    console.log(`[diag] ${line}`)
+    try {
+      // Durable breadcrumb: if profiles ever look missing again, this file
+      // records what the backend actually saw at that moment.
+      fs.appendFileSync(path.join(app.getPath('userData'), 'diag.log'), line + '\n')
+    } catch {
+      // diagnostics must never break the answer
+    }
     return result
   })
   ipcMain.handle('profiles:save', (_e, profile: Partial<Profile>) => profiles.save(profile))

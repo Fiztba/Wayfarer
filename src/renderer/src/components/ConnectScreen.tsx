@@ -50,17 +50,27 @@ export function ConnectScreen({ onConnect, onOpenHelp }: Props) {
   const [loadError, setLoadError] = useState(false)
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null)
 
-  const refresh = useCallback(() => {
-    window.mud.profiles
-      .list()
-      .then((list) => {
+  // Robust load: catches synchronous throws AND rejections (a bare
+  // .then().catch() misses a sync throw, which silently left the list empty).
+  // Retries a few times before surfacing an error, since a cold start can
+  // briefly race the preload bridge.
+  const refresh = useCallback(async () => {
+    for (let attempt = 0; attempt < 4; attempt++) {
+      try {
+        const list = await window.mud.profiles.list()
         setProfiles(list)
         setLoadError(false)
-      })
-      .catch(() => setLoadError(true))
+        return
+      } catch {
+        await new Promise((r) => setTimeout(r, 150 * (attempt + 1)))
+      }
+    }
+    setLoadError(true)
   }, [])
 
-  useEffect(refresh, [refresh])
+  useEffect(() => {
+    void refresh()
+  }, [refresh])
 
   const clearForm = useCallback(() => {
     setEditingId(null)
@@ -158,7 +168,7 @@ export function ConnectScreen({ onConnect, onOpenHelp }: Props) {
               href="#"
               onClick={(e) => {
                 e.preventDefault()
-                refresh()
+                void refresh()
               }}
             >
               Retry
@@ -166,7 +176,7 @@ export function ConnectScreen({ onConnect, onOpenHelp }: Props) {
           </p>
         )}
 
-        {profiles.length > 0 && (
+        {profiles.length > 0 ? (
           <>
             <h2>Saved Worlds</h2>
             <div className="profile-list">
@@ -227,6 +237,21 @@ export function ConnectScreen({ onConnect, onOpenHelp }: Props) {
               ))}
             </div>
           </>
+        ) : (
+          !loadError && (
+            <p className="field-hint" style={{ marginBottom: 12 }}>
+              No saved worlds yet — or expected some?{' '}
+              <a
+                href="#"
+                onClick={(e) => {
+                  e.preventDefault()
+                  void refresh()
+                }}
+              >
+                Reload saved worlds
+              </a>
+            </p>
+          )
         )}
 
         <h2 ref={formRef as unknown as React.RefObject<HTMLHeadingElement>}>
