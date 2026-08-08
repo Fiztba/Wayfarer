@@ -11,6 +11,7 @@ import {
 } from '../src/renderer/src/map/RemoteMap.ts'
 import { MapTracker } from '../src/renderer/src/map/MapTracker.ts'
 import { findPath } from '../src/renderer/src/map/Pathfinder.ts'
+import { Walker } from '../src/renderer/src/map/Walker.ts'
 import { emptyMap, stripPromptPrefix } from '../src/renderer/src/map/types.ts'
 import { AnsiParser } from '../src/renderer/src/ansi.ts'
 
@@ -606,6 +607,77 @@ function makeWorld() {
   savedStale.lastRoomId = 'nonexistent-room'
   const tracker4 = new MapTracker(new MapModel(savedStale, () => {}), { info: () => {} })
   check('stale lastRoomId ignored', tracker4.currentRoomId, null)
+}
+
+// ---- hidden doors mid-walk: auto-open + retry; hard blocks halt ----
+{
+  const model = new MapModel(emptyMap(), () => {})
+  const lines: string[] = []
+  const transmitted: string[] = []
+  let retried = false
+  // eslint-disable-next-line prefer-const
+  let walker!: Walker
+  const tracker: MapTracker = new MapTracker(model, {
+    info: (t) => lines.push(t),
+    onMoveFailed: (dir, closedDoor) => {
+      // Mirrors SessionStore.handleMoveFailed: open + retry once, else halt.
+      if (closedDoor && !retried) {
+        retried = true
+        transmit(`open door ${dir}`)
+        transmit(dir)
+      } else {
+        walker.notifyStepFailed(closedDoor ? 'door will not open' : 'the way is blocked')
+      }
+    }
+  })
+  const transmit = (c: string) => {
+    transmitted.push(c)
+    tracker.onCommand(c)
+  }
+  walker = new Walker(tracker, {
+    transmit,
+    info: (t) => lines.push(t),
+    error: (t) => lines.push('ERR:' + t)
+  })
+  const seeRoom = (name: string, exitsLine: string) => {
+    tracker.onLine(name)
+    tracker.onLine(exitsLine)
+  }
+
+  // Map A --n--> B with NO door recorded (the door is hidden).
+  seeRoom('Guard Hall', '[ Exits: n ]')
+  const a = tracker.currentRoom!
+  tracker.onCommand('n')
+  seeRoom('Armory', '[ Exits: s n ]')
+  const b = tracker.currentRoom!
+  tracker.setCurrentRoom(a.id)
+
+  // Walk to B; the hidden door bounces the first attempt.
+  transmitted.length = 0
+  walker.start([{ command: 'n', toRoomId: b.id }], 'the Armory', false)
+  check('door-retry: first attempt sent', transmitted, ['n'])
+  tracker.onLine('The door seems to be closed.')
+  check('door-retry: opened and retried', transmitted, ['n', 'open door n', 'n'])
+  check('door-retry: door learned on map', model.exitOf(model.room(a.id)!, 'n')?.door, true)
+  seeRoom('Armory', '[ Exits: s n ]')
+  check('door-retry: walk completed', lines.some((t) => t.includes('Arrived at the Armory')), true)
+  check('door-retry: walker idle', walker.walking, false)
+
+  // Unmapped-territory step (speedwalk style): any arrival counts.
+  retried = false
+  transmitted.length = 0
+  walker.start([{ command: 'n', toRoomId: null }], 'the end of .n', false)
+  seeRoom('Winding Stair', '[ Exits: s u ]')
+  check('open-step: arrival confirmed without expectation', walker.walking, false)
+  check('open-step: arrived message', lines.some((t) => t.includes('Arrived at the end of .n')), true)
+
+  // A genuinely blocked way halts the walk immediately with the reason.
+  tracker.setCurrentRoom(a.id)
+  lines.length = 0
+  walker.start([{ command: 'n', toRoomId: b.id }], 'the Armory', false)
+  tracker.onLine('Alas, you cannot go that way.')
+  check('hard-block: walk halted', walker.walking, false)
+  check('hard-block: reason reported', lines.some((t) => t.includes('the way is blocked')), true)
 }
 
 // ---- pop-out RPC: remote edits land identically on the real model ----

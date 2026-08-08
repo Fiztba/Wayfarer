@@ -8,7 +8,8 @@
 import type { MapTracker } from './MapTracker.ts'
 import type { WalkStep } from './Pathfinder.ts'
 
-const STEP_TIMEOUT_MS = 6000
+// Generous: leaves room for an automatic door-open + retry mid-step.
+const STEP_TIMEOUT_MS = 8000
 
 export interface WalkerHost {
   transmit(command: string): void
@@ -26,6 +27,7 @@ export class Walker {
   private unsub: (() => void) | null = null
   private timeout: ReturnType<typeof setTimeout> | null = null
   private destinationLabel = ''
+  private stepStartRoomId: string | null = null
 
   constructor(tracker: MapTracker, host: WalkerHost) {
     this.tracker = tracker
@@ -76,8 +78,18 @@ export class Walker {
     }
   }
 
+  /** The session tells us a step failed unrecoverably; halt with the reason. */
+  notifyStepFailed(reason: string): void {
+    if (!this.active) return
+    this.host.error(
+      `Walk halted: ${reason} (step ${this.index + 1}/${this.steps.length}).`
+    )
+    this.cancel(false)
+  }
+
   private sendStep(): void {
     const step = this.steps[this.index]
+    this.stepStartRoomId = this.tracker.currentRoomId
     if (step.openCommand) this.host.transmit(step.openCommand)
     this.host.transmit(step.command)
     if (this.timeout) clearTimeout(this.timeout)
@@ -99,7 +111,12 @@ export class Walker {
       return
     }
     const step = this.steps[this.index]
-    if (this.tracker.currentRoomId === step.toRoomId) {
+    const arrived =
+      step.toRoomId !== null
+        ? this.tracker.currentRoomId === step.toRoomId
+        : this.tracker.currentRoomId !== null &&
+          this.tracker.currentRoomId !== this.stepStartRoomId
+    if (arrived) {
       this.index++
       if (this.timeout) {
         clearTimeout(this.timeout)
