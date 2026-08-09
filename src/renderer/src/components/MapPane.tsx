@@ -568,6 +568,13 @@ export function MapPane({ model, tracker, walkTo, onPopout, onClose }: MapPanePr
           <ExitsEditor model={model} roomId={menu.roomId} selectedId={selectedId} onClose={closeMenu} />
         )}
       </div>
+
+      <div className="map-footer">
+        {model.roomsInZone(zoneId).length} rooms in{' '}
+        {model.map.zones.find((zn) => zn.id === zoneId)?.name ?? 'this zone'} ·{' '}
+        {Object.keys(model.map.rooms).length} mapped across {model.map.zones.length}{' '}
+        {model.map.zones.length === 1 ? 'zone' : 'zones'}
+      </div>
     </div>
   )
 }
