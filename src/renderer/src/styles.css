@@ -1210,12 +1210,17 @@ body,
   margin-right: 6px;
 }
 
-.popout-footer {
+.popout-footer,
+.map-footer {
   padding: 4px 10px;
   background: var(--bg-raised);
   border-top: 1px solid var(--border);
   color: var(--fg-dim);
   font-size: 11px;
+  flex: none;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .popout-loading {
