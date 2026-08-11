@@ -1071,9 +1071,15 @@ body,
 }
 
 .map-canvas {
+  /* Absolutely positioned so the canvas can never influence layout. When a
+     canvas's percentage height fails to resolve it falls back to intrinsic
+     sizing (width ÷ bitmap aspect ratio): the pop-out canvas kept the aspect
+     of its original 640×560 window after maximizing on an ultrawide, growing
+     ~2× the window height and hiding the centered player room below it. */
+  position: absolute;
+  inset: 0;
   width: 100%;
   height: 100%;
-  display: block;
   cursor: default;
 }
 

@@ -242,6 +242,22 @@ export function MapCanvas(props: Props) {
     return () => obs.disconnect()
   }, [draw])
 
+  // Follow the player: whenever the current room changes (including on first
+  // mount), snap the view to it. Runs every render so a move can never slip
+  // through; manual pan/zoom stays untouched while standing still.
+  const lastRoomRef = useRef<string | null>(null)
+  useEffect(() => {
+    const { currentRoomId, map } = propsRef.current
+    if (!currentRoomId || currentRoomId === lastRoomRef.current) return
+    lastRoomRef.current = currentRoomId
+    const target = map.rooms[currentRoomId]
+    if (!target) return
+    const view = viewRef.current
+    view.panX = -target.x * CELL * view.scale
+    view.panY = -target.y * CELL * view.scale
+    draw()
+  })
+
   // Center on request (a specific room, or wherever the player is).
   const lastCenter = useRef(-1)
   useEffect(() => {
