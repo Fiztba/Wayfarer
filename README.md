@@ -1,7 +1,5 @@
 # Wayfarer
 
-A modern, feature-rich MUD client — the reliability cMUD never had.
-
 ## Status: Phase 4 complete
 
 Working today:
