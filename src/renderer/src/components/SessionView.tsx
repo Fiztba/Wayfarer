@@ -163,25 +163,64 @@ export function SessionView({
     inputRef.current?.focus()
   }, [])
 
-  /** MXP link clicked: send the command, stage it, or open the URL. */
+  /**
+   * MXP link clicked: send the command, stage it, or open the URL.
+   * `href` may hold several `|`-separated commands (MXP menu convention):
+   * the first is the left-click action; the rest are offered on right-click.
+   * With the PROMPT flag the first entry is a "handle" (an exact target like
+   * "3.hound") staged into the input line — cursor at the front, so the
+   * player types the verb before it.
+   */
   const handleMxpLink = useCallback<LinkHandler>(
-    (link) => {
+    (link, menu) => {
       if (link.url) {
         const url = link.url.startsWith('http') ? link.url : `https://${link.url}`
         window.open(url) // main process routes this to the system browser
         return
       }
-      const command = link.command || link.textAcc?.trim()
-      if (!command) return
+      const raw = link.command || link.textAcc?.trim()
+      if (!raw) return
+      const commands = raw.split('|').map((c) => c.trim()).filter(Boolean)
+      if (menu) {
+        // Right-click: offer the menu entries (skipping a handle entry).
+        const entries = link.prompt ? commands.slice(1) : commands
+        const hints = (link.hint ?? '').split('|')
+        const labels = hints.length > 1 ? hints.slice(1) : entries
+        if (entries.length === 0) return
+        setLinkMenu({
+          x: menu.x,
+          y: menu.y,
+          items: entries.map((c, i) => ({ label: labels[i] || c, command: c }))
+        })
+        return
+      }
+      const first = commands[0]
       if (link.prompt) {
-        setInput(command)
+        setInput(' ' + first)
         inputRef.current?.focus()
+        // Cursor at the start: the verb goes in front of the handle.
+        requestAnimationFrame(() => inputRef.current?.setSelectionRange(0, 0))
       } else {
-        store.sendInput(command, false)
+        store.sendInput(first, false)
       }
     },
     [store]
   )
+  const [linkMenu, setLinkMenu] = useState<{
+    x: number
+    y: number
+    items: { label: string; command: string }[]
+  } | null>(null)
+  useEffect(() => {
+    if (!linkMenu) return
+    const close = (): void => setLinkMenu(null)
+    window.addEventListener('click', close)
+    window.addEventListener('keydown', close)
+    return () => {
+      window.removeEventListener('click', close)
+      window.removeEventListener('keydown', close)
+    }
+  }, [linkMenu])
 
   // Ctrl+F opens search (seeded from any selected text).
   useEffect(() => {
@@ -429,6 +468,26 @@ export function SessionView({
               </div>
             )}
           </div>
+          {linkMenu && (
+            <div
+              className="mxp-menu"
+              style={{ left: linkMenu.x, top: linkMenu.y }}
+              onClick={(e) => e.stopPropagation()}
+            >
+              {linkMenu.items.map((item, i) => (
+                <div
+                  key={i}
+                  className="mxp-menu-item"
+                  onClick={() => {
+                    setLinkMenu(null)
+                    store.sendInput(item.command, false)
+                  }}
+                >
+                  {item.label}
+                </div>
+              ))}
+            </div>
+          )}
           {searchOpen && (
             <div className="search-bar">
               <input

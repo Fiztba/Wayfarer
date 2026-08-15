@@ -3,7 +3,8 @@ import React from 'react'
 import type { Line } from '../SessionStore'
 import type { MxpLink, Span, SpanStyle } from '../ansi'
 
-export type LinkHandler = (link: MxpLink) => void
+/** `menu` is set on right-click, with the pointer position for a context menu. */
+export type LinkHandler = (link: MxpLink, menu?: { x: number; y: number }) => void
 
 export function formatTime(at: number): string {
   const t = new Date(at)
@@ -63,12 +64,19 @@ export const OutputSpan = React.memo(function OutputSpan({
     : span.text
   if (span.link) {
     const link = span.link
+    // Tooltip: the first `|`-part of the hint (for handle links that is the
+    // exact target, e.g. "3.hound"); fall back to the first command.
+    const tip = (link.hint ?? link.url ?? link.command ?? '').split('|')[0]
     return (
       <span
         style={spanCss(span.style)}
         className="mxp-link"
-        title={link.hint ?? link.url ?? link.command}
+        title={tip}
         onClick={() => onLink?.(link)}
+        onContextMenu={(e) => {
+          e.preventDefault()
+          onLink?.(link, { x: e.clientX, y: e.clientY })
+        }}
       >
         {content}
       </span>
