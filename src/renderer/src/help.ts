@@ -58,7 +58,8 @@ export const HELP_TOPICS: HelpTopic[] = [
           'Password masking: when a server asks for a password, the input masks itself automatically and skips history/echo.',
           'An empty Enter sends a blank line — many MUDs use this to repeat the prompt.',
           'Scrollback: each session keeps 100,000 lines of history by default (configurable up to 1,000,000 in ⚙ Settings → General). Scroll up to read; older history loads as you approach the top; the ▼ button jumps back to live output.',
-          'Search: Ctrl+F searches the entire scrollback (case-insensitive), starting from the most recent match. Enter steps to older matches, Shift+Enter to newer, Esc closes. Select text first and Ctrl+F searches for it.'
+          'Search: Ctrl+F searches the entire scrollback (case-insensitive), starting from the most recent match. Enter steps to older matches, Shift+Enter to newer, Esc closes. Select text first and Ctrl+F searches for it.',
+          'Tabs: drag a session tab left or right to reorder it (a bar shows where it will land), or press Ctrl+Shift+PgUp / PgDn to move the active tab.'
         ]
       },
       { h: 'Special prefixes' },
