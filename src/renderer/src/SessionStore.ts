@@ -13,6 +13,7 @@ import { AutomationEngine, parseSpeedwalk } from './automation/AutomationEngine'
 import { ScriptRuntime } from './scripting/ScriptRuntime'
 import { settingsManager } from './SettingsManager'
 import { uiState } from './uiState'
+import { LoginGuesser } from './LoginGuesser'
 import { MapModel } from './map/MapModel.ts'
 import { MapTracker } from './map/MapTracker.ts'
 import { MODEL_ACTION_METHODS } from './map/RemoteMap.ts'
@@ -51,6 +52,25 @@ export class SessionStore {
   host: string
   port: number
   profileId: string | null
+  /**
+   * The character logged in on this session — appended to the tab label.
+   * Learned from GMCP (Char.Status / Char.Name) when the MUD provides it;
+   * otherwise guessed from the login flow (see LoginGuesser). GMCP always
+   * wins over a guess. Cleared on disconnect.
+   */
+  charName: string | null = null
+  private charNameFromGmcp = false
+  /** Called when charName changes (the tab bar re-renders). */
+  onCharName?: () => void
+  private loginGuess = new LoginGuesser()
+
+  private setCharName(name: string | null, fromGmcp: boolean): void {
+    if (fromGmcp) this.charNameFromGmcp = true
+    else if (this.charNameFromGmcp) return // a guess never overrides GMCP
+    if (name === this.charName) return
+    this.charName = name
+    this.onCharName?.()
+  }
 
   lines: Line[] = []
   /** Spans of the current unfinished line (usually the prompt). */
@@ -449,6 +469,9 @@ export class SessionStore {
         this.walker?.cancel(false)
         this.sounds.stopAll()
         this.closeOpenLine()
+        this.charNameFromGmcp = false
+        this.loginGuess.reset()
+        this.setCharName(null, false)
         this.addSystemLine(
           event.hadError ? 'Connection lost.' : 'Disconnected.',
           event.hadError ? 'error' : 'system'
@@ -467,6 +490,12 @@ export class SessionStore {
         break
       case 'echo':
         this.serverEchoes = event.serverEchoes
+        // Password masking ending is the "you're past the password" signal
+        // the login guesser waits for before it trusts a candidate name.
+        if (!event.serverEchoes) {
+          const confirmed = this.loginGuess.onMaskEnd()
+          if (confirmed) this.setCharName(confirmed, false)
+        }
         this.notify()
         break
       case 'compression':
@@ -493,6 +522,7 @@ export class SessionStore {
       case 'gmcp':
         this.handleGmcpForMap(event.package, event.data)
         this.handleGmcpVitals(event.package, event.data)
+        this.handleGmcpCharName(event.package, event.data)
         break
       case 'msdp':
         this.handleMsdpForMap(event.data)
@@ -503,6 +533,38 @@ export class SessionStore {
 
   private mergedAutoLog(): boolean {
     return settingsManager.getSets(this.profileId).some((s) => s.options.autoLog)
+  }
+
+  /** GMCP Char.Status / Char.Name → the character's name for the tab label. */
+  private handleGmcpCharName(pkg: string, data: unknown): void {
+    if (!/^char\.(status|name)$/i.test(pkg)) return
+    if (typeof data !== 'object' || data === null) return
+    const d = data as Record<string, unknown>
+    // Char.Name uses "name"; Char.Status uses "name" on most servers, some
+    // put it under "character".
+    const raw = d.name ?? d.character
+    if (typeof raw !== 'string') return
+    const name = raw.trim()
+    if (!name) return
+    this.setCharName(name, true)
+  }
+
+  /**
+   * Fallback for MUDs without GMCP: infer the character name from the login
+   * exchange. Fed every outbound line together with the server text that
+   * preceded it, and told when password masking starts/stops.
+   */
+  private feedLoginGuess(sent: string): void {
+    if (this.charNameFromGmcp) return
+    // The server text we're answering: the open prompt spans, else the last
+    // completed line.
+    let promptText = this.openSpans.map((s) => s.text).join('')
+    if (!promptText.trim()) {
+      const last = this.lines[this.lines.length - 1]
+      promptText = last?.spans.map((s) => s.text).join('') ?? ''
+    }
+    const guess = this.loginGuess.onSend(promptText, sent)
+    if (guess) this.setCharName(guess, false)
   }
 
   /** GMCP Char.Vitals / Char.Status → live variables (session-only). */
@@ -539,10 +601,12 @@ export class SessionStore {
         if (dir) exits[dir] = v === null || v === undefined ? null : `gmcp:${v}`
       }
     }
+    const areaName =
+      typeof d.area === 'string' ? d.area : typeof d.zone === 'string' ? d.zone : undefined
     this.tracker?.onServerRoom({
       serverId: `gmcp:${num}`,
       name: typeof d.name === 'string' ? d.name : undefined,
-      areaName: typeof d.area === 'string' ? d.area : undefined,
+      areaName,
       exits
     })
   }
@@ -598,6 +662,7 @@ export class SessionStore {
       window.mud.send(this.id, raw)
       return
     }
+    this.feedLoginGuess(raw)
     if (/^#help$/i.test(raw.trim())) {
       uiState.openHelp?.()
       return
