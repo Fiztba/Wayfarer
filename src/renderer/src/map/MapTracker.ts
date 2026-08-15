@@ -189,14 +189,44 @@ export class MapTracker implements TrackerControl {
       return
     }
 
+    // Unknown server id — but it may describe a room we already drew from
+    // text detection before ids were available. Adopting an existing room is
+    // identification, not creation, so it is allowed in every mode.
+    const from = move && !this.lost ? this.model.room(this.currentRoomId) : null
+    const adopt = (roomId: string): void => {
+      this.model.updateRoom(roomId, {
+        serverId: info.serverId,
+        ...(info.name ? { name: info.name } : {})
+      })
+      this.currentRoomId = roomId
+      this.lost = false
+      this.notify()
+    }
+    if (!move && !this.lost) {
+      // Standing still (a look): this is the room we're in.
+      const current = this.model.room(this.currentRoomId)
+      if (current && !current.serverId && (!info.name || current.name === info.name)) {
+        adopt(current.id)
+        return
+      }
+    }
+    if (from && move) {
+      // We walked an exit that already points at an id-less room: same room.
+      const viaId = this.model.exitOf(from, move.dir)?.to
+      const via = viaId != null ? this.model.room(viaId) : null
+      if (via && !via.serverId) {
+        adopt(via.id)
+        return
+      }
+    }
+
     if (this.mode !== 'map') {
       this.markLost('an unknown room (follow mode does not create rooms).')
       return
     }
 
-    // New room, authoritative id. Server area names are authoritative for
-    // zones; otherwise inherit from the room we came from.
-    const from = move && !this.lost ? this.model.room(this.currentRoomId) : null
+    // Genuinely new room, authoritative id. Server area names are
+    // authoritative for zones; otherwise inherit from the room we came from.
     const zoneId = info.areaName ? this.model.createZone(info.areaName) : this.zoneForNewRoom(from)
     const pos =
       from && move ? this.model.placeFrom(from, move.dir) : { x: 0, y: 0, z: 0 }
