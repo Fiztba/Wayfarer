@@ -66,6 +66,8 @@ export default function App() {
   const connect = useCallback(async (opts: ConnectRequest) => {
     const id = await window.mud.connect(opts)
     const store = new SessionStore(id, opts.name, opts.host, opts.port, opts.profileId)
+    // The tab label grows a character name once the MUD tells us one (GMCP).
+    store.onCharName = () => forceRender((n) => n + 1)
     sessionStores.set(id, store)
     setTabs((t) => [...t, { id, name: opts.name }])
     setActiveId(id)
@@ -88,6 +90,52 @@ export default function App() {
 
   const settingsStore = settingsFor ? sessionStores.get(settingsFor) : undefined
 
+  // ---- Tab reordering: drag a tab onto another to move it there; the drop
+  // indicator shows which side it will land on. Ctrl+Shift+PgUp/PgDn moves
+  // the active tab by keyboard.
+  const [dragId, setDragId] = useState<string | null>(null)
+  const [dropAt, setDropAt] = useState<{ id: string; after: boolean } | null>(null)
+
+  const moveTab = useCallback((id: string, toIndex: number) => {
+    setTabs((t) => {
+      const from = t.findIndex((tab) => tab.id === id)
+      if (from < 0) return t
+      const next = [...t]
+      const [moved] = next.splice(from, 1)
+      const clamped = Math.max(0, Math.min(toIndex, next.length))
+      next.splice(clamped, 0, moved)
+      return next
+    })
+  }, [])
+
+  const dropTab = useCallback(
+    (targetId: string, after: boolean) => {
+      if (!dragId || dragId === targetId) return
+      const targetIdx = tabs.findIndex((tab) => tab.id === targetId)
+      const fromIdx = tabs.findIndex((tab) => tab.id === dragId)
+      if (targetIdx < 0 || fromIdx < 0) return
+      // Index in the array AFTER removing the dragged tab.
+      let to = after ? targetIdx + 1 : targetIdx
+      if (fromIdx < to) to -= 1
+      moveTab(dragId, to)
+    },
+    [dragId, tabs, moveTab]
+  )
+
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (!e.ctrlKey || !e.shiftKey || !activeId) return
+      if (e.key !== 'PageUp' && e.key !== 'PageDown') return
+      if (uiState.modalOpen) return
+      e.preventDefault()
+      const idx = tabs.findIndex((tab) => tab.id === activeId)
+      if (idx < 0) return
+      moveTab(activeId, e.key === 'PageUp' ? idx - 1 : idx + 1)
+    }
+    window.addEventListener('keydown', handler)
+    return () => window.removeEventListener('keydown', handler)
+  }, [activeId, tabs, moveTab])
+
   return (
     <div className="app">
       <div className="tab-bar">
@@ -95,14 +143,48 @@ export default function App() {
           const store = sessionStores.get(tab.id)
           const dot =
             store?.status === 'connected' ? '●' : store?.status === 'connecting' ? '◌' : '○'
+          const dropClass =
+            dropAt?.id === tab.id ? (dropAt.after ? ' tab-drop-after' : ' tab-drop-before') : ''
           return (
             <div
               key={tab.id}
-              className={`tab ${tab.id === activeId ? 'tab-active' : ''}`}
+              className={`tab ${tab.id === activeId ? 'tab-active' : ''}${dragId === tab.id ? ' tab-dragging' : ''}${dropClass}`}
               onClick={() => setActiveId(tab.id)}
+              draggable
+              onDragStart={(e) => {
+                setDragId(tab.id)
+                e.dataTransfer.effectAllowed = 'move'
+                e.dataTransfer.setData('text/plain', tab.id)
+              }}
+              onDragEnd={() => {
+                setDragId(null)
+                setDropAt(null)
+              }}
+              onDragOver={(e) => {
+                if (!dragId || dragId === tab.id) return
+                e.preventDefault()
+                e.dataTransfer.dropEffect = 'move'
+                const rect = e.currentTarget.getBoundingClientRect()
+                const after = e.clientX > rect.left + rect.width / 2
+                if (dropAt?.id !== tab.id || dropAt.after !== after) setDropAt({ id: tab.id, after })
+              }}
+              onDragLeave={() => {
+                if (dropAt?.id === tab.id) setDropAt(null)
+              }}
+              onDrop={(e) => {
+                e.preventDefault()
+                const rect = e.currentTarget.getBoundingClientRect()
+                dropTab(tab.id, e.clientX > rect.left + rect.width / 2)
+                setDragId(null)
+                setDropAt(null)
+              }}
+              title="Drag to reorder · Ctrl+Shift+PgUp/PgDn"
             >
               <span className={`tab-dot dot-${store?.status ?? 'disconnected'}`}>{dot}</span>
-              <span className="tab-name">{tab.name}</span>
+              <span className="tab-name">
+                {tab.name}
+                {store?.charName && <span className="tab-char"> {store.charName}</span>}
+              </span>
               <button
                 className="tab-close"
                 title="Close session"
