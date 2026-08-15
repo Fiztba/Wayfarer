@@ -110,6 +110,9 @@ export class RoomCapture {
       }
     }
     this.recent = []
+    // Strip trailing bracket decorations ("Temple Square [anchorage:temple]",
+    // "The Pit [PK]") — admin/status suffixes, not part of the room's name.
+    name = name.replace(/\s*\[[^\][]*\]\s*$/u, '').trim()
     if (!name) return null
     return { name, exits }
   }
