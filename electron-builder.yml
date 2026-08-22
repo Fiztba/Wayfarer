@@ -17,6 +17,9 @@ publish:
   provider: github
   owner: Fiztba
   repo: Wayfarer
+  # Default is a hidden draft, which the public API — and therefore every
+  # installed updater — cannot see.
+  releaseType: release
 win:
   target: nsis
   icon: build/icon.ico

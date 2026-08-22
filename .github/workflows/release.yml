@@ -37,3 +37,11 @@ jobs:
         run: npx electron-builder --win --publish always
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # electron-builder reuses an existing draft for the same tag, so a
+      # release that ever lands as a draft would stay invisible to updaters.
+      # Force-published and marked latest, this is a no-op otherwise.
+      - name: Ensure release is published and latest
+        run: gh release edit ${{ github.ref_name }} --repo ${{ github.repository }} --draft=false --latest
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
