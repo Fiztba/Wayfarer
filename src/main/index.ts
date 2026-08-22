@@ -1,4 +1,5 @@
 import { app, BrowserWindow, ipcMain, net, protocol, shell } from 'electron'
+import { autoUpdater } from 'electron-updater'
 import path from 'node:path'
 import fs from 'node:fs'
 import { pathToFileURL } from 'node:url'
@@ -188,6 +189,18 @@ app.whenReady().then(() => {
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow()
   })
+
+  // ---- Auto-update: newest GitHub Release -------------------------------
+  // Poll on launch and every 4 hours after, since a client can stay up for
+  // days. Downloads happen in the background and install on quit, so a live
+  // session is never interrupted; failures (offline, rate-limit) just wait
+  // for the next poll.
+  if (app.isPackaged) {
+    autoUpdater.on('error', (err) => console.log('[updater]', String(err)))
+    const check = () => autoUpdater.checkForUpdatesAndNotify().catch(() => {})
+    check()
+    setInterval(check, 4 * 60 * 60 * 1000)
+  }
 })
 
 app.on('window-all-closed', () => {

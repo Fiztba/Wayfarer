@@ -10,9 +10,19 @@ files:
 # with an access violation when spawned mid-build (works fine standalone);
 # a larger installer is a fair trade for a build that finishes.
 compression: store
+# Auto-update: installed apps poll the newest GitHub Release for latest.yml.
+# CI publishes on tag push (.github/workflows/release.yml); a plain
+# `npm run dist` stays local-only because it never passes --publish.
+publish:
+  provider: github
+  owner: Fiztba
+  repo: Wayfarer
 win:
   target: nsis
   icon: build/icon.ico
+  # No spaces: GitHub rewrites release-asset names, which used to confuse
+  # updaters; the safe convention is a dash-separated artifact name.
+  artifactName: ${name}-setup-${version}.${ext}
 nsis:
   oneClick: true
   perMachine: false

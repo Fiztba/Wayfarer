@@ -1,0 +1,39 @@
+name: Release
+
+# Pushing a tag like v0.2.0 builds the Windows installer and publishes it
+# (setup exe + blockmap + latest.yml) as a GitHub Release. Installed apps
+# find it through the publish config in electron-builder.yml.
+#
+# Cutting a release:
+#   1. bump "version" in package.json to match the tag, commit, push
+#   2. git tag v0.2.0 && git push origin v0.2.0
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - run: npm run typecheck
+
+      - run: npm run build
+
+      - name: Package and publish to GitHub Releases
+        run: npx electron-builder --win --publish always
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
