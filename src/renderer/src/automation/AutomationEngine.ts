@@ -72,6 +72,23 @@ export function splitCommands(text: string): string[] {
 }
 
 /**
+ * Split a pasted (or Shift+Enter-composed) block into the lines to transmit.
+ *
+ * Normalizes CRLF/CR to LF and drops ONE trailing newline — editors end files
+ * with it and it would otherwise send a stray blank line. Everything else is
+ * kept verbatim: leading indentation and interior blank lines are content as
+ * far as a MUD-side editor (trigedit, OLC string editors) is concerned.
+ *
+ * A block that comes back as a single line is just an ordinary command, and
+ * the caller runs it through the normal pipeline.
+ */
+export function splitPastedBlock(text: string): string[] {
+  const normalized = text.replace(/\r\n?/g, '\n')
+  const body = normalized.endsWith('\n') ? normalized.slice(0, -1) : normalized
+  return body.split('\n')
+}
+
+/**
  * Parse "#N rest" / "#N {group}" / "#N@DELAY {group}" repeat syntax.
  * DELAY: "500ms", "2s", "1.5s", "1m", or a bare number (milliseconds).
  * Returns null if the input is not a repeat.

@@ -9,7 +9,7 @@
  */
 import { AnsiParser, type Span } from './ansi'
 import { parseMspLine, playBeep, SoundPlayer } from './sound'
-import { AutomationEngine, parseSpeedwalk } from './automation/AutomationEngine'
+import { AutomationEngine, parseSpeedwalk, splitPastedBlock } from './automation/AutomationEngine'
 import { ScriptRuntime } from './scripting/ScriptRuntime'
 import { settingsManager } from './SettingsManager'
 import { uiState } from './uiState'
@@ -38,6 +38,8 @@ export interface Line {
 }
 
 const MAX_HISTORY = 200
+/** Ask before sending a paste larger than this — a mis-paste can be huge. */
+const PASTE_CONFIRM_LINES = 200
 
 function scrollbackCap(): number {
   const raw = settingsManager.globalOptions.scrollbackLines
@@ -657,11 +659,19 @@ export class SessionStore {
   }
 
   /** Send user input through the automation pipeline (or raw when masked). */
-  sendInput(raw: string, masked: boolean): void {
+  sendInput(input: string, masked: boolean): void {
     if (masked) {
-      window.mud.send(this.id, raw)
+      window.mud.send(this.id, input)
       return
     }
+    // Multi-line input is a pasted block, not a command: it goes out line by
+    // line with its formatting intact instead of through the pipeline.
+    const lines = splitPastedBlock(input)
+    if (lines.length > 1) {
+      this.sendBlock(lines)
+      return
+    }
+    const raw = lines[0]
     this.feedLoginGuess(raw)
     if (/^#help$/i.test(raw.trim())) {
       uiState.openHelp?.()
@@ -704,12 +714,98 @@ export class SessionStore {
       )
       return
     }
-    if (/^#stop$/i.test(raw.trim()) && this.walker?.walking) {
-      this.walker.cancel()
+    if (/^#stop$/i.test(raw.trim())) {
+      if (this.walker?.walking) this.walker.cancel()
+      this.cancelBlock()
       // fall through: engine also cancels paced repeats
     }
     this.echoInput(raw)
     this.engine.processInput(raw)
+  }
+
+  // ---- pasted blocks ------------------------------------------------------
+
+  /** Pending timer while a paced multi-line send is still draining. */
+  private blockTimer: ReturnType<typeof setTimeout> | null = null
+
+  /**
+   * Send an already-split multi-line block, one line per transmission.
+   *
+   * Verbatim (the default) means exactly that: no ';' stacking, no alias
+   * expansion, no @variable substitution, no speedwalk/#repeat parsing and —
+   * the point of the exercise — no trimming, so indentation survives. It also
+   * skips the mapper, because a "n" inside a script is text, not a step. That
+   * is what makes it safe to write a trigedit script in a real editor and
+   * paste the whole thing into the MUD's OLC editor.
+   *
+   * With "paste verbatim" turned off every line runs through the normal
+   * command pipeline instead, which is what you want when the block is a list
+   * of commands rather than script text.
+   */
+  sendBlock(lines: string[]): void {
+    if (this.status === 'disconnected') {
+      this.addSystemLine(`Not connected — ${lines.length} pasted lines were not sent.`, 'error')
+      this.notify()
+      return
+    }
+    if (
+      lines.length > PASTE_CONFIRM_LINES &&
+      !window.confirm(
+        `Send ${lines.length} lines to ${this.name}?\n\n` +
+          'Each one is transmitted as a separate line of input. ' +
+          'Cancel if you pasted this by accident.'
+      )
+    ) {
+      return
+    }
+    this.cancelBlock()
+    const verbatim = settingsManager.globalOptions.pasteVerbatim
+    const delay = Math.min(5000, Math.max(0, settingsManager.globalOptions.pasteLineDelayMs || 0))
+    let sent = 0
+
+    /** Send lines[sent] (advancing it); false if the session dropped first. */
+    const sendOne = (): boolean => {
+      if (this.status === 'disconnected') {
+        this.addSystemLine(
+          `Connection closed — stopped after ${sent} of ${lines.length} pasted lines.`,
+          'error'
+        )
+        this.notify()
+        return false
+      }
+      const line = lines[sent++]
+      this.echoInput(line)
+      if (verbatim) window.mud.send(this.id, line)
+      else this.engine.processInput(line)
+      return true
+    }
+
+    if (delay === 0) {
+      while (sent < lines.length) {
+        if (!sendOne()) break
+      }
+      return
+    }
+    this.addSystemLine(
+      `Sending ${lines.length} lines, one every ${delay}ms — #stop cancels.`,
+      'system'
+    )
+    const tick = (): void => {
+      this.blockTimer = null
+      if (!sendOne() || sent >= lines.length) return
+      this.blockTimer = setTimeout(tick, delay)
+    }
+    tick()
+  }
+
+  /** Cancel a paced paste that is still draining; true if one was running. */
+  cancelBlock(): boolean {
+    if (this.blockTimer === null) return false
+    clearTimeout(this.blockTimer)
+    this.blockTimer = null
+    this.addSystemLine('Paste cancelled.', 'system')
+    this.notify()
+    return true
   }
 
   // ---- output -------------------------------------------------------------
@@ -851,6 +947,7 @@ export class SessionStore {
   dispose(): void {
     this.engine.stopTimers()
     this.engine.cancelPacedRepeats()
+    if (this.blockTimer !== null) clearTimeout(this.blockTimer)
     this.walker?.cancel(false)
     this.sounds.stopAll()
     this.mapModel?.flush()

@@ -829,6 +829,40 @@ function GeneralTab() {
         <label className="logging-option">
           <input
             type="checkbox"
+            checked={global.options.pasteVerbatim}
+            onChange={(e) => setOption({ pasteVerbatim: e.target.checked })}
+          />{' '}
+          Send pasted multi-line text verbatim
+          <span className="field-hint">
+            {' '}
+            (keeps indentation and punctuation exactly as written — no aliases, semicolon
+            stacking, @variables or speedwalks. Turn off to run every pasted line through the
+            normal command pipeline.)
+          </span>
+        </label>
+        <div className="logging-option">
+          Delay between pasted lines:{' '}
+          <input
+            className="scrollback-input"
+            value={String(global.options.pasteLineDelayMs)}
+            onChange={(e) => {
+              const n = parseInt(e.target.value.replace(/\D/g, ''), 10)
+              if (Number.isFinite(n)) setOption({ pasteLineDelayMs: n })
+            }}
+            onBlur={(e) => {
+              const n = parseInt(e.target.value.replace(/\D/g, ''), 10) || 0
+              setOption({ pasteLineDelayMs: Math.min(5000, Math.max(0, n)) })
+            }}
+          />{' '}
+          ms
+          <div className="field-hint">
+            0 sends the whole block at once (0 – 5000). Raise it if a MUD drops lines or trips
+            its flood protection on a big paste; #stop cancels one mid-flight.
+          </div>
+        </div>
+        <label className="logging-option">
+          <input
+            type="checkbox"
             checked={global.options.soundEnabled}
             onChange={(e) => setOption({ soundEnabled: e.target.checked })}
           />{' '}

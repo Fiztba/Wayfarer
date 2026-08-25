@@ -21,6 +21,21 @@ const BASE_WINDOW = 1500
 /** How many more lines materialize per approach to the top of the scroll. */
 const WINDOW_CHUNK = 1500
 
+/** Tallest the command input grows to fit a pasted block, in pixels. */
+const MAX_INPUT_HEIGHT = 260
+
+type InputEl = HTMLTextAreaElement | HTMLInputElement
+
+/** True when the caret sits on the first line — where ↑ means "history". */
+function caretOnFirstLine(el: InputEl): boolean {
+  return el.value.lastIndexOf('\n', (el.selectionStart ?? 0) - 1) === -1
+}
+
+/** True when the caret sits on the last line — where ↓ means "history". */
+function caretOnLastLine(el: InputEl): boolean {
+  return el.value.indexOf('\n', el.selectionEnd ?? 0) === -1
+}
+
 /** Binary search: index of the line with id >= target (ids are ascending). */
 function indexOfLineId(lines: Line[], target: number): number {
   let lo = 0
@@ -58,7 +73,7 @@ export function SessionView({
 
   const scrollRef = useRef<HTMLDivElement>(null)
   const measureRef = useRef<HTMLSpanElement>(null)
-  const inputRef = useRef<HTMLInputElement>(null)
+  const inputRef = useRef<InputEl | null>(null)
   const [pinned, setPinned] = useState(true)
   const pinnedRef = useRef(true)
   // Windowed scrollback: null = pinned window (last BASE_WINDOW lines);
@@ -263,6 +278,18 @@ export function SessionView({
     [mapWidth]
   )
 
+  // Grow the input to fit a pasted block (up to MAX_INPUT_HEIGHT, then it
+  // scrolls), and shrink back to one line when it empties. Declared above the
+  // auto-scroll effect on purpose: growing the input shrinks the output pane,
+  // and the pin-to-bottom below has to run after that to stay pinned.
+  useLayoutEffect(() => {
+    const el = inputRef.current
+    if (!(el instanceof HTMLTextAreaElement)) return
+    el.style.height = 'auto'
+    // +2 for the 1px borders: scrollHeight is the content box, height is not.
+    el.style.height = `${Math.min(el.scrollHeight + 2, MAX_INPUT_HEIGHT)}px`
+  }, [input, store.serverEchoes])
+
   // Auto-scroll unless the user has scrolled up to read; after revealing
   // older history, keep the view anchored on what they were reading.
   useLayoutEffect(() => {
@@ -350,10 +377,11 @@ export function SessionView({
     return () => obs.disconnect()
   }, [store.id])
 
-  // Focus input when this tab becomes active.
+  // Focus input when this tab becomes active — and again when a password
+  // prompt swaps the textarea for a masked <input>, which is a remount.
   useEffect(() => {
     if (active) inputRef.current?.focus()
-  }, [active])
+  }, [active, store.serverEchoes])
 
   // Keyboard macros fire regardless of focus while this session is active.
   useEffect(() => {
@@ -376,7 +404,10 @@ export function SessionView({
     store.sendInput(raw, masked)
     if (!masked) {
       store.pushHistory(raw)
-      if (settingsManager.globalOptions.clearInputOnSend) {
+      // "Keep it selected" exists so you can re-send one command by typing
+      // over it; a pasted block is a one-shot, so it always clears (↑ brings
+      // the whole block back if you need it again).
+      if (settingsManager.globalOptions.clearInputOnSend || raw.includes('\n')) {
         setInput('')
       } else {
         // MUD convention: keep the command selected so typing replaces it.
@@ -389,11 +420,18 @@ export function SessionView({
   }, [input, store])
 
   const onKeyDown = useCallback(
-    (e: React.KeyboardEvent<HTMLInputElement>) => {
+    (e: React.KeyboardEvent<InputEl>) => {
+      const el = e.currentTarget
       if (e.key === 'Enter') {
+        // Shift+Enter / Ctrl+Enter break a line instead of sending, so a block
+        // can be written or fixed up in place. Enter always sends the lot.
+        if ((e.shiftKey || e.ctrlKey) && el instanceof HTMLTextAreaElement) return
         e.preventDefault()
         sendCommand()
       } else if (e.key === 'ArrowUp') {
+        // Inside a multi-line block the arrows walk the caret; history only
+        // takes over at the top (↑) and bottom (↓) of the text.
+        if (!caretOnFirstLine(el)) return
         e.preventDefault()
         const h = store.history
         if (h.length === 0) return
@@ -405,6 +443,7 @@ export function SessionView({
         }
         setInput(h[historyPos.current])
       } else if (e.key === 'ArrowDown') {
+        if (!caretOnLastLine(el)) return
         e.preventDefault()
         if (historyPos.current === null) return
         if (historyPos.current < store.history.length - 1) {
@@ -549,17 +588,38 @@ export function SessionView({
         )}
       </div>
       <div className="input-row">
-        <input
-          ref={inputRef}
-          className="command-input"
-          type={store.serverEchoes ? 'password' : 'text'}
-          value={input}
-          onChange={(e) => setInput(e.target.value)}
-          onKeyDown={onKeyDown}
-          placeholder={store.status === 'connected' ? 'Type a command…' : 'Not connected'}
-          spellCheck={false}
-          autoComplete="off"
-        />
+        {store.serverEchoes ? (
+          // Passwords need a real <input type="password"> — and a masked
+          // prompt is never multi-line anyway.
+          <input
+            ref={(el) => {
+              inputRef.current = el
+            }}
+            className="command-input"
+            type="password"
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
+            onKeyDown={onKeyDown}
+            placeholder="Password"
+            autoComplete="off"
+          />
+        ) : (
+          // A textarea so a pasted block keeps its newlines and indentation
+          // instead of being flattened into one line by an <input>.
+          <textarea
+            ref={(el) => {
+              inputRef.current = el
+            }}
+            className="command-input"
+            rows={1}
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
+            onKeyDown={onKeyDown}
+            placeholder={store.status === 'connected' ? 'Type a command…' : 'Not connected'}
+            spellCheck={false}
+            autoComplete="off"
+          />
+        )}
       </div>
       <div className="status-bar">
         <span className="status-text">{statusBits.join('  ·  ')}</span>

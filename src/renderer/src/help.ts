@@ -51,9 +51,10 @@ export const HELP_TOPICS: HelpTopic[] = [
       },
       {
         list: [
-          'Command history: ↑ and ↓ cycle through previous commands; Esc clears the line.',
+          'Command history: ↑ and ↓ cycle through previous commands; Esc clears the line. In a multi-line block the arrows move the caret first and only reach for history at the top and bottom of the text.',
           'After sending, your command stays selected so typing replaces it — or enable "Clear the input line after sending" in ⚙ Settings → General.',
           'Multiple commands: separate with semicolons — get sword;wield sword;kill troll.',
+          'Multi-line: Shift+Enter (or Ctrl+Enter) adds a line break instead of sending; Enter always sends the whole block. Paste works too — see Pasting Scripts & Blocks.',
           'Braces group commands and protect their semicolons: {get sword;wield sword} travels as one unit.',
           'Password masking: when a server asks for a password, the input masks itself automatically and skips history/echo.',
           'An empty Enter sends a blank line — many MUDs use this to repeat the prompt.',
@@ -72,6 +73,44 @@ export const HELP_TOPICS: HelpTopic[] = [
           '#map, #go, #wp, #zone, #lost — mapper commands (see The Mapper)',
           '#reconnect — re-dial a dropped or quit session in the same tab (pressing Enter on an empty line while disconnected does the same); scrollback, map position, and settings all carry over',
           '#help — open this help'
+        ]
+      }
+    ]
+  },
+  {
+    id: 'pasting',
+    title: 'Pasting Scripts & Blocks',
+    blocks: [
+      {
+        p: 'The input line is a real multi-line editor. Paste a whole trigedit script (or any block of text) straight from Sublime, VS Code or a wiki page and it arrives with its newlines, indentation and punctuation intact — write the script in the editor you like, paste it into the MUD once.'
+      },
+      {
+        list: [
+          'Paste, read it over, then press Enter to send the lot. Nothing goes out until you do.',
+          'Shift+Enter (or Ctrl+Enter) inserts a line break, so you can compose or patch a block in place.',
+          'The box grows to fit what you pasted and scrolls once it gets tall; it shrinks back to one line after sending.',
+          '↑ recalls the entire block as one history entry, so a rejected script is one keystroke away from a second try.'
+        ]
+      },
+      { h: 'Verbatim sending' },
+      {
+        p: 'Anything with more than one line is treated as pasted text, not as commands: every line goes out exactly as written. Aliases, semicolon stacking, @variables, .speedwalks, #repeats and the mapper all stand aside, and leading whitespace is kept rather than trimmed — which is what lets script indentation and lines like "if %actor.vnum% == 3001" survive the trip.'
+      },
+      {
+        code: '* trigedit script, pasted as-is\nif %actor.is_pc%\n  wait 1 s\n  say Greetings, %actor.name%!\nend'
+      },
+      {
+        p: 'Single-line input is unaffected — it still runs through aliases, variables and the rest as always.'
+      },
+      {
+        p: 'If instead you want a pasted list of commands to run as commands, turn off "Send pasted multi-line text verbatim" in ⚙ Settings → General.'
+      },
+      { h: 'Big pastes' },
+      {
+        list: [
+          'Over 200 lines, Wayfarer asks for confirmation first — a mis-paste of a whole file is easy to do and hard to undo.',
+          'If a MUD drops lines or trips its flood protection on a large paste, set a "Delay between pasted lines" in ⚙ Settings → General (try 100 ms). #stop cancels a paced paste mid-flight.',
+          'Sending a block while disconnected sends nothing and says so.'
         ]
       }
     ]

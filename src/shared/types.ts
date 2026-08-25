@@ -117,6 +117,15 @@ export interface SettingsOptions {
   scrollbackLines: number
   /** Play MSP sounds (!!SOUND/!!MUSIC) on servers that negotiate them. */
   soundEnabled: boolean
+  /**
+   * Send multi-line input (a paste) verbatim: no ';' stacking, alias
+   * expansion, @variable substitution or trimming, so indentation and
+   * punctuation reach the MUD exactly as written. Off = run every line
+   * through the normal command pipeline.
+   */
+  pasteVerbatim: boolean
+  /** Delay between the lines of a multi-line send, in ms (0 = all at once). */
+  pasteLineDelayMs: number
 }
 
 export interface SettingsSet {
@@ -144,7 +153,9 @@ export function defaultSettings(): SettingsSet {
       clearInputOnSend: false,
       showTimestamps: false,
       scrollbackLines: 100_000,
-      soundEnabled: true
+      soundEnabled: true,
+      pasteVerbatim: true,
+      pasteLineDelayMs: 0
     }
   }
 }

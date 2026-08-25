@@ -8,6 +8,7 @@ import {
   parseSpeedwalk,
   substituteArgs,
   substituteVars,
+  splitPastedBlock,
   keyEventSignature
 } from '../src/renderer/src/automation/AutomationEngine.ts'
 import { defaultSettings, type SettingsSet } from '../src/shared/types.ts'
@@ -36,6 +37,21 @@ check('args missing', substituteArgs('kill %1 %2', ['rat'], 'rat'), 'kill rat ')
 check('vars @target', substituteVars('kill @target', { target: 'dragon' }), 'kill dragon')
 check('vars unknown kept', substituteVars('mail @unknownx', {}), 'mail @unknownx')
 check('vars @@ escape', substituteVars('say hi@@example', { hi: 'X' }), 'say hi@example')
+
+// ---- pasted blocks ----
+check('paste single line', splitPastedBlock('kill rat'), ['kill rat'])
+check('paste trailing newline dropped', splitPastedBlock('kill rat\n'), ['kill rat'])
+check('paste CRLF normalized', splitPastedBlock('one\r\ntwo\r\n'), ['one', 'two'])
+check('paste bare CR normalized', splitPastedBlock('one\rtwo'), ['one', 'two'])
+check('paste keeps indentation', splitPastedBlock('if %actor.is_pc%\n  wait 1 s\nend'), [
+  'if %actor.is_pc%',
+  '  wait 1 s',
+  'end'
+])
+check('paste keeps interior blanks', splitPastedBlock('a\n\nb\n'), ['a', '', 'b'])
+check('paste keeps one trailing blank line', splitPastedBlock('a\n\n'), ['a', ''])
+check('paste empty', splitPastedBlock(''), [''])
+check('paste lone newline', splitPastedBlock('\n'), [''])
 
 // ---- macro signatures ----
 check(

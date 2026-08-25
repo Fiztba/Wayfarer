@@ -319,19 +319,35 @@ body,
 }
 
 .command-input {
+  display: block;
   width: 100%;
+  box-sizing: border-box;
   background: var(--bg-input);
   border: 1px solid var(--border);
   border-radius: 6px;
   color: var(--accent-warm);
   font-family: var(--font-mono);
   font-size: 14px;
+  line-height: 1.35;
   padding: 8px 12px;
   outline: none;
+  /* A pasted block keeps its indentation and grows the box (JS caps the
+     height); the drag handle would fight that, so it is off. */
+  resize: none;
+  overflow-y: auto;
+  white-space: pre-wrap;
 }
 
 .command-input:focus {
   border-color: var(--accent);
+}
+
+.command-input::-webkit-scrollbar {
+  width: 10px;
+}
+.command-input::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 5px;
 }
 
 .status-bar {
