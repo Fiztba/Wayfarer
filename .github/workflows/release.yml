@@ -33,12 +33,50 @@ jobs:
 
       - run: npm run build
 
+      # electron-builder creates the release when it cannot find one for the
+      # tag, and it uploads artifacts concurrently, so two uploads can race
+      # that creation into existence twice. Every tag from v0.3.0 on came out
+      # that way: one record holding latest.yml + the installer, a second
+      # holding only the blockmap. GitHub resolves tag-scoped paths - the
+      # download URL electron-updater fetches, and the web UI asset list - to
+      # the lower release id, so which record was reachable came down to which
+      # upload won. v0.3.2 lost, and shipped 404s for latest.yml and the exe
+      # while looking perfectly healthy in the API. Creating the release first
+      # leaves the uploads nothing to race.
+      - name: Create the release up front
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const tag = context.ref.replace("refs/tags/", "")
+            try {
+              const { data } = await github.rest.repos.getReleaseByTag({ ...context.repo, tag })
+              core.info(`Reusing existing release ${tag} (id ${data.id})`)
+              return
+            } catch (e) {
+              if (e.status !== 404) throw e
+            }
+            // electron-builder titles releases with the bare version and fills
+            // the body from the tagged commit; match that so a pre-created
+            // release is indistinguishable from one it made itself.
+            const commit = await github.rest.repos.getCommit({ ...context.repo, ref: context.sha })
+            const body = commit.data.commit.message.trim()
+            const { data } = await github.rest.repos.createRelease({
+              ...context.repo,
+              tag_name: tag,
+              name: tag.replace(/^v/, ""),
+              body,
+              draft: false,
+              prerelease: false
+            })
+            core.info(`Created release ${tag} (id ${data.id})`)
+
       - name: Package and publish to GitHub Releases
         run: npx electron-builder --win --publish always
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       # Nothing runs after the build on purpose: releaseType: release in
-      # electron-builder.yml is what keeps the release out of draft and marks
-      # it latest. A gh release edit step used to double up on that and failed
-      # on every run, painting a red X on releases that had published fine.
+      # electron-builder.yml keeps the release out of draft and marks it
+      # latest. A gh release edit step used to sit here and fail four seconds
+      # into every run - almost certainly on the duplicate-tag ambiguity above,
+      # which makes it a symptom of that bug rather than a flaky step.
