@@ -12,6 +12,10 @@ import { MapStore } from './MapStore'
 import type { ConnectOptions, Profile, SettingsSet } from '../shared/types'
 
 let mainWindow: BrowserWindow | null = null
+/** Version of a downloaded update waiting to install, once one exists. */
+let updateReady: string | null = null
+/** Where the updater writes; null until the packaged updater starts up. */
+let updaterLogPath: string | null = null
 
 // One instance only: two copies sharing the same profile/settings/map files
 // would fight over writes. A second launch focuses the existing window.
@@ -35,6 +39,29 @@ protocol.registerSchemesAsPrivileged([
 const sessions = new SessionManager(() => mainWindow?.webContents ?? null)
 let profiles: ProfileStore
 
+// Windows toasts are delivered by AppUserModelID, and Electron's runtime
+// default does not necessarily match the ID the installer stamped on the
+// Start Menu shortcut — when they disagree the toast is dropped silently.
+// This is the shortcut's actual ID, so the two now agree.
+if (process.platform === 'win32') app.setAppUserModelId('electron.app.Wayfarer')
+
+/**
+ * Renderer settings shared by the main window and the map pop-outs.
+ *
+ * The version rides in on argv so the renderer has it synchronously at
+ * startup — it feeds the status bar, the MXP <VERSION> reply and GMCP
+ * Core.Hello, none of which can wait on a round trip.
+ */
+function rendererPreferences() {
+  return {
+    preload: path.join(__dirname, '../preload/index.js'),
+    contextIsolation: true,
+    nodeIntegration: false,
+    sandbox: false,
+    additionalArguments: [`--app-version=${app.getVersion()}`]
+  }
+}
+
 function createWindow(): void {
   mainWindow = new BrowserWindow({
     width: 1280,
@@ -44,12 +71,7 @@ function createWindow(): void {
     backgroundColor: '#0d1117',
     autoHideMenuBar: true,
     title: 'Wayfarer',
-    webPreferences: {
-      preload: path.join(__dirname, '../preload/index.js'),
-      contextIsolation: true,
-      nodeIntegration: false,
-      sandbox: false
-    }
+    webPreferences: rendererPreferences()
   })
 
   mainWindow.on('closed', () => {
@@ -83,6 +105,21 @@ app.whenReady().then(() => {
 
   profiles = new ProfileStore(app.getPath('userData'))
   const directory = new MudDirectory(app.getPath('userData'))
+
+  // A window that mounts after 'update-downloaded' fired would never hear the
+  // event, so the current state is also pullable.
+  ipcMain.handle('app:update-state', () => updateReady)
+  ipcMain.handle('app:install-update', () => {
+    if (!updateReady) return false
+    // isSilent=true, isForceRunAfter=true: reinstall and come straight back.
+    autoUpdater.quitAndInstall(true, true)
+    return true
+  })
+  ipcMain.handle('app:open-updater-log', async () => {
+    if (!updaterLogPath || !fs.existsSync(updaterLogPath)) return false
+    await shell.openPath(updaterLogPath)
+    return true
+  })
 
   ipcMain.handle('session:connect', (_e, opts: ConnectOptions) => sessions.connect(opts))
   ipcMain.on('session:send', (_e, id: string, text: string) => sessions.send(id, text))
@@ -146,12 +183,7 @@ app.whenReady().then(() => {
       backgroundColor: '#0d1117',
       autoHideMenuBar: true,
       title: `Map — ${title}`,
-      webPreferences: {
-        preload: path.join(__dirname, '../preload/index.js'),
-        contextIsolation: true,
-        nodeIntegration: false,
-        sandbox: false
-      }
+      webPreferences: rendererPreferences()
     })
     const hash = `#popout/${sessionId}`
     if (process.env.ELECTRON_RENDERER_URL) {
@@ -196,7 +228,32 @@ app.whenReady().then(() => {
   // session is never interrupted; failures (offline, rate-limit) just wait
   // for the next poll.
   if (app.isPackaged) {
-    autoUpdater.on('error', (err) => console.log('[updater]', String(err)))
+    // console.log is invisible in a packaged build, which is how a silent
+    // failure stayed silent. Everything the updater says goes to a file the
+    // user can actually open (⚙ Settings → General → Open updater log).
+    const logPath = path.join(app.getPath('userData'), 'updater.log')
+    const log = (...parts: unknown[]): void => {
+      const line = `${new Date().toISOString()} ${parts.map(String).join(' ')}\n`
+      try {
+        fs.appendFileSync(logPath, line)
+      } catch {
+        /* logging must never take the app down */
+      }
+    }
+    updaterLogPath = logPath
+
+    autoUpdater.logger = { info: log, warn: log, error: log, debug: log }
+    autoUpdater.on('error', (err) => log('[error]', String(err)))
+    autoUpdater.on('checking-for-update', () => log('[checking] current', app.getVersion()))
+    autoUpdater.on('update-not-available', () => log('[none] already current'))
+    // The toast is best-effort; the status-bar indicator is what the user is
+    // actually meant to notice, so the renderer is told directly.
+    autoUpdater.on('update-downloaded', (info) => {
+      log('[ready]', info.version, '— installs on quit')
+      updateReady = info.version
+      mainWindow?.webContents.send('app:update-ready', info.version)
+    })
+
     const check = () => autoUpdater.checkForUpdatesAndNotify().catch(() => {})
     check()
     setInterval(check, 4 * 60 * 60 * 1000)

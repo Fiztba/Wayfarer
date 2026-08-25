@@ -9,6 +9,8 @@ import {
   substituteArgs,
   substituteVars,
   splitPastedBlock,
+  splitCommands,
+  unescapeSemicolons,
   keyEventSignature
 } from '../src/renderer/src/automation/AutomationEngine.ts'
 import { defaultSettings, type SettingsSet } from '../src/shared/types.ts'
@@ -153,6 +155,41 @@ check('gag trigger (case-insensitive)', d2.gag, true)
 
 const d3 = engine.processLine('nothing special')
 check('non-matching line', d3, { gag: false })
+
+// ---- escaped semicolons ----
+// BS keeps a real backslash out of reach of TS string-literal escaping.
+const BS = String.fromCharCode(92)
+
+sent.length = 0
+engine.processInput(`say hi${BS}; there`)
+check('escaped ; does not split', sent, ['say hi; there'])
+
+sent.length = 0
+engine.processInput(`{say hi${BS}; there}`)
+check('escaped ; survives a {group}', sent, ['say hi; there'])
+
+sent.length = 0
+engine.processInput(`#2 {say a${BS};b}`)
+check('escaped ; survives #repeat', sent, ['say a;b', 'say a;b'])
+
+sent.length = 0
+engine.processInput(`k dragon${BS};friend`)
+check('escaped ; survives alias expansion', sent, ['kill dragon;friend'])
+
+sent.length = 0
+engine.processInput(`say a${BS};b;say c${BS};d`)
+check('escaped and real ; mix', sent, ['say a;b', 'say c;d'])
+
+sent.length = 0
+engine.processInput('say hi; there')
+check('bare ; still splits', sent, ['say hi', 'there'])
+
+sent.length = 0
+engine.processInput(`say art //${BS}${BS}// and C:${BS}temp`)
+check('other backslashes untouched', sent, [`say art //${BS}${BS}// and C:${BS}temp`])
+
+check('unescapeSemicolons restores', unescapeSemicolons('a' + String.fromCharCode(1) + 'b'), 'a;b')
+check('splitCommands emits sentinel not ;', splitCommands(`x${BS};y`), ['x' + String.fromCharCode(1) + 'y'])
 
 // ---- #N repeats and {groups} ----
 sent.length = 0

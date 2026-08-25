@@ -8,6 +8,16 @@ import type {
 } from '../shared/types'
 
 export interface MudApi {
+  /** This build's version, e.g. "0.3.1". Available synchronously. */
+  version: string
+  /** Version of a downloaded update waiting to install, else null. */
+  updateState(): Promise<string | null>
+  /** Quit, install the staged update, and relaunch. */
+  installUpdate(): Promise<boolean>
+  /** Open updater.log in the system default editor. */
+  openUpdaterLog(): Promise<boolean>
+  /** Fires when an update finishes downloading and is ready to install. */
+  onUpdateReady(cb: (version: string) => void): () => void
   connect(opts: ConnectOptions): Promise<string>
   send(id: string, text: string): void
   resize(id: string, cols: number, rows: number): void
@@ -48,7 +58,25 @@ export interface MudApi {
   }
 }
 
+/**
+ * Passed in on argv by the main process (see rendererPreferences) so the
+ * version is a plain synchronous value here rather than a promise every
+ * caller has to await.
+ */
+const VERSION_FLAG = '--app-version='
+const appVersion =
+  process.argv.find((a) => a.startsWith(VERSION_FLAG))?.slice(VERSION_FLAG.length) || '0.0.0-dev'
+
 const api: MudApi = {
+  version: appVersion,
+  updateState: () => ipcRenderer.invoke('app:update-state'),
+  installUpdate: () => ipcRenderer.invoke('app:install-update'),
+  openUpdaterLog: () => ipcRenderer.invoke('app:open-updater-log'),
+  onUpdateReady: (cb) => {
+    const handler = (_e: IpcRendererEvent, version: string) => cb(version)
+    ipcRenderer.on('app:update-ready', handler)
+    return () => ipcRenderer.off('app:update-ready', handler)
+  },
   connect: (opts) => ipcRenderer.invoke('session:connect', opts),
   send: (id, text) => ipcRenderer.send('session:send', id, text),
   resize: (id, cols, rows) => ipcRenderer.send('session:resize', id, cols, rows),

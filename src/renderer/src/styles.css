@@ -400,6 +400,19 @@ body,
   border-color: #98c379;
 }
 
+/* An update waiting to install: noticeable without nagging, since it also
+   installs itself on quit if the user never clicks it. */
+.status-btn-update {
+  color: #e5c07b;
+  border-color: #e5c07b;
+}
+
+.status-btn-update:hover {
+  color: #f5d59b;
+  border-color: #f5d59b;
+  background: rgba(229, 192, 123, 0.12);
+}
+
 /* ---- Connect screen ---- */
 .connect-screen {
   flex: 1;
@@ -427,6 +440,13 @@ body,
   color: var(--fg-dim);
   margin: 8px 0 36px;
   font-style: italic;
+}
+
+.brand-version {
+  font-style: normal;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  opacity: 0.7;
 }
 
 .connect-panel h2 {

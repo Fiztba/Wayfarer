@@ -148,7 +148,10 @@ export function ConnectScreen({ onConnect, onOpenHelp }: Props) {
     <div className="connect-screen">
       <div className="connect-panel">
         <h1 className="brand">Wayfarer</h1>
-        <p className="tagline">Choose a world, or forge a path to a new one.</p>
+        <p className="tagline">
+          Choose a world, or forge a path to a new one.{' '}
+          <span className="brand-version">v{window.mud.version}</span>
+        </p>
         <p className="help-link-row">
           <a
             href="#"

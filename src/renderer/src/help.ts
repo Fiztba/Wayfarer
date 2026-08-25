@@ -55,7 +55,8 @@ export const HELP_TOPICS: HelpTopic[] = [
           'After sending, your command stays selected so typing replaces it — or enable "Clear the input line after sending" in ⚙ Settings → General.',
           'Multiple commands: separate with semicolons — get sword;wield sword;kill troll.',
           'Multi-line: Shift+Enter (or Ctrl+Enter) adds a line break instead of sending; Enter always sends the whole block. Paste works too — see Pasting Scripts & Blocks.',
-          'Braces group commands and protect their semicolons: {get sword;wield sword} travels as one unit.',
+          'Literal semicolon: escape it with a backslash — say goodnight\; see you tomorrow arrives as one line. Any other backslash is ordinary text, so ASCII art and C:\paths are untouched.',
+          'Braces group commands so a group can be repeated or fired as a unit: #5 {sneak;hide}. Braces do NOT protect a semicolon from splitting — use \; for that.',
           'Password masking: when a server asks for a password, the input masks itself automatically and skips history/echo.',
           'An empty Enter sends a blank line — many MUDs use this to repeat the prompt.',
           'Scrollback: each session keeps 100,000 lines of history by default (configurable up to 1,000,000 in ⚙ Settings → General). Scroll up to read; older history loads as you approach the top; the ▼ button jumps back to live output.',
@@ -473,6 +474,28 @@ export const HELP_TOPICS: HelpTopic[] = [
           'A file that fails to load is quarantined (renamed .corrupt), never silently discarded.',
           'To restore a backup: close Wayfarer, copy the backup over the original file, reopen.'
         ]
+      }
+    ]
+  },
+  {
+    id: 'version-updates',
+    title: 'Version & Updates',
+    blocks: [
+      {
+        p: 'The version you are running is shown in three places: on the connect screen under the title, at the right-hand end of every session status bar, and in ⚙ Settings → General.'
+      },
+      { h: 'Automatic updates' },
+      {
+        list: [
+          'Installed builds check for a new release on launch and every 4 hours after.',
+          'A new version downloads in the background — nothing interrupts a live session.',
+          'When it is ready, an ⬆ Update button appears in the status bar. Click it to restart into the new version immediately, or just ignore it: it installs on its own the next time you quit.',
+          'Settings → General → Open updater log shows exactly what the updater checked, downloaded, or failed on.'
+        ]
+      },
+      { h: 'What servers are told' },
+      {
+        p: 'Wayfarer reports this same version to MUDs that ask — over GMCP as Core.Hello, and over MXP as the <VERSION> reply. Servers that print a client banner on login will show it.'
       }
     ]
   },

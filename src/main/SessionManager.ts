@@ -1,5 +1,5 @@
 import crypto from 'node:crypto'
-import type { WebContents } from 'electron'
+import { app, type WebContents } from 'electron'
 import { TelnetSocket } from './telnet/TelnetSocket'
 import type { ConnectOptions, SessionEvent } from '../shared/types'
 
@@ -89,7 +89,7 @@ export class SessionManager {
     })
     telnet.on('compression', (enabled) => emit({ type: 'compression', enabled }))
     telnet.on('gmcpEnabled', () => {
-      telnet.sendGmcp('Core.Hello', { client: 'Wayfarer', version: '0.1.0' })
+      telnet.sendGmcp('Core.Hello', { client: 'Wayfarer', version: app.getVersion() })
       telnet.sendGmcp('Core.Supports.Set', GMCP_SUPPORTS)
       emit({ type: 'gmcpEnabled' })
     })

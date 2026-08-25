@@ -11,6 +11,7 @@ import type { SessionStore, Line } from '../SessionStore'
 import { keyEventSignature } from '../automation/AutomationEngine'
 import { settingsManager } from '../SettingsManager'
 import { uiState } from '../uiState'
+import { updateState } from '../updateState'
 import { MapPane } from './MapPane'
 import { OutputLine, OutputSpan, formatTime, type LinkHandler } from './OutputLine'
 import { GaugeBar } from './GaugeBar'
@@ -65,6 +66,7 @@ export function SessionView({
   onOpenHelp(): void
 }) {
   useSyncExternalStore(store.subscribe, store.getVersion)
+  const pendingUpdate = useSyncExternalStore(updateState.subscribe, updateState.get)
 
   // Re-render when app-wide options (timestamps, input behavior) change.
   const [, forceOptions] = useState(0)
@@ -471,6 +473,7 @@ export function SessionView({
     if (store.msp) bits.push('MSP')
     if (store.serverEchoes) bits.push('🔒 masked')
     if (store.logging) bits.push('📝 logging')
+    bits.push(`v${window.mud.version}`)
     return bits
   }, [store.status, store.host, store.port, store.mccp, store.gmcp, store.mxp, store.msp, store.serverEchoes, store.logging, store.version])
 
@@ -624,6 +627,15 @@ export function SessionView({
       <div className="status-bar">
         <span className="status-text">{statusBits.join('  ·  ')}</span>
         <span className="status-actions">
+          {pendingUpdate && (
+            <button
+              className="status-btn status-btn-update"
+              title={`Version ${pendingUpdate} is downloaded. Click to restart and install it now — otherwise it installs the next time you quit.`}
+              onClick={() => void window.mud.installUpdate()}
+            >
+              ⬆ Update to {pendingUpdate}
+            </button>
+          )}
           {store.status === 'disconnected' && (
             <button
               className="status-btn status-btn-reconnect"

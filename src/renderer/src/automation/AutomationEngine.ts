@@ -48,13 +48,42 @@ const MAX_REPEAT = 10_000
 const MAX_BURST = 20_000
 const DIRECTIONS = ['ne', 'nw', 'se', 'sw', 'n', 's', 'e', 'w', 'u', 'd'] as const
 
-/** Split on ';' but never inside {braces}, so groups travel intact. */
+/**
+ * Stand-in for an escaped ';' between splitting and transmission.
+ *
+ * Turning "\;" straight back into ';' at split time would not survive: alias
+ * bodies and {groups} are re-split on the way out, and the bare ';' would be
+ * eaten by that second pass. Carrying a character no keyboard produces and
+ * restoring it in emit() means the literal reaches the wire whole, however
+ * many expansions it passes through. (substituteVars plays the same trick
+ * with \x00 for '@@' — different sentinel so the two never collide.)
+ */
+const SEMI = '\x01'
+
+/** Restore escaped semicolons; call once, immediately before transmitting. */
+export function unescapeSemicolons(text: string): string {
+  return text.replaceAll(SEMI, ';')
+}
+
+/**
+ * Split on ';' but never inside {braces}, so groups travel intact.
+ *
+ * "\;" is a literal semicolon and never splits. The escape is only consumed
+ * at depth 0 — the level that would actually have split — so a "\;" nested in
+ * braces stays escaped until the pass that unwraps them gets to it. Any other
+ * backslash is ordinary text and passes through untouched, which keeps ASCII
+ * art and Windows paths intact.
+ */
 export function splitCommands(text: string): string[] {
   const parts: string[] = []
   let depth = 0
   let current = ''
-  for (const ch of text) {
-    if (ch === '{') {
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i]
+    if (ch === '\\' && text[i + 1] === ';') {
+      current += depth === 0 ? SEMI : '\\;'
+      i++
+    } else if (ch === '{') {
       depth++
       current += ch
     } else if (ch === '}') {
@@ -205,7 +234,7 @@ export class AutomationEngine {
       }
       return
     }
-    this.host.transmit(command)
+    this.host.transmit(unescapeSemicolons(command))
   }
 
   processInput(raw: string): void {

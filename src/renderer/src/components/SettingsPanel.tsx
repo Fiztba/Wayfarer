@@ -809,6 +809,21 @@ function GeneralTab() {
         <p className="field-hint" style={{ marginBottom: 8 }}>
           These apply to the whole app, regardless of the scope selected above.
         </p>
+        <div className="logging-option">
+          Wayfarer <b>v{window.mud.version}</b>
+          <button
+            className="status-btn"
+            style={{ marginLeft: 10 }}
+            title="Open updater.log — what the auto-updater found, downloaded, or failed on"
+            onClick={() => void window.mud.openUpdaterLog()}
+          >
+            Open updater log
+          </button>
+          <div className="field-hint">
+            Updates are checked on launch and every 4 hours, download in the background, and
+            install when you quit. The log is only written by installed builds.
+          </div>
+        </div>
         <label className="logging-option">
           <input
             type="checkbox"

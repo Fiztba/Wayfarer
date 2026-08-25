@@ -2,8 +2,12 @@
  * Headless tests for MXP parsing and MSP line parsing.
  * Run with: node --experimental-strip-types test/mxp-smoke.mts
  */
-import { AnsiParser, type Span } from '../src/renderer/src/ansi.ts'
+import { AnsiParser, setClientVersion, type Span } from '../src/renderer/src/ansi.ts'
 import { parseMspLine } from '../src/renderer/src/sound.ts'
+
+// The renderer injects the real build version at startup; pin a known one so
+// the <VERSION> reply is assertable without hardcoding today's release.
+setClientVersion('9.9.9')
 
 let failures = 0
 function check(name: string, actual: unknown, expected: unknown): void {
@@ -103,6 +107,7 @@ function spansOf(p: AnsiParser, input: string): Span[] {
   const { p, replies } = mxpParser()
   p.parse('\x1b[1z<VERSION>\x1b[1z<SUPPORT>')
   check('version reply sent', replies[0]?.includes('<VERSION MXP=1.0 CLIENT=Wayfarer'), true)
+  check('version reply carries the injected build version', replies[0]?.includes('VERSION=9.9.9'), true)
   check('support reply sent', replies[1]?.includes('+send'), true)
 }
 

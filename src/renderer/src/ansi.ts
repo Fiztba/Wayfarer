@@ -164,6 +164,27 @@ const DEFAULT_ATTRS: Attrs = {
 export const DEFAULT_FG = '#c8ccd4'
 export const DEFAULT_BG = '#0d1117'
 
+/** Client name reported to servers over MXP. */
+export const CLIENT_NAME = 'Wayfarer'
+
+/**
+ * Version reported to servers in the MXP <VERSION> reply.
+ *
+ * Injected rather than imported so this module stays free of Electron and
+ * keeps running headlessly under the smoke tests. The renderer sets it once
+ * at startup from the real app version; the placeholder only ever shows if
+ * something forgot to.
+ */
+let clientVersion = '0.0.0-dev'
+
+export function setClientVersion(version: string): void {
+  clientVersion = version
+}
+
+export function getClientVersion(): string {
+  return clientVersion
+}
+
 export class AnsiParser {
   private attrs: Attrs = { ...DEFAULT_ATTRS }
   private escBuf = '' // holds a partial escape sequence across chunks
@@ -471,7 +492,9 @@ export class AnsiParser {
         emitNewline()
         break
       case 'version':
-        this.onMxpReply?.('\x1b[1z<VERSION MXP=1.0 CLIENT=Wayfarer VERSION=0.1.0>')
+        this.onMxpReply?.(
+          `\x1b[1z<VERSION MXP=1.0 CLIENT=${CLIENT_NAME} VERSION=${clientVersion}>`
+        )
         break
       case 'support':
         this.onMxpReply?.(
