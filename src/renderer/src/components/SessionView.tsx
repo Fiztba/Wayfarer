@@ -379,6 +379,20 @@ export function SessionView({
     return () => obs.disconnect()
   }, [store.id])
 
+  // A password prompt always starts empty, whatever "clear the input line
+  // after sending" says. With it off the name you just sent is still sitting
+  // there selected, and the swap to a masked <input> is a fresh element, so
+  // the selection is gone — the next keystroke would append to the name and
+  // send name+password as the password, invisibly.
+  const wasMasked = useRef(store.serverEchoes)
+  useLayoutEffect(() => {
+    if (store.serverEchoes && !wasMasked.current) {
+      setInput('')
+      historyPos.current = null
+    }
+    wasMasked.current = store.serverEchoes
+  }, [store.serverEchoes])
+
   // Focus input when this tab becomes active — and again when a password
   // prompt swaps the textarea for a masked <input>, which is a remount.
   useEffect(() => {

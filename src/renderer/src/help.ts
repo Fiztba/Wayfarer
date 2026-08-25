@@ -57,7 +57,7 @@ export const HELP_TOPICS: HelpTopic[] = [
           'Multi-line: Shift+Enter (or Ctrl+Enter) adds a line break instead of sending; Enter always sends the whole block. Paste works too — see Pasting Scripts & Blocks.',
           'Literal semicolon: escape it with a backslash — say goodnight\; see you tomorrow arrives as one line. Any other backslash is ordinary text, so ASCII art and C:\paths are untouched.',
           'Braces group commands so a group can be repeated or fired as a unit: #5 {sneak;hide}. Braces do NOT protect a semicolon from splitting — use \; for that.',
-          'Password masking: when a server asks for a password, the input masks itself automatically and skips history/echo.',
+          'Password masking: when a server asks for a password, the input masks itself automatically, clears whatever was on the line (even with "Clear the input line after sending" off, so your name is never typed into the password), and skips history/echo.',
           'An empty Enter sends a blank line — many MUDs use this to repeat the prompt.',
           'Scrollback: each session keeps 100,000 lines of history by default (configurable up to 1,000,000 in ⚙ Settings → General). Scroll up to read; older history loads as you approach the top; the ▼ button jumps back to live output.',
           'Search: Ctrl+F searches the entire scrollback (case-insensitive), starting from the most recent match. Enter steps to older matches, Shift+Enter to newer, Esc closes. Select text first and Ctrl+F searches for it.',
