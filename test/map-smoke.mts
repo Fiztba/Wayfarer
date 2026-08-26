@@ -101,6 +101,86 @@ check('plain chatter ignored', parseExitsLine('Bob says: hi there'), null)
   check('title found past prose', det?.name, 'Temple Square')
 }
 
+// ---- capture: staff-decorated titles and stray prompts (The Builder Academy) ----
+// Format is do_look_at_room()'s, exactly: "[%5d] " then "%s[ %s][ %s ]" for
+// name/flags/sector, then "[T" plus " %d" per trigger. Note the flag group has
+// no space before its "]", and the vnum is width-5 space-padded.
+{
+  // Judged raw this line is 71 chars and 11 words, so both title heuristics
+  // reject it and the room ends up named after a line of description prose.
+  const cap = new RoomCapture()
+  cap.feedLine("[57701] Fizban's Mind[ INDOORS PRIVATE HOUSE ATRIUM][ Inside ][T 57792]")
+  cap.feedLine("   Fizban's evil mind and ambitions will surely destroy all the world over time.")
+  cap.feedLine('It is just a matter of time till you wake up to realize your life and the world')
+  const det = cap.feedLine('[ Exits: n s ]')
+  check('roomflag decorations stripped', det?.name, "Fizban's Mind")
+  check('title vnum becomes a server id', det?.serverId, 'vnum:57701')
+}
+{
+  // Stock tbaMUD vnums are 4 digits, so "%5d" pads a space INSIDE the bracket.
+  const cap = new RoomCapture()
+  cap.feedLine('[ 3001] The Temple Of Midgaard[ INDOORS PEACEFUL][ Inside ]')
+  const det = cap.feedLine('[ Exits: n e s d ]')
+  check('padded vnum still parsed', det?.serverId, 'vnum:3001')
+  check('padded vnum title clean', det?.name, 'The Temple Of Midgaard')
+}
+{
+  // Several triggers on the room; and no trailing tag at all when unscripted.
+  const cap = new RoomCapture()
+  cap.feedLine('[ 3001] The Temple Of Midgaard[ INDOORS PEACEFUL][ Inside ][T 3010 3011]')
+  check('multi-trigger tag stripped', cap.feedLine('[ Exits: n ]')?.name, 'The Temple Of Midgaard')
+  cap.feedLine('[ 3002] The Reading Room[ INDOORS][ Inside ]')
+  check('unscripted room, no T tag', cap.feedLine('[ Exits: s ]')?.name, 'The Reading Room')
+}
+{
+  // Automap rows sit between the title and the exits line, and the scan walks
+  // backward — so they get first refusal on being the title.
+  const cap = new RoomCapture()
+  cap.feedLine('[ 3001] The Temple Of Midgaard[ INDOORS PEACEFUL][ Inside ]')
+  cap.feedLine('   - - -')
+  cap.feedLine('  | . . |')
+  cap.feedLine('   - - -')
+  const det = cap.feedLine('[ Exits: n e s d ]')
+  check('automap rows are not titles', det?.name, 'The Temple Of Midgaard')
+}
+{
+  // The MUD spoke while a prompt was open, so the prompt was terminated and
+  // became a line directly above the room description. It must not win the
+  // title scan — it did, and the first room got mapped as "1144H >".
+  const cap = new RoomCapture()
+  cap.feedLine('1144H >')
+  cap.feedLine('[ Losing descriptor without char. ]')
+  cap.feedLine('[ WARNING: Attempting to get content from iterator with NULL list. ]')
+  cap.feedLine('')
+  cap.feedLine("[57700] Fizban's Zone Description Room[ INDOORS PRIVATE HOUSE ATRIUM][ Inside ][T 57792]")
+  cap.feedLine('   Fizban is a rather peculiar old man who enjoys filling his zone with strange')
+  cap.feedLine('triggers, if you were to walk through this zone and explore it thoroughly with')
+  cap.feedLine('nohassle off you would likely regret it.  A sign is seen to the right.')
+  const det = cap.feedLine('[ Exits: s ]')
+  check('prompt never becomes a title', det?.name, "Fizban's Zone Description Room")
+}
+{
+  const cap = new RoomCapture()
+  cap.feedLine('<221hp 340mv>')
+  cap.feedLine('Temple Square')
+  const det = cap.feedLine('[ Exits: n e s w ]')
+  check('bracket-style prompt skipped too', det?.name, 'Temple Square')
+}
+{
+  // A title the MUD wraps in brackets is the title, not a decoration.
+  const cap = new RoomCapture()
+  cap.feedLine('[ The Temple Of Midgaard ]')
+  const det = cap.feedLine('[ Exits: n e s w ]')
+  check('wholly bracketed title unwrapped', det?.name, 'The Temple Of Midgaard')
+}
+{
+  const cap = new RoomCapture()
+  cap.feedLine('Temple Square [anchorage:temple]')
+  const det = cap.feedLine('[ Exits: n ]')
+  check('single trailing tag still stripped', det?.name, 'Temple Square')
+  check('no vnum, no server id', det?.serverId, undefined)
+}
+
 // ---- model + tracker ----
 function makeWorld() {
   const model = new MapModel(emptyMap(), () => {})
@@ -719,6 +799,56 @@ function makeWorld() {
   remote.deleteRoom(other.id)
   check('rpc: delete forwarded', real.room(other.id), null)
   check('rpc: models agree at the end', JSON.stringify(remote.map.rooms), JSON.stringify(real.map.rooms))
+}
+
+// ---- replay: The Builder Academy, roomflags on (the session that went lost) ----
+{
+  const { model, tracker, infos } = makeWorld()
+  const noise = (): void => {
+    // The MUD talking over an open prompt, which is what puts a bare prompt
+    // line directly above the next room description.
+    tracker.onLine('1144H >')
+    tracker.onLine('[ Losing descriptor without char. ]')
+    tracker.onLine('[ WARNING: Attempting to get content from iterator with NULL list. ]')
+    tracker.onLine('')
+  }
+  const mind = (): void => {
+    tracker.onLine("[57701] Fizban's Mind[ INDOORS PRIVATE HOUSE ATRIUM][ Inside ][T 57792]")
+    tracker.onLine("   Fizban's evil mind and ambitions will surely destroy all the world over time.")
+    tracker.onLine('It is just a matter of time till you wake up to realize your life and the world')
+    tracker.onLine('as you know it never really existed and you and your world are in fact just a')
+    tracker.onLine('fictitious reality Fizban imagined...  Most likely while eating shrooms.')
+    tracker.onLine('[ Exits: n s ]')
+  }
+  const zoneRoom = (): void => {
+    tracker.onLine("[57700] Fizban's Zone Description Room[ INDOORS PRIVATE HOUSE ATRIUM][ Inside ][T 57792]")
+    tracker.onLine('   Fizban is a rather peculiar old man who enjoys filling his zone with strange')
+    tracker.onLine('triggers, if you were to walk through this zone and explore it thoroughly with')
+    tracker.onLine('nohassle off you would likely regret it.  A sign is seen to the right.')
+    tracker.onLine('[ Exits: s ]')
+  }
+
+  noise()
+  mind() // "look"
+  const start = tracker.currentRoomId
+  check('replay: mapping started in the real room', tracker.currentRoom?.name, "Fizban's Mind")
+  check('replay: room carries the vnum', tracker.currentRoom?.serverId, 'vnum:57701')
+
+  tracker.onCommand('n')
+  zoneRoom()
+  check('replay: walked north into the zone room', tracker.currentRoom?.name, "Fizban's Zone Description Room")
+
+  tracker.onCommand('s')
+  mind()
+  check('replay: south returns to the same room', tracker.currentRoomId, start)
+  check('replay: never went lost', tracker.lost, false)
+  check('replay: no lost message', infos.some((t) => t.startsWith('Mapper lost')), false)
+  check('replay: two rooms, not four', Object.keys(model.map.rooms).length, 2)
+  check(
+    'replay: exits linked both ways',
+    model.exitOf(model.room(start)!, 'n')?.to !== null,
+    true
+  )
 }
 
 console.log(failures === 0 ? '\nALL PASS' : `\n${failures} FAILURES`)

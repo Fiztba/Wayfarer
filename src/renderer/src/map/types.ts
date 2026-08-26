@@ -115,6 +115,8 @@ export function emptyMap(): MudMap {
 export interface RoomDetection {
   name: string
   exits: Array<{ dir: Direction; door: boolean }>
+  /** Server room id read off the title line (staff roomflags), when shown. */
+  serverId?: string
 }
 
 export interface ServerRoomInfo {

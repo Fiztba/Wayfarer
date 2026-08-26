@@ -59,6 +59,61 @@ export function parseExitsLine(line: string): ExitToken[] | null {
   return null
 }
 
+/**
+ * A prompt sitting on its own line. This is not rare: whenever the MUD sends
+ * anything while a prompt is open — a syslog line, a tell, mob activity — the
+ * open prompt is terminated and becomes a line of its own, so a prompt very
+ * often ends up directly above a room description. Two shapes hold across
+ * codebases whatever the player configured the prompt to be: it ends with the
+ * input marker, and it is stat glyphs rather than prose. tbaMUD's default
+ * "1144H 340M 322V >" satisfies both.
+ */
+function looksLikePrompt(line: string): boolean {
+  const t = line.trim()
+  if (t.length === 0) return false
+  if (/[>:]$/.test(t)) return true
+  return !/[A-Za-z]{3}/.test(t) // no word of real length = no room name either
+}
+
+const ROOM_VNUM_PREFIX = /^\[\s*(\d+)\s*\]\s*/
+const TRAILING_TAG = /\s*\[[^\][]*\]\s*$/u
+const WHOLLY_BRACKETED = /^\[\s*([^\][]*?)\s*\]$/
+
+/**
+ * Undecorate a candidate title line.
+ *
+ * Circle/tbaMUD dress the title line for staff who have roomflags on:
+ *   "[57701] Fizban's Mind[ INDOORS PRIVATE HOUSE ATRIUM ][ Inside ][T 57792]"
+ * The trailing tags are per-viewer display, so they can never be part of the
+ * room's name — and the leading number is the room's vnum, which is real
+ * identity and is handed back to the caller. Undecorating happens BEFORE the
+ * title heuristics so a decorated title is judged on the name a player would
+ * see; judged raw, the line above is rejected as "too long, too many words"
+ * and the mapper falls through to naming the room after description prose.
+ */
+export function cleanTitleLine(line: string): { name: string; vnum: string | null } {
+  let t = stripPromptPrefix(line).trim()
+  let vnum: string | null = null
+  const numbered = ROOM_VNUM_PREFIX.exec(t)
+  if (numbered) {
+    vnum = numbered[1]
+    t = t.slice(numbered[0].length).trim()
+  }
+  // Strip trailing tags one at a time, but never to nothing: some MUDs wrap
+  // the whole title in brackets, and that bracket pair is the title's own.
+  for (;;) {
+    const next = t.replace(TRAILING_TAG, '')
+    if (next === t) break
+    if (next.trim().length === 0) {
+      const whole = WHOLLY_BRACKETED.exec(t)
+      if (whole && whole[1].length > 0) t = whole[1]
+      break
+    }
+    t = next
+  }
+  return { name: t.trim(), vnum }
+}
+
 /** Heuristic: is this line plausible as a room title? */
 function looksLikeTitle(line: string): boolean {
   const t = line.trim()
@@ -88,33 +143,40 @@ export class RoomCapture {
       return null
     }
     // Scan back past description prose for the nearest title-shaped line.
-    // Prompt-shaped prefixes are stripped in case a bare-CR redraw glued the
-    // prompt onto the title.
+    // Each candidate is undecorated first (glued prompt, staff vnum/flag
+    // tags) so the heuristics judge the name a player would actually read.
     let name = ''
+    let vnum: string | null = null
     for (let i = this.recent.length - 1; i >= 0; i--) {
-      const line = stripPromptPrefix(this.recent[i]).trim()
-      if (line.length === 0) continue
-      if (looksLikeTitle(line)) {
-        name = line
+      const raw = this.recent[i]
+      if (looksLikePrompt(raw)) continue
+      const candidate = cleanTitleLine(raw)
+      if (candidate.name.length === 0) continue
+      if (looksLikeTitle(candidate.name)) {
+        name = candidate.name
+        vnum = candidate.vnum
         break
       }
     }
     if (!name) {
-      // Fall back to the nearest non-empty line even if prose-shaped.
+      // Fall back to the nearest non-empty line even if prose-shaped — but
+      // still never a prompt, which would otherwise win this scan outright.
       for (let i = this.recent.length - 1; i >= 0; i--) {
-        const line = stripPromptPrefix(this.recent[i]).trim()
-        if (line.length > 0) {
-          name = line.slice(0, 70)
+        const raw = this.recent[i]
+        if (looksLikePrompt(raw)) continue
+        const candidate = cleanTitleLine(raw)
+        if (candidate.name.length > 0) {
+          name = candidate.name.slice(0, 70)
+          vnum = candidate.vnum
           break
         }
       }
     }
     this.recent = []
-    // Strip trailing bracket decorations ("Temple Square [anchorage:temple]",
-    // "The Pit [PK]") — admin/status suffixes, not part of the room's name.
-    name = name.replace(/\s*\[[^\][]*\]\s*$/u, '').trim()
     if (!name) return null
-    return { name, exits }
+    // A vnum on the title line is the server's own room id, and it shares the
+    // "vnum:" namespace with the MSDP report so the two agree about identity.
+    return vnum ? { name, exits, serverId: `vnum:${vnum}` } : { name, exits }
   }
 
   reset(): void {

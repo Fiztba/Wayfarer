@@ -161,7 +161,14 @@ export class MapTracker implements TrackerControl {
     }
 
     const detection = this.capture.feedLine(plain)
-    if (detection) this.handleDetection(detection)
+    if (!detection) return
+    if (detection.serverId) {
+      // The title line carried the server's own room id (staff roomflags),
+      // so identity is settled the authoritative way before any dead
+      // reckoning runs. handleDetection then has only exits left to add.
+      this.onServerRoom({ serverId: detection.serverId, name: detection.name })
+    }
+    this.handleDetection(detection)
   }
 
   /** Structured room info from GMCP/MSDP — authoritative identity. */

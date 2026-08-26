@@ -72,9 +72,17 @@ export class SessionManager {
     telnet.on('mxpEnabled', () => emit({ type: 'mxpEnabled' }))
     telnet.on('mspEnabled', () => emit({ type: 'mspEnabled' }))
     telnet.on('msdpEnabled', () => {
-      // Ask the server to push room info and vitals as they change (tbaMUD et al).
+      // Ask the server to push room info and vitals as they change. Room
+      // identity has two rival conventions — a single ROOM table, or the flat
+      // variables KaVir's protocol snippet defines (tbaMUD and the rest of the
+      // DikuMUD family) — and a MUD implements one or the other, so ask for
+      // both. A REPORT for a variable the server does not know is ignored.
       for (const variable of [
         'ROOM',
+        'ROOM_VNUM',
+        'ROOM_NAME',
+        'ROOM_EXITS',
+        'AREA_NAME',
         'HEALTH',
         'HEALTH_MAX',
         'MANA',

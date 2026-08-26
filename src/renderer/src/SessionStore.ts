@@ -46,6 +46,30 @@ function scrollbackCap(): number {
   return Math.min(1_000_000, Math.max(1000, raw || 100_000))
 }
 
+/**
+ * MSDP exits: a table of direction → destination vnum, or — on MUDs that
+ * report it flat — a plain list of the directions that are open.
+ */
+function msdpExits(raw: unknown): ServerRoomInfo['exits'] | undefined {
+  if (raw === null || raw === undefined || raw === '') return undefined
+  const exits: NonNullable<ServerRoomInfo['exits']> = {}
+  if (typeof raw === 'object') {
+    for (const [k, v] of Object.entries(raw as Record<string, unknown>)) {
+      const dir = wordToDirection(k)
+      if (dir) exits[dir] = v === null || v === undefined || v === '' ? null : `vnum:${v}`
+    }
+    return exits
+  }
+  if (typeof raw === 'string') {
+    for (const token of raw.split(/[,\s|]+/)) {
+      const dir = wordToDirection(token)
+      if (dir) exits[dir] = null
+    }
+    return exits
+  }
+  return undefined
+}
+
 export type SessionStatus = 'connecting' | 'connected' | 'disconnected'
 
 export class SessionStore {
@@ -87,6 +111,15 @@ export class SessionStore {
   msp = false
   lastMssp: Record<string, string> | null = null
   readonly sounds = new SoundPlayer()
+
+  /** Running merge of the flat MSDP room variables (see handleMsdpForMap). */
+  private msdpRoom: {
+    vnum?: string
+    name?: string
+    area?: string
+    exits?: ServerRoomInfo['exits']
+  } = {}
+  private msdpRoomFlush: ReturnType<typeof setTimeout> | null = null
 
   logging = false
   logPath: string | null = null
@@ -613,27 +646,61 @@ export class SessionStore {
     })
   }
 
-  /** MSDP ROOM report (tbaMUD-style) → authoritative tracker input. */
+  /**
+   * MSDP room reports → authoritative tracker input.
+   *
+   * Two rival conventions exist and a MUD implements one or the other:
+   *   1. a single ROOM table holding VNUM/NAME/AREA/EXITS, and
+   *   2. the flat variables from KaVir's protocol snippet — ROOM_VNUM,
+   *      ROOM_NAME, ROOM_EXITS, AREA_NAME — which is what tbaMUD and the
+   *      rest of the DikuMUD family report.
+   *
+   * The flat form needs accumulating. MSDPUpdate sends each dirty variable
+   * in its own subnegotiation, and only variables that CHANGED: walking
+   * between two identically-named rooms reports ROOM_VNUM by itself. So the
+   * fields are merged into a running record — unchanged ones carry forward —
+   * and flushed once the batch settles.
+   */
   private handleMsdpForMap(data: Record<string, unknown>): void {
     const room = data.ROOM
-    if (typeof room !== 'object' || room === null) return
-    const r = room as Record<string, unknown>
-    const vnum = r.VNUM ?? r.vnum
-    if (vnum === undefined || vnum === null || vnum === '') return
-    const exits: ServerRoomInfo['exits'] = {}
-    const rawExits = r.EXITS ?? r.exits
-    if (typeof rawExits === 'object' && rawExits !== null) {
-      for (const [k, v] of Object.entries(rawExits as Record<string, unknown>)) {
-        const dir = wordToDirection(k)
-        if (dir) exits[dir] = v === null || v === undefined || v === '' ? null : `vnum:${v}`
-      }
+    if (typeof room === 'object' && room !== null) {
+      const r = room as Record<string, unknown>
+      const vnum = r.VNUM ?? r.vnum
+      if (vnum === undefined || vnum === null || vnum === '') return
+      this.tracker?.onServerRoom({
+        serverId: `vnum:${vnum}`,
+        name: typeof r.NAME === 'string' ? r.NAME : undefined,
+        areaName: typeof r.AREA === 'string' ? r.AREA : undefined,
+        exits: msdpExits(r.EXITS ?? r.exits)
+      })
+      return
     }
-    this.tracker?.onServerRoom({
-      serverId: `vnum:${vnum}`,
-      name: typeof r.NAME === 'string' ? r.NAME : undefined,
-      areaName: typeof r.AREA === 'string' ? r.AREA : undefined,
-      exits
-    })
+
+    let touched = false
+    const vnum = data.ROOM_VNUM
+    if (vnum !== undefined && vnum !== null && vnum !== '') {
+      this.msdpRoom.vnum = String(vnum)
+      touched = true
+    }
+    if (typeof data.ROOM_NAME === 'string' && data.ROOM_NAME !== '') {
+      this.msdpRoom.name = data.ROOM_NAME
+      touched = true
+    }
+    if (typeof data.AREA_NAME === 'string' && data.AREA_NAME !== '') {
+      this.msdpRoom.area = data.AREA_NAME
+      touched = true
+    }
+    if ('ROOM_EXITS' in data) {
+      this.msdpRoom.exits = msdpExits(data.ROOM_EXITS)
+      touched = true
+    }
+    if (!touched || this.msdpRoomFlush !== null) return
+    this.msdpRoomFlush = setTimeout(() => {
+      this.msdpRoomFlush = null
+      const { vnum: id, name, area, exits } = this.msdpRoom
+      if (id === undefined) return // name/area without an id identifies nothing
+      this.tracker?.onServerRoom({ serverId: `vnum:${id}`, name, areaName: area, exits })
+    }, 0)
   }
 
   // ---- input --------------------------------------------------------------
@@ -651,6 +718,9 @@ export class SessionStore {
     this.mxp = false
     this.msp = false
     // Fresh protocol state: the new connection renegotiates everything.
+    if (this.msdpRoomFlush !== null) clearTimeout(this.msdpRoomFlush)
+    this.msdpRoomFlush = null
+    this.msdpRoom = {}
     this.parser = new AnsiParser()
     this.parser.onMxpReply = (text) => window.mud.send(this.id, text)
     this.addSystemLine(`Reconnecting to ${this.host}:${this.port}…`, 'system')
