@@ -426,104 +426,7 @@ body,
   padding: 48px 0 64px;
 }
 
-/* ---- Wide layout ----------------------------------------------------------
-   Below the breakpoint everything stacks exactly as it always has, so laptops
-   and the pop-out window are untouched. Above it the screen splits: your own
-   worlds and the connect form on the left, where they are read first and used
-   most, and the directory on the right, where it can actually breathe.
 
-   The whole thing becomes a fixed-height flex column so the list can claim
-   every pixel left over after the header and filters, rather than guessing at
-   a viewport fraction and leaving slack under it. */
-@media (min-width: 1180px) {
-  .connect-screen {
-    overflow: hidden;
-  }
-
-  .connect-panel {
-    /* Capped rather than edge to edge: a row stretched across an ultrawide puts
-       the address so far from the name that it stops being scannable. */
-    width: min(2100px, 96%);
-    height: 100%;
-    padding: 20px 0 18px;
-    display: flex;
-    flex-direction: column;
-    min-height: 0;
-  }
-
-  /* The masthead earns less room once the directory is the main event. */
-  .connect-panel .brand {
-    font-size: 26px;
-    letter-spacing: 6px;
-  }
-
-  .connect-panel .tagline,
-  .connect-panel .help-link-row {
-    display: inline;
-    font-size: 12px;
-    margin: 0;
-  }
-
-  .connect-masthead {
-    text-align: center;
-    margin-bottom: 14px;
-    flex: none;
-  }
-
-  .connect-columns {
-    display: grid;
-    grid-template-columns: 360px minmax(0, 1fr);
-    gap: 36px;
-    align-items: stretch;
-    flex: 1;
-    min-height: 0;
-  }
-
-  .connect-col {
-    min-width: 0;
-    min-height: 0;
-  }
-
-  /* Many saved worlds should scroll the rail, not the page. */
-  .connect-col-left {
-    overflow-y: auto;
-    padding-right: 6px;
-  }
-
-  .connect-col-right {
-    display: flex;
-    flex-direction: column;
-  }
-
-  .connect-col > h2:first-child {
-    margin-top: 0;
-  }
-
-  .connect-panel h2 {
-    margin: 20px 0 8px;
-  }
-
-  .dir-wrap {
-    flex: 1;
-    min-height: 0;
-    display: flex;
-    flex-direction: column;
-  }
-
-  .dir-body {
-    flex: 1;
-    min-height: 0;
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) 340px;
-    gap: 18px;
-  }
-
-  .dir-list {
-    flex: 1;
-    max-height: none;
-    min-height: 0;
-  }
-}
 
 .brand {
   font-size: 42px;
@@ -2073,5 +1976,111 @@ body,
 .dd-alt-state {
   font-family: var(--font-ui);
   margin-left: 6px;
+  font-style: italic;
+}
+
+/* ---- Wide layout ----------------------------------------------------------
+   Below the breakpoint everything stacks exactly as it always has, so laptops
+   and the pop-out window are untouched. Above it the screen splits: your own
+   worlds and the connect form on the left, where they are read first and used
+   most, and the directory on the right, where it can actually breathe.
+
+   The whole thing becomes a fixed-height flex column so the list can claim
+   every pixel left over after the header and filters, rather than guessing at
+   a viewport fraction and leaving slack under it. */
+@media (min-width: 1180px) {
+  .connect-screen {
+    overflow: hidden;
+  }
+
+  .connect-panel {
+    /* Capped rather than edge to edge: a row stretched across an ultrawide puts
+       the address so far from the name that it stops being scannable. */
+    width: min(2100px, 96%);
+    height: 100%;
+    padding: 20px 0 18px;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+  }
+
+  /* The masthead earns less room once the directory is the main event. */
+  .connect-panel .brand {
+    font-size: 26px;
+    letter-spacing: 6px;
+  }
+
+  .connect-panel .tagline,
+  .connect-panel .help-link-row {
+    display: inline;
+    font-size: 12px;
+    margin: 0;
+  }
+
+  .connect-masthead {
+    text-align: center;
+    margin-bottom: 14px;
+    flex: none;
+  }
+
+  .connect-columns {
+    display: grid;
+    grid-template-columns: 360px minmax(0, 1fr);
+    gap: 36px;
+    align-items: stretch;
+    flex: 1;
+    min-height: 0;
+  }
+
+  .connect-col {
+    min-width: 0;
+    min-height: 0;
+  }
+
+  /* Many saved worlds should scroll the rail, not the page. */
+  .connect-col-left {
+    overflow-y: auto;
+    padding-right: 6px;
+  }
+
+  .connect-col-right {
+    display: flex;
+    flex-direction: column;
+  }
+
+  .connect-col > h2:first-child {
+    margin-top: 0;
+  }
+
+  .connect-panel h2 {
+    margin: 20px 0 8px;
+  }
+
+  .dir-wrap {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+  }
+
+  .dir-body {
+    flex: 1;
+    min-height: 0;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 340px;
+    gap: 18px;
+  }
+
+  .dir-list {
+    flex: 1;
+    max-height: none;
+    min-height: 0;
+  }
+}
+
+/* Absent data, said plainly. Muted so it reads as "we do not know" rather than
+   as a value. */
+.dd-unknown {
+  color: var(--fg-dim);
   font-style: italic;
 }

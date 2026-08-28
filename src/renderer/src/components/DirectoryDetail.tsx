@@ -30,6 +30,14 @@ const SOURCE_NAMES: Record<string, string> = {
 const WORLD_SIZE = (rooms: number): string =>
   rooms >= 20000 ? 'gigantic' : rooms >= 10000 ? 'huge' : rooms >= 6000 ? 'large' : rooms >= 3000 ? 'medium' : 'small'
 
+/**
+ * MSSP's convention is that 0 means "roomless" and -1 means "cannot say", but
+ * in practice a MUD that never filled the field in sends 0. Reporting that as
+ * "0 rooms (small)" states a fact we do not have, so zero reads as unreported
+ * — an honest blank is better than a confident wrong number.
+ */
+const reported = (n: number | null): n is number => n !== null && n > 0
+
 function Row({ label, children }: { label: string; children: React.ReactNode }): React.JSX.Element {
   return (
     <div className="dd-row">
@@ -110,14 +118,18 @@ export function DirectoryDetail({ mud, onConnect }: Props): React.JSX.Element {
         {m.gameplay && <Row label="Gameplay">{m.gameplay}</Row>}
         {m.created !== null && <Row label="Founded">{m.created}</Row>}
 
-        {m.rooms !== null && (
-          <Row label="World">
-            {m.rooms.toLocaleString()} rooms ({WORLD_SIZE(m.rooms)})
-            {m.areas !== null && ` · ${m.areas} areas`}
-          </Row>
-        )}
+        <Row label="World">
+          {reported(m.rooms) ? (
+            <>
+              {m.rooms.toLocaleString()} rooms ({WORLD_SIZE(m.rooms)})
+              {reported(m.areas) && ` · ${m.areas} areas`}
+            </>
+          ) : (
+            <span className="dd-unknown">unreported</span>
+          )}
+        </Row>
 
-        {m.activePlayers !== null && (
+        {reported(m.activePlayers) && (
           <Row label="Typically">about {Math.round(m.activePlayers)} online</Row>
         )}
 
