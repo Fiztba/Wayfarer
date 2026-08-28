@@ -131,14 +131,36 @@ async function main(): Promise<void> {
     const gv = gvByName.get(nameKey(name))
     if (gv) sources.push('grapevine')
 
+    // MSSP the MUD told us itself during the probe. First-party and current,
+    // where the directories are second-hand and often years stale.
+    const liveMssp: Record<string, string>[] = group
+      .map((g) => probes.get(`${g.host}:${g.port}`)?.mssp)
+      .filter((m): m is Record<string, string> => Boolean(m && Object.keys(m).length))
+
     const codebase = resolveMany([
       ...group.map((g) => asStr(g.codebase) ?? undefined),
       // MSSP reports CODEBASE and FAMILY as an ancestry pair; both count.
       ...group.map((g) => asStr(g.family) ?? undefined),
+      ...liveMssp.map((m) => m.CODEBASE),
+      ...liveMssp.map((m) => m.FAMILY),
       gv ? (asStr(gv.codebase) ?? undefined) : undefined
     ])
 
-    const first = <T>(pick: (c: Candidate) => T | null | undefined): T | null => {
+    /** Prefer what the MUD said about itself over what a directory recorded. */
+    const fromMssp = (key: string): string | null => {
+      for (const m of liveMssp) {
+        const v = (m[key] ?? '').trim()
+        if (v && v !== '-1') return v
+      }
+      return null
+    }
+    const msspNum = (key: string): number | null => {
+      const v = fromMssp(key)
+      const n = v === null ? NaN : Number(v)
+      return Number.isFinite(n) && n >= 0 ? n : null
+    }
+
+    const first = <T,>(pick: (c: Candidate) => T | null | undefined): T | null => {
       for (const g of group) {
         const v = pick(g)
         if (v !== null && v !== undefined && v !== '') return v
@@ -146,11 +168,16 @@ async function main(): Promise<void> {
       return null
     }
 
+    // Two independent sources of protocol support: what a directory recorded,
+    // and what the MUD itself announced during the probe. The probe is the
+    // better one — it covers every live MUD rather than the ~60 the MSSP
+    // crawler knows, and it is the only place GMCP and MSDP show up at all.
     const protocols = new Set<string>()
     for (const g of group) {
       const p = g.protocols as Record<string, string> | undefined
       if (p) for (const [k, v] of Object.entries(p)) if (v === '1') protocols.add(k)
       if (asNum(g.tlsPort)) protocols.add('SSL')
+      for (const found of probes.get(`${g.host}:${g.port}`)?.protocols ?? []) protocols.add(found)
     }
 
     const id = `${nameKey(name) || chosen.host}-${chosen.port}`
@@ -178,23 +205,23 @@ async function main(): Promise<void> {
       codebaseRaw: codebase.raw,
       codebaseConflict: codebase.conflict,
       categories: [...new Set(group.flatMap((g) => (g.categories as string[]) ?? []))].sort(),
-      genre: first((g) => asStr(g.genre)),
-      gameplay: first((g) => asStr(g.gameplay)),
-      language: first((g) => asStr(g.language)),
-      location: first((g) => asStr(g.location)),
-      created: first((g) => asNum(g.yearCreated) ?? (asStr(g.created) ? Number(g.created) : null)),
-      rooms: first((g) => asNum(g.rooms)),
-      areas: first((g) => asNum(g.areas)),
-      players: first((g) => asNum(g.players)),
+      genre: fromMssp('GENRE') ?? first((g) => asStr(g.genre)),
+      gameplay: fromMssp('GAMEPLAY') ?? first((g) => asStr(g.gameplay)),
+      language: fromMssp('LANGUAGE') ?? first((g) => asStr(g.language)),
+      location: fromMssp('LOCATION') ?? first((g) => asStr(g.location)),
+      created: msspNum('CREATED') ?? first((g) => asNum(g.yearCreated) ?? (asStr(g.created) ? Number(g.created) : null)),
+      rooms: msspNum('ROOMS') ?? first((g) => asNum(g.rooms)),
+      areas: msspNum('AREAS') ?? first((g) => asNum(g.areas)),
+      players: msspNum('PLAYERS') ?? first((g) => asNum(g.players)),
       activePlayers: first((g) => asNum(g.activePlayers)),
-      website: first((g) => asStr(g.website)),
-      discord: first((g) => asStr(g.discord)),
+      website: fromMssp('WEBSITE') ?? first((g) => asStr(g.website)),
+      discord: fromMssp('DISCORD') ?? first((g) => asStr(g.discord)),
       tagline: gv ? asStr(gv.tagline) : first((g) => asStr(g.intro)),
       rank: first((g) => asNum(g.rank)),
       protocols: [...protocols].sort(),
-      hiringBuilders: group.some((g) => g.hiringBuilders === true),
-      hiringCoders: group.some((g) => g.hiringCoders === true),
-      payToPlay: group.some((g) => g.payToPlay === true),
+      hiringBuilders: group.some((g) => g.hiringBuilders === true) || fromMssp('HIRING BUILDERS') === '1',
+      hiringCoders: group.some((g) => g.hiringCoders === true) || fromMssp('HIRING CODERS') === '1',
+      payToPlay: group.some((g) => g.payToPlay === true) || fromMssp('PAY TO PLAY') === '1',
       state: chosen.state,
       liveness: livenessFor(chosen.state, strikes),
       lastSeenUp: up ? today : (prev?.lastSeenUp ?? null),

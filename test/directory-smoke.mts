@@ -10,7 +10,7 @@
 import assert from 'node:assert/strict'
 import { resolveCodebase, resolveMany } from '../scripts/directory/lib/codebases.mts'
 import { nameKey, groupDuplicates, pickAddress, type Candidate } from '../scripts/directory/lib/merge.mts'
-import type { ProbeResult } from '../scripts/directory/lib/probe.mts'
+import { consumeTelnet, type ProbeResult } from '../scripts/directory/lib/probe.mts'
 import { livenessFor } from '../src/shared/directory.ts'
 
 let passed = 0
@@ -101,7 +101,7 @@ check('"Custom" is a source declining to answer, not a competing claim', () => {
 // ---- de-duplication -----------------------------------------------------
 const probe = (host: string, port: number, state: ProbeResult['state']): [string, ProbeResult] => [
   `${host}:${port}`,
-  { host, port, state, address: state === 'nodns' ? null : '1.2.3.4', ms: 1 }
+  { host, port, state, address: state === 'nodns' ? null : '1.2.3.4', ms: 1, protocols: [], mssp: {} }
 ]
 
 check('name keys ignore decoration', () => {
@@ -183,6 +183,67 @@ check('one failed probe never buries a MUD', () => {
 
 check('a MUD that answers is live regardless of history', () => {
   assert.equal(livenessFor('up', 99), 'live')
+})
+
+// ---- telnet handshake ---------------------------------------------------
+const IAC = 255, SE = 240, SB = 250, WILL = 251, WONT = 252, DO = 253, DONT = 254
+
+function run(bytes: number[]): { found: string[]; mssp: Record<string, string>; reply: number[] } {
+  const found = new Set<string>()
+  const mssp: Record<string, string> = {}
+  const reply: number[] = []
+  consumeTelnet(Buffer.from(bytes), found, mssp, reply)
+  return { found: [...found].sort(), mssp, reply }
+}
+
+check('advertised options are recorded', () => {
+  const r = run([IAC, WILL, 201, IAC, WILL, 69, IAC, WILL, 91, IAC, WILL, 86])
+  assert.deepEqual(r.found, ['GMCP', 'MCCP', 'MSDP', 'MXP'])
+})
+
+check('we agree to identify ourselves but refuse everything else', () => {
+  // The Diku opener: a bare IAC DO TTYPE and then silence until we answer.
+  assert.deepEqual(run([IAC, DO, 24]).reply, [IAC, WILL, 24])
+  assert.deepEqual(run([IAC, DO, 31]).reply, [IAC, WONT, 31])
+})
+
+check('MSSP is accepted, compression is declined', () => {
+  // MSSP is the one option worth taking: the answer is the MUD describing
+  // itself. MCCP would turn the rest of the stream into zlib.
+  assert.deepEqual(run([IAC, WILL, 70]).reply, [IAC, DO, 70])
+  assert.deepEqual(run([IAC, WILL, 86]).reply, [IAC, DONT, 86])
+})
+
+check('a TTYPE request is answered with our name', () => {
+  const r = run([IAC, SB, 24, 1, IAC, SE])
+  const text = Buffer.from(r.reply).toString('latin1')
+  assert.ok(text.includes('Wayfarer-Directory'), text)
+})
+
+check('MSSP subnegotiation is parsed into variables', () => {
+  const enc = (s: string): number[] => [...Buffer.from(s, 'ascii')]
+  const r = run([
+    IAC, SB, 70,
+    1, ...enc('PLAYERS'), 2, ...enc('7'),
+    1, ...enc('CODEBASE'), 2, ...enc('tbaMUD'),
+    IAC, SE
+  ])
+  assert.equal(r.mssp.PLAYERS, '7')
+  assert.equal(r.mssp.CODEBASE, 'tbaMUD')
+})
+
+check('a sequence split across reads is carried, not lost', () => {
+  // Chunk boundaries fall wherever TCP decides; a half-read IAC WILL must not
+  // be consumed as though it were complete.
+  const found = new Set<string>()
+  const used = consumeTelnet(Buffer.from([IAC, WILL]), found, {}, [])
+  assert.equal(used, 0)
+  assert.equal(found.size, 0)
+})
+
+check('an unterminated subnegotiation is not consumed', () => {
+  const used = consumeTelnet(Buffer.from([IAC, SB, 70, 1, 65]), new Set(), {}, [])
+  assert.equal(used, 0)
 })
 
 console.log(`directory-smoke: ${passed} checks passed`)

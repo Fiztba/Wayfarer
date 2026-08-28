@@ -45,6 +45,10 @@ jobs:
 
       - run: npm ci
 
+      # A broken parser would otherwise be discovered by committing bad data.
+      - run: npm run typecheck
+      - run: node --experimental-strip-types test/directory-smoke.mts
+
       # Each source is allowed to fail without taking the build down: a
       # directory site being briefly unreachable should cost us that source's
       # freshness, not the whole snapshot. The builder reads whatever landed.

@@ -11,7 +11,7 @@
     "build": "electron-vite build",
     "icon": "node scripts/make-icon.mjs",
     "dist": "electron-vite build && electron-builder --win",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "tsc --noEmit && tsc -p tsconfig.scripts.json --noEmit",
     "directory:tmc": "node --experimental-strip-types scripts/directory/sources/tmc.mts",
     "directory:tms": "node --experimental-strip-types scripts/directory/sources/tms.mts",
     "directory:mssp": "node --experimental-strip-types scripts/directory/sources/mssp.mts",

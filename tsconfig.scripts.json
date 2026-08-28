@@ -1,0 +1,5 @@
+{
+  "extends": "./tsconfig.json",
+  "include": ["scripts/directory", "test/directory-smoke.mts", "src/shared"],
+  "exclude": ["node_modules", "out"]
+}
