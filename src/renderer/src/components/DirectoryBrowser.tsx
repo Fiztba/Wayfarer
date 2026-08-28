@@ -1,5 +1,6 @@
 import React, { useMemo, useState } from 'react'
 import type { DirectoryMud, DirectoryResult } from '../../../shared/types'
+import { SORTS, SORT_LABELS, displayPlayers, playersTitle, type SortKey } from './directorySort'
 
 /**
  * Filterable browser over the MUD directory snapshot.
@@ -24,8 +25,6 @@ interface Props {
   directory: DirectoryResult
   onPick(mud: DirectoryMud): void
 }
-
-type SortKey = 'name' | 'players' | 'rank' | 'sources' | 'created' | 'rooms'
 
 const MAPPER_PROTOCOLS = ['GMCP', 'MSDP']
 
@@ -106,23 +105,16 @@ export function DirectoryBrowser({ directory, onPick }: Props): React.JSX.Elemen
       if (needsMapper && !m.protocols.some((p) => MAPPER_PROTOCOLS.includes(p))) return false
       if (needsTls && !m.protocols.includes('SSL') && m.tlsPort === null) return false
 
-      if (hasPlayers && !((m.players ?? 0) > 0 || (m.activePlayers ?? 0) > 0)) return false
+      // Matches the live count, so this never selects a MUD whose row shows 0.
+      // Using the rolling average here would do exactly that.
+      if (hasPlayers && !((m.players ?? 0) > 0)) return false
       if (freeOnly && m.payToPlay) return false
       if (hiring && !(m.hiringBuilders || m.hiringCoders)) return false
 
       return true
     })
 
-    const cmp: Record<SortKey, (a: DirectoryMud, b: DirectoryMud) => number> = {
-      name: (a, b) => a.name.localeCompare(b.name),
-      players: (a, b) =>
-        (b.activePlayers ?? b.players ?? -1) - (a.activePlayers ?? a.players ?? -1),
-      rank: (a, b) => (a.rank ?? 99999) - (b.rank ?? 99999),
-      sources: (a, b) => b.sources.length - a.sources.length || a.name.localeCompare(b.name),
-      created: (a, b) => (b.created ?? 0) - (a.created ?? 0),
-      rooms: (a, b) => (b.rooms ?? -1) - (a.rooms ?? -1)
-    }
-    return [...out].sort(cmp[sort])
+    return [...out].sort(SORTS[sort])
   }, [
     all, search, codebase, strictCodebase, category, liveOnly, includeUnknown,
     needsMapper, needsTls, hasPlayers, freeOnly, hiring, sort
@@ -150,12 +142,11 @@ export function DirectoryBrowser({ directory, onPick }: Props): React.JSX.Elemen
             onChange={(e) => setSearch(e.target.value)}
           />
           <select value={sort} onChange={(e) => setSort(e.target.value as SortKey)} title="Sort by">
-            <option value="name">Sort: Name</option>
-            <option value="players">Sort: Players online</option>
-            <option value="rank">Sort: TMC rank</option>
-            <option value="sources">Sort: Listed on most sites</option>
-            <option value="created">Sort: Newest</option>
-            <option value="rooms">Sort: World size</option>
+            {(Object.keys(SORT_LABELS) as SortKey[]).map((k) => (
+              <option key={k} value={k}>
+                Sort: {SORT_LABELS[k]}
+              </option>
+            ))}
           </select>
         </div>
 
@@ -198,7 +189,7 @@ export function DirectoryBrowser({ directory, onPick }: Props): React.JSX.Elemen
             <input type="checkbox" checked={needsTls} onChange={(e) => setNeedsTls(e.target.checked)} />
             TLS
           </label>
-          <label title="Someone was logged in when the crawler last looked">
+          <label title="Someone was logged in when the sweep last checked">
             <input type="checkbox" checked={hasPlayers} onChange={(e) => setHasPlayers(e.target.checked)} />
             Has players
           </label>
@@ -263,9 +254,9 @@ export function DirectoryBrowser({ directory, onPick }: Props): React.JSX.Elemen
                 {m.codebase}
               </span>
             )}
-            {(m.activePlayers ?? m.players) !== null && (
-              <span className="dir-players" title="Players online">
-                {m.activePlayers ?? m.players}
+            {displayPlayers(m) !== null && (
+              <span className="dir-players" title={playersTitle(m)}>
+                {displayPlayers(m)}
               </span>
             )}
             {m.protocols.some((p) => MAPPER_PROTOCOLS.includes(p)) && (

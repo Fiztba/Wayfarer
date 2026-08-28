@@ -62,8 +62,17 @@ export interface DirectoryMud {
   created: number | null
   rooms: number | null
   areas: number | null
+  /** Players logged in when the sweep probed the MUD. Always a whole number. */
   players: number | null
-  /** MSSP's rolling average — separates "busy now" from "busy generally". */
+  /**
+   * A rolling historical mean from the MSSP crawler — "busy generally" rather
+   * than "busy now", and routinely fractional (0.47, 3.23).
+   *
+   * Not interchangeable with `players`: showing this on a row produced counts
+   * like "0.47 players", and sorting by it put a MUD averaging three above one
+   * with 145 people logged in. Display and ranking use `players`; this is
+   * context, and belongs in a tooltip.
+   */
   activePlayers: number | null
   website: string | null
   discord: string | null

@@ -11,7 +11,8 @@ import assert from 'node:assert/strict'
 import { resolveCodebase, resolveMany } from '../scripts/directory/lib/codebases.mts'
 import { nameKey, groupDuplicates, pickAddress, type Candidate } from '../scripts/directory/lib/merge.mts'
 import { consumeTelnet, type ProbeResult } from '../scripts/directory/lib/probe.mts'
-import { livenessFor } from '../src/shared/directory.ts'
+import { livenessFor, type DirectoryMud } from '../src/shared/directory.ts'
+import { SORTS, displayPlayers, playersTitle } from '../src/renderer/src/components/directorySort.ts'
 
 let passed = 0
 function check(label: string, fn: () => void): void {
@@ -244,6 +245,62 @@ check('a sequence split across reads is carried, not lost', () => {
 check('an unterminated subnegotiation is not consumed', () => {
   const used = consumeTelnet(Buffer.from([IAC, SB, 70, 1, 65]), new Set(), {}, [])
   assert.equal(used, 0)
+})
+
+// ---- player counts ------------------------------------------------------
+// A MUD carries two player numbers that are easy to confuse. `players` is what
+// it reported when we probed it; `activePlayers` is a rolling historical mean
+// from the MSSP crawler and is routinely fractional. Mixing them produced rows
+// reading "0.47 players" and a sort that buried the busiest MUDs.
+const mud = (name: string, players: number | null, activePlayers: number | null): DirectoryMud =>
+  ({ name, players, activePlayers } as DirectoryMud)
+
+check('the row shows the live count, never the fractional average', () => {
+  // 4 Dimensions: 0 online, 0.47 average. It rendered as "0.47".
+  assert.equal(displayPlayers(mud('4 Dimensions', 0, 0.47)), 0)
+  // Ansalon: 10 online, 2.16 average. It rendered as "2.16".
+  assert.equal(displayPlayers(mud('Ansalon MUD', 10, 2.16)), 10)
+  assert.equal(displayPlayers(mud('No data', null, null)), null)
+})
+
+check('a displayed player count is never fractional', () => {
+  for (const [now, avg] of [[0, 0.47], [10, 2.16], [3, 0.64], [7, 5.78]] as [number, number][]) {
+    const shown = displayPlayers(mud('x', now, avg))
+    assert.ok(shown === null || Number.isInteger(shown), `${shown} should be a whole number`)
+  }
+})
+
+check('the average survives as hover context, rounded', () => {
+  assert.match(playersTitle(mud('x', 10, 2.16)), /10 online.*typically about 2/)
+  assert.equal(playersTitle(mud('x', 4, null)), '4 online when last checked')
+  assert.equal(playersTitle(mud('x', null, 3.2)), '')
+})
+
+check('sorting by players ranks by who is actually online', () => {
+  // The real regression: Threshold RPG's 145 logged-in players sorted below
+  // MUDs whose *average* was higher than its average.
+  const sorted = [
+    mud('Realms of Despair', 85, 44.72),
+    mud('Threshold RPG', 145, 15.87),
+    mud('Chaos Mud', 10, 6.25)
+  ].sort(SORTS.players)
+  assert.deepEqual(sorted.map((m) => m.name), ['Threshold RPG', 'Realms of Despair', 'Chaos Mud'])
+})
+
+check('the average only breaks ties between equal live counts', () => {
+  const sorted = [mud('quiet', 2, 0.3), mud('busy', 2, 9.1)].sort(SORTS.players)
+  assert.deepEqual(sorted.map((m) => m.name), ['busy', 'quiet'])
+})
+
+check('MUDs with no player data sort last, not first', () => {
+  const sorted = [mud('unknown', null, null), mud('empty', 0, null)].sort(SORTS.players)
+  assert.deepEqual(sorted.map((m) => m.name), ['empty', 'unknown'])
+})
+
+check('an absent rank sorts last, not as rank zero', () => {
+  const r = (name: string, rank: number | null): DirectoryMud => ({ name, rank } as DirectoryMud)
+  const sorted = [r('unranked', null), r('second', 2), r('first', 1)].sort(SORTS.rank)
+  assert.deepEqual(sorted.map((m) => m.name), ['first', 'second', 'unranked'])
 })
 
 console.log(`directory-smoke: ${passed} checks passed`)
