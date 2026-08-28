@@ -4,10 +4,8 @@
  * window (IPC mirror) can share it.
  */
 import React, { useCallback, useEffect, useRef } from 'react'
-import type { MapRoom, MudMap } from '../map/types'
-
-const CELL = 46
-const ROOM = 26
+import type { MapExit, MapRoom, MudMap } from '../map/types'
+import { CELL, ROOM, bowControl, bowMidpoint } from '../map/geometry'
 
 export interface MapContextInfo {
   roomId: string | null
@@ -102,56 +100,89 @@ export function MapCanvas(props: Props) {
     }
 
     // ---- exits ----
-    ctx.lineWidth = Math.max(1, 1.4 * view.scale)
-    for (const room of rooms) {
+    // Which cells are actually drawn, so a link that would cross a room can be
+    // bowed around it rather than tunnelling under an opaque box (geometry.ts).
+    const occupied = new Set<string>()
+    for (const r of rooms) {
+      const [rx, ry] = roomPos(r)
+      occupied.add(`${rx},${ry}`)
+    }
+    const isOccupied = (x: number, y: number): boolean => occupied.has(`${x},${y}`)
+    const thin = Math.max(1, 1.4 * view.scale)
+
+    /** Draw one exit, as owned by `room`. */
+    const drawLink = (room: MapRoom, exit: MapExit, highlight: boolean): void => {
+      if (exit.dir === 'u' || exit.dir === 'd') return // drawn as glyphs
       const [rx, ry] = roomPos(room)
       const [sx, sy] = toScreen(rx, ry)
-      for (const exit of room.exits) {
-        if (exit.dir === 'u' || exit.dir === 'd') continue // drawn as glyphs
-        const dest = exit.to ? map.rooms[exit.to] : null
-        let ex: number
-        let ey: number
-        let stub = false
-        if (dest && visibleById.has(dest.id)) {
-          const [dx, dy] = roomPos(dest)
-          ;[ex, ey] = toScreen(dx, dy)
-        } else if (exit.dir) {
-          const delta: Record<string, [number, number]> = {
-            n: [0, -1], s: [0, 1], e: [1, 0], w: [-1, 0],
-            ne: [1, -1], nw: [-1, -1], se: [1, 1], sw: [-1, 1]
-          }
-          const d = delta[exit.dir] ?? [0, 0]
-          ex = sx + d[0] * cell * 0.55
-          ey = sy + d[1] * cell * 0.55
-          stub = true
-        } else {
-          continue // special exit to elsewhere: glyph only
+      const dest = exit.to ? map.rooms[exit.to] : null
+      let ex: number
+      let ey: number
+      let stub = false
+      let door = exit.door
+      let control: [number, number] | null = null
+      if (dest && visibleById.has(dest.id)) {
+        const [dx, dy] = roomPos(dest)
+        ;[ex, ey] = toScreen(dx, dy)
+        const bow = bowControl({ x: rx, y: ry }, { x: dx, y: dy }, isOccupied)
+        if (bow) control = toScreen(bow.x, bow.y)
+        // This face may be the only one carrying the door if the pair was
+        // linked one-way, and it is the only face drawn (see dedupe below).
+        if (dest.exits.find((e) => e.to === room.id)?.door) door = true
+      } else if (exit.dir) {
+        const delta: Record<string, [number, number]> = {
+          n: [0, -1], s: [0, 1], e: [1, 0], w: [-1, 0],
+          ne: [1, -1], nw: [-1, -1], se: [1, 1], sw: [-1, 1]
         }
-        ctx.strokeStyle = stub
+        const d = delta[exit.dir] ?? [0, 0]
+        ex = sx + d[0] * cell * 0.55
+        ey = sy + d[1] * cell * 0.55
+        stub = true
+      } else {
+        return // special exit to elsewhere: glyph only
+      }
+      ctx.strokeStyle = highlight
+        ? '#ffffff'
+        : stub
           ? dest
             ? '#8b6f47' // leads off-view (other zone/level)
             : '#4a5568' // unexplored stub
           : '#5c6370'
-        ctx.setLineDash(exit.to === null ? [3, 3] : [])
+      ctx.lineWidth = highlight ? Math.max(2, 2.4 * view.scale) : thin
+      ctx.setLineDash(exit.to === null ? [3, 3] : [])
+      ctx.beginPath()
+      ctx.moveTo(sx, sy)
+      if (control) ctx.quadraticCurveTo(control[0], control[1], ex, ey)
+      else ctx.lineTo(ex, ey)
+      ctx.stroke()
+      ctx.setLineDash([])
+      if (door) {
+        // Door tick: short perpendicular bar at the midpoint — the curve's
+        // apex when bowed, whose tangent is parallel to the chord either way.
+        const mid = control
+          ? bowMidpoint({ x: sx, y: sy }, { x: control[0], y: control[1] }, { x: ex, y: ey })
+          : { x: (sx + ex) / 2, y: (sy + ey) / 2 }
+        const angle = Math.atan2(ey - sy, ex - sx) + Math.PI / 2
+        const t = 5 * view.scale
+        ctx.strokeStyle = '#e5c07b'
+        ctx.lineWidth = Math.max(1.5, 2 * view.scale)
         ctx.beginPath()
-        ctx.moveTo(sx, sy)
-        ctx.lineTo(ex, ey)
+        ctx.moveTo(mid.x - Math.cos(angle) * t, mid.y - Math.sin(angle) * t)
+        ctx.lineTo(mid.x + Math.cos(angle) * t, mid.y + Math.sin(angle) * t)
         ctx.stroke()
-        ctx.setLineDash([])
-        if (exit.door) {
-          // Door tick: short perpendicular bar at the midpoint.
-          const mx = (sx + ex) / 2
-          const my = (sy + ey) / 2
-          const angle = Math.atan2(ey - sy, ex - sx) + Math.PI / 2
-          const t = 5 * view.scale
-          ctx.strokeStyle = '#e5c07b'
-          ctx.lineWidth = Math.max(1.5, 2 * view.scale)
-          ctx.beginPath()
-          ctx.moveTo(mx - Math.cos(angle) * t, my - Math.sin(angle) * t)
-          ctx.lineTo(mx + Math.cos(angle) * t, my + Math.sin(angle) * t)
-          ctx.stroke()
-          ctx.lineWidth = Math.max(1, 1.4 * view.scale)
+      }
+    }
+
+    for (const room of rooms) {
+      for (const exit of room.exits) {
+        // A two-way link is drawn once, by the lower room id. Drawing both
+        // faces was invisible while links were straight (they coincided);
+        // bowed, they would arc to opposite sides and render as a lens.
+        const dest = exit.to ? map.rooms[exit.to] : null
+        if (dest && visibleById.has(dest.id) && room.id > dest.id) {
+          if (dest.exits.some((e) => e.to === room.id)) continue
         }
+        drawLink(room, exit, false)
       }
     }
 
@@ -195,6 +226,19 @@ export function MapCanvas(props: Props) {
       if (waypointIds.has(room.id)) {
         ctx.fillStyle = '#ffd68a'
         ctx.fillText('★', sx, sy - half - 3)
+      }
+    }
+
+    // ---- selected rooms' own exits, on top ----
+    // Drawn after the boxes, and without the two-way dedupe, so that selecting
+    // a room answers "is it really connected that way?" at a glance: only the
+    // exits this room actually owns light up, however dense the region is.
+    const highlighted = new Set(multiSelected)
+    if (selectedRoomId) highlighted.add(selectedRoomId)
+    if (highlighted.size > 0) {
+      for (const room of rooms) {
+        if (!highlighted.has(room.id)) continue
+        for (const exit of room.exits) drawLink(room, exit, true)
       }
     }
 

@@ -13,6 +13,7 @@ import { MapTracker } from '../src/renderer/src/map/MapTracker.ts'
 import { findPath } from '../src/renderer/src/map/Pathfinder.ts'
 import { Walker } from '../src/renderer/src/map/Walker.ts'
 import { emptyMap, stripPromptPrefix } from '../src/renderer/src/map/types.ts'
+import { bowControl, bowMidpoint, isObstructed } from '../src/renderer/src/map/geometry.ts'
 import { AnsiParser } from '../src/renderer/src/ansi.ts'
 
 let failures = 0
@@ -847,6 +848,87 @@ function makeWorld() {
   check(
     'replay: exits linked both ways',
     model.exitOf(model.room(start)!, 'n')?.to !== null,
+    true
+  )
+}
+
+// ---- link geometry: bowing around rooms a straight line would cross ----
+{
+  const occ = (cells: Array<[number, number]>) => {
+    const set = new Set(cells.map(([x, y]) => `${x},${y}`))
+    return (x: number, y: number): boolean => set.has(`${x},${y}`)
+  }
+
+  // The reported case: c(0,1) linked east to e(2,1) with d(1,1) between them,
+  // d itself connected only north. Drawn straight, the c–e line is painted
+  // over by d's opaque box and survives as "c–d" plus "d–e".
+  const cde = occ([[0, 1], [1, 1], [2, 1]])
+  check(
+    'geometry: link across an occupied cell is obstructed',
+    isObstructed({ x: 0, y: 1 }, { x: 2, y: 1 }, cde),
+    true
+  )
+  const bow = bowControl({ x: 0, y: 1 }, { x: 2, y: 1 }, cde)
+  check('geometry: obstructed link is bowed', bow !== null, true)
+  check('geometry: bow leaves the chord', bow !== null && bow.y !== 1, true)
+
+  // Adjacent rooms are never bowed.
+  check(
+    'geometry: adjacent link stays straight',
+    bowControl({ x: 0, y: 0 }, { x: 1, y: 0 }, occ([[0, 0], [1, 0]])),
+    null
+  )
+
+  // A two-cell span over EMPTY ground stays straight — that gap is unmapped
+  // map, not an obstruction, and bowing it would imply something is there.
+  check(
+    'geometry: two-cell span over empty ground stays straight',
+    bowControl({ x: 0, y: 0 }, { x: 2, y: 0 }, occ([[0, 0], [2, 0]])),
+    null
+  )
+
+  // A perpendicular-nudged destination: the line threads between (1,0) and
+  // (1,1) and clips neither box, so it needs no bow.
+  check(
+    'geometry: nudged span threads between two rooms',
+    isObstructed({ x: 0, y: 0 }, { x: 2, y: 1 }, occ([[0, 0], [1, 0], [1, 1], [2, 1]])),
+    false
+  )
+  // ...but a room sitting squarely on that diagonal does obstruct it.
+  check(
+    'geometry: nudged span blocked by a room on the line',
+    isObstructed({ x: 0, y: 0 }, { x: 4, y: 2 }, occ([[0, 0], [2, 1], [4, 2]])),
+    true
+  )
+
+  // The side must be stable: a room appearing elsewhere cannot flip an
+  // existing bow, or the map wiggles as the player explores.
+  check(
+    'geometry: bow side unchanged by unrelated rooms',
+    bowControl({ x: 0, y: 1 }, { x: 2, y: 1 }, occ([[0, 1], [1, 1], [2, 1], [5, 5], [0, 3]])),
+    bow
+  )
+  // Asked from the far end, the same link must bow to the same side — the
+  // highlight pass redraws a selected room's face itself, and two opposite
+  // arcs for one link would render a lens.
+  check(
+    'geometry: bow is the same from either endpoint',
+    bowControl({ x: 2, y: 1 }, { x: 0, y: 1 }, cde),
+    bow
+  )
+
+  // ...and so must the door tick that rides on it.
+  check(
+    'geometry: bowed door tick sits at the same point from either end',
+    bowMidpoint({ x: 0, y: 1 }, bow!, { x: 2, y: 1 }),
+    bowMidpoint({ x: 2, y: 1 }, bow!, { x: 0, y: 1 })
+  )
+
+  // Occupying the apex cell itself is the one thing that flips it.
+  const flipped = bowControl({ x: 0, y: 1 }, { x: 2, y: 1 }, occ([[0, 1], [1, 1], [2, 1], [1, 2]]))
+  check(
+    'geometry: bow flips when its apex cell is taken',
+    flipped !== null && bow !== null && Math.sign(flipped.y - 1) === -Math.sign(bow.y - 1),
     true
   )
 }
