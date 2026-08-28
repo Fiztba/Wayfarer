@@ -110,7 +110,35 @@ export function parseDetail(mudid: string, html: string): TmsRecord | null {
   }
 }
 
+/**
+ * Is the site actually serving?
+ *
+ * Its origin has spent long stretches behind a Cloudflare 522, and a 2,000-page
+ * crawl that discovers this on page one produces a stack trace and a confusing
+ * log. Check once, say so plainly, and exit clean so a caller running this
+ * opportunistically is not treated as a failure.
+ */
+async function reachable(): Promise<boolean> {
+  try {
+    const res = await fetch(`${BASE}/mudlist.html`, {
+      headers: { 'User-Agent': 'Wayfarer-MUD-Client/0.4 (directory builder)' },
+      signal: AbortSignal.timeout(25_000)
+    })
+    return res.ok
+  } catch {
+    return false
+  }
+}
+
 async function main(): Promise<void> {
+  if (!(await reachable())) {
+    process.stderr.write(
+      'TMS: site is not responding (its origin has been returning Cloudflare 522).\n' +
+        '     Skipping — the listing is frozen, so this crawl runs whenever it returns.\n'
+    )
+    return
+  }
+
   // Resume: a half-finished crawl keeps what it already has.
   const existing: Record<string, TmsRecord> = fs.existsSync(OUT)
     ? Object.fromEntries(

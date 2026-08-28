@@ -34,7 +34,9 @@ concurrency:
 jobs:
   refresh:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    # A run that lands the one-time Top Mud Sites crawl takes ~35 minutes on its
+    # own; every other run is about two.
+    timeout-minutes: 90
     env:
       # Job level, not step level: a step's own `env` block is not in scope when
       # that step's `if:` is evaluated, so gating the MUDVerse step on a
@@ -77,6 +79,25 @@ jobs:
         continue-on-error: true
         run: npm run directory:grapevine
 
+      # Top Mud Sites is a one-time crawl, not a weekly one: votes are
+      # deprecated, the listing is unmaintained, and the data will not change
+      # again. But its origin spends long stretches behind a Cloudflare 522, so
+      # rather than needing someone to notice when it returns, this attempts the
+      # crawl every week until it lands and then stops asking.
+      #
+      # The crawler self-skips when the site is down and resumes where it left
+      # off if a run is cut short, so a half-finished crawl finishes next week.
+      - name: Refresh Top Mud Sites (once, when it is reachable)
+        continue-on-error: true
+        run: |
+          COUNT=$(node -e "try { console.log(require('./scripts/directory/data/tms.json').length) } catch { console.log(0) }")
+          if [ "$COUNT" -ge 1900 ]; then
+            echo "Already have $COUNT TMS records and the listing is frozen — nothing to do."
+            exit 0
+          fi
+          echo "Have $COUNT of ~1963 TMS records; attempting the crawl."
+          npm run directory:tms
+
       # Optional: only runs once MUDVERSE_API_KEY exists as a repository secret.
       # The key is never committed and never shipped in the app.
       - name: Refresh MUDVerse
@@ -89,7 +110,10 @@ jobs:
 
       - name: Commit if changed
         run: |
-          if git diff --quiet -- public-data/directory.json; then
+          # Source data counts as a change, not just the snapshot. The Top Mud
+          # Sites crawl resumes from whatever it already has, so a run cut short
+          # must commit its partial tms.json or next week starts from zero.
+          if git diff --quiet -- public-data/directory.json scripts/directory/data; then
             echo "No directory changes."
             exit 0
           fi
