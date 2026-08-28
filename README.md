@@ -1,8 +1,18 @@
 # Wayfarer
 
-## Status: Phase 4 complete
+## Status: Phase 5 complete
 
 Working today:
+
+- **Multi-source MUD directory** — one list unioned from The Mud Connector,
+  Scandum's MSSP crawler, Grapevine and Vineyard (plus MUDVerse where a key is
+  configured), de-duplicated across sources and probed for liveness. Filter by
+  codebase *with lineage* (picking CircleMUD finds the tbaMUDs, because sources
+  label the same game at different levels), by theme, by whether anyone is
+  online, by whether the MUD is hiring, and by protocol support — including
+  "mapper works here", which no other directory can answer because it depends on
+  the client. Built weekly by CI and shipped as a single JSON file, so browsing
+  costs the listed MUDs nothing and the list improves without an app update
 
 - **MXP** — clickable links (send tags with hover hints, prompt-mode links,
   text-content commands), inline bold/italic/color markup, entities, secure
@@ -119,7 +129,30 @@ node --experimental-strip-types test/smoke.mts <host> <port>   # headless telnet
 node --experimental-strip-types test/automation-smoke.mts      # automation engine tests
 node --experimental-strip-types test/scripting-smoke.mts       # JS + Lua runtime tests
 node --experimental-strip-types test/map-smoke.mts             # mapper core tests
+node --experimental-strip-types test/directory-smoke.mts       # codebase + dedup tests
 ```
+
+### The MUD directory
+
+The world list is built offline, not by the app. Each source has its own script;
+`directory:build` unions them, probes every address, and writes the snapshot the
+app downloads.
+
+```
+npm run directory:tmc        # The Mud Connector (biglist + codebase/theme facets)
+npm run directory:mssp       # Scandum's MSSP crawler
+npm run directory:vineyard   # Vineyard hosted MUDs
+npm run directory:grapevine  # Grapevine games
+npm run directory:tms        # Top Mud Sites (optional; slow, and the site is often down)
+npm run directory:mudverse   # MUDVerse (optional; needs MUDVERSE_API_KEY)
+npm run directory:build      # union + probe + dedupe -> public-data/directory.json
+```
+
+`.github/workflows/directory.yml` runs this weekly and commits the result. Keys
+are never committed: MUDVerse reads `MUDVERSE_API_KEY` from the environment, set
+as a repository secret in CI. The build refuses to write a snapshot whose
+failure rate jumps more than 15 points above the previous one, so a run with
+broken DNS fails loudly instead of quietly marking every MUD dead.
 
 Built with Electron + electron-vite + React + TypeScript.
 Profiles are stored in `%APPDATA%/wayfarer/profiles/` with backups alongside.

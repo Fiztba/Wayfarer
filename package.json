@@ -1,7 +1,7 @@
 {
   "name": "wayfarer",
   "productName": "Wayfarer",
-  "version": "0.3.4",
+  "version": "0.4.0",
   "description": "A modern, feature-rich MUD client",
   "main": "out/main/index.js",
   "license": "MIT",
@@ -11,7 +11,14 @@
     "build": "electron-vite build",
     "icon": "node scripts/make-icon.mjs",
     "dist": "electron-vite build && electron-builder --win",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "directory:tmc": "node --experimental-strip-types scripts/directory/sources/tmc.mts",
+    "directory:tms": "node --experimental-strip-types scripts/directory/sources/tms.mts",
+    "directory:mssp": "node --experimental-strip-types scripts/directory/sources/mssp.mts",
+    "directory:vineyard": "node --experimental-strip-types scripts/directory/sources/vineyard.mts",
+    "directory:grapevine": "node --experimental-strip-types scripts/directory/sources/grapevine.mts",
+    "directory:mudverse": "node --experimental-strip-types scripts/directory/sources/mudverse.mts",
+    "directory:build": "node --experimental-strip-types scripts/directory/build.mts"
   },
   "dependencies": {
     "electron-updater": "^6.8.9",

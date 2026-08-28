@@ -160,19 +160,17 @@ export function defaultSettings(): SettingsSet {
   }
 }
 
-export interface DirectoryEntry {
-  name: string
-  host: string
-  port: number
-  rank: number | null
-  website: string | null
-  connected: boolean
-}
+export type { DirectoryMud, DirectorySnapshot, Liveness, ProbeState } from './directory'
+import type { DirectoryMud, DirectorySnapshot } from './directory'
 
 export interface DirectoryResult {
-  entries: DirectoryEntry[]
+  entries: DirectoryMud[]
+  /** When this client last fetched the snapshot. */
   fetchedAt: string | null
-  source: 'live' | 'cache' | 'stale-cache' | 'unavailable'
+  /** When CI built it. Null in the biglist fallback, which has no snapshot. */
+  builtAt: string | null
+  counts: DirectorySnapshot['counts'] | null
+  source: 'live' | 'cache' | 'stale-cache' | 'biglist-fallback' | 'unavailable'
   error?: string
 }
 

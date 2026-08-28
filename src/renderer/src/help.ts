@@ -30,7 +30,7 @@ export const HELP_TOPICS: HelpTopic[] = [
         list: [
           'Saved Worlds: your profiles. Click one to connect, ✎ to edit it, ✕ to delete it (a backup is kept).',
           'Quick Connect: enter a host and port directly. "Save as profile" keeps it for next time.',
-          'Browse the Realms: a searchable directory of live MUDs, courtesy of The Mud Connector. Clicking an entry fills the connect form — nothing connects until you say so.'
+          'Browse the Realms: a filterable directory of MUDs merged from four public lists and checked for whether they are actually up. Clicking an entry fills the connect form — nothing connects until you say so.'
         ]
       },
       { h: 'Tabs' },
@@ -339,6 +339,44 @@ export const HELP_TOPICS: HelpTopic[] = [
       { h: 'Example: a Tells window' },
       {
         code: "Pattern (regex):   ^(\\w+) tells you '\nCopy to window:    Tells\nGag:               off (or on, to keep tells out of the main scroll)"
+      }
+    ]
+  },
+  {
+    id: 'directory',
+    title: 'Browsing for a MUD',
+    blocks: [
+      {
+        p: "The connect screen's world list is compiled from four public directories at once — The Mud Connector, Scandum's MSSP crawler, Grapevine and Vineyard — merged into one list with duplicates collapsed."
+      },
+      {
+        p: 'That matters more than it sounds. The same MUD is often listed at different addresses on different sites, and the stale one is not always on the site you would guess. Wayfarer probes every address it knows and shows the one that actually answers.'
+      },
+      { h: 'Online only' },
+      {
+        p: 'On by default. Roughly half of every public MUD listing is dead — lapsed domains, moved ports — and no directory tracks that reliably, so Wayfarer checks rather than believing the listing.'
+      },
+      {
+        list: [
+          'Green: answered on the last sweep.',
+          'Amber: missed one sweep — MUDs reboot, so this is not fatal.',
+          'Orange: quiet for a while.',
+          'Grey: gone a long time. Never deleted, so a MUD that comes back is noticed.'
+        ]
+      },
+      { h: 'Codebase' },
+      {
+        p: 'Codebase filtering understands lineage. tbaMUD is a kind of CircleMUD, which is a kind of DikuMUD, and sources label the same game at different levels — The Builder Academy is filed as plain CircleMUD by the host that runs it. So picking CircleMUD finds the tbaMUDs too; tick "Exactly" to narrow to one label.'
+      },
+      {
+        p: 'Where sources disagree the more specific label wins: a MUD one site calls Merc and another calls SMAUG is a SMAUG. When two sites name genuinely unrelated codebases the chip is highlighted, because one of them is wrong.'
+      },
+      { h: 'Mapper works' },
+      {
+        p: 'Shows only MUDs advertising GMCP or MSDP — the protocols that let the mapper track rooms exactly instead of by dead reckoning. No other directory can tell you this, because it depends on what your client can do.'
+      },
+      {
+        p: 'The list is rebuilt weekly and downloaded as one file, so browsing costs the MUDs nothing: your client never connects to anyone except the world you choose.'
       }
     ]
   },

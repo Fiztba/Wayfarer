@@ -1,20 +1,34 @@
 /**
- * MudDirectory — browsable list of connectable MUDs, sourced from
- * The Mud Connector's public "biglist" (mudconnect.com).
+ * MudDirectory — the browsable MUD list.
  *
- * Fetched at most once per TTL and cached on disk, so we stay polite to TMC
- * and the browser works offline once populated.
+ * Wayfarer no longer scrapes directory sites itself. A weekly CI job unions The
+ * Mud Connector, the MSSP crawler, Vineyard, Grapevine and (when a key exists)
+ * MUDVerse, probes every address, and publishes one snapshot; the app just
+ * downloads that. One prober for everyone instead of one per install, and the
+ * list improves without shipping an update.
+ *
+ * Degradation, in order: fresh snapshot → cached snapshot → stale cached
+ * snapshot → a live TMC biglist scrape. That last step is what the app used to
+ * do exclusively, kept so a machine that cannot reach GitHub still gets a
+ * usable list of names and addresses, just without codebases or liveness.
  */
 import fs from 'node:fs'
 import path from 'node:path'
-import type { DirectoryEntry, DirectoryResult } from '../shared/types'
+import type { DirectoryResult } from '../shared/types'
+import type { DirectoryMud, DirectorySnapshot } from '../shared/directory'
 
+const SNAPSHOT_URL =
+  'https://raw.githubusercontent.com/Fiztba/Wayfarer/master/public-data/directory.json'
 const BIGLIST_URL = 'https://www.mudconnect.com/cgi-bin/search.cgi?mode=tmc_biglist'
-const CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1000 // one week
+
+/** The snapshot is rebuilt weekly; checking daily is plenty. */
+const CACHE_TTL_MS = 24 * 60 * 60 * 1000
+
+const USER_AGENT = 'Wayfarer-MUD-Client/0.4 (directory)'
 
 interface CacheFile {
   fetchedAt: string
-  entries: DirectoryEntry[]
+  snapshot: DirectorySnapshot
 }
 
 export class MudDirectory {
@@ -28,12 +42,16 @@ export class MudDirectory {
 
   async list(forceRefresh = false): Promise<DirectoryResult> {
     const cached = this.readCache()
-    const fresh =
-      cached !== null && Date.now() - Date.parse(cached.fetchedAt) < CACHE_TTL_MS
+    const fresh = cached !== null && Date.now() - Date.parse(cached.fetchedAt) < CACHE_TTL_MS
     if (cached && fresh && !forceRefresh) {
-      return { entries: cached.entries, fetchedAt: cached.fetchedAt, source: 'cache' }
+      return {
+        entries: cached.snapshot.muds,
+        fetchedAt: cached.fetchedAt,
+        builtAt: cached.snapshot.builtAt,
+        counts: cached.snapshot.counts,
+        source: 'cache'
+      }
     }
-    // Single flight: concurrent callers share one fetch.
     this.inflight ??= this.fetchAndCache(cached)
     try {
       return await this.inflight
@@ -44,34 +62,74 @@ export class MudDirectory {
 
   private async fetchAndCache(fallback: CacheFile | null): Promise<DirectoryResult> {
     try {
-      const res = await fetch(BIGLIST_URL, {
-        headers: { 'User-Agent': 'Wayfarer-MUD-Client/0.1 (directory browser)' },
+      const res = await fetch(SNAPSHOT_URL, {
+        headers: { 'User-Agent': USER_AGENT, Accept: 'application/json' },
         signal: AbortSignal.timeout(30_000)
       })
       if (!res.ok) throw new Error(`HTTP ${res.status}`)
-      const html = await res.text()
-      const entries = parseBiglist(html)
-      if (entries.length === 0) throw new Error('no entries parsed — page layout may have changed')
-      const cache: CacheFile = { fetchedAt: new Date().toISOString(), entries }
+      const snapshot = (await res.json()) as DirectorySnapshot
+      if (!Array.isArray(snapshot.muds) || snapshot.muds.length === 0) {
+        throw new Error('snapshot contained no MUDs')
+      }
+
+      const cache: CacheFile = { fetchedAt: new Date().toISOString(), snapshot }
       const tmp = this.cacheFile + '.tmp'
       fs.writeFileSync(tmp, JSON.stringify(cache))
       fs.renameSync(tmp, this.cacheFile)
       this.memory = cache
-      return { entries, fetchedAt: cache.fetchedAt, source: 'live' }
+
+      return {
+        entries: snapshot.muds,
+        fetchedAt: cache.fetchedAt,
+        builtAt: snapshot.builtAt,
+        counts: snapshot.counts,
+        source: 'live'
+      }
     } catch (err) {
+      const message = String(err instanceof Error ? err.message : err)
       if (fallback) {
         return {
-          entries: fallback.entries,
+          entries: fallback.snapshot.muds,
           fetchedAt: fallback.fetchedAt,
+          builtAt: fallback.snapshot.builtAt,
+          counts: fallback.snapshot.counts,
           source: 'stale-cache',
-          error: String(err instanceof Error ? err.message : err)
+          error: message
         }
       }
+      // Nothing cached and the snapshot is unreachable — fall back to the
+      // original behaviour so the list is thin rather than empty.
+      return await this.fetchBiglistFallback(message)
+    }
+  }
+
+  private async fetchBiglistFallback(snapshotError: string): Promise<DirectoryResult> {
+    try {
+      const res = await fetch(BIGLIST_URL, {
+        headers: { 'User-Agent': USER_AGENT },
+        signal: AbortSignal.timeout(30_000)
+      })
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      const entries = parseBiglist(await res.text())
+      if (entries.length === 0) throw new Error('no entries parsed')
+      return {
+        entries,
+        fetchedAt: new Date().toISOString(),
+        builtAt: null,
+        counts: null,
+        source: 'biglist-fallback',
+        error: `snapshot unavailable (${snapshotError}); showing a direct TMC listing without codebase or liveness data`
+      }
+    } catch (err) {
       return {
         entries: [],
         fetchedAt: null,
+        builtAt: null,
+        counts: null,
         source: 'unavailable',
-        error: String(err instanceof Error ? err.message : err)
+        error: `${snapshotError}; TMC fallback also failed (${
+          err instanceof Error ? err.message : String(err)
+        })`
       }
     }
   }
@@ -80,7 +138,7 @@ export class MudDirectory {
     if (this.memory) return this.memory
     try {
       const parsed = JSON.parse(fs.readFileSync(this.cacheFile, 'utf8')) as CacheFile
-      if (Array.isArray(parsed.entries) && typeof parsed.fetchedAt === 'string') {
+      if (parsed?.snapshot?.muds && Array.isArray(parsed.snapshot.muds)) {
         this.memory = parsed
         return parsed
       }
@@ -104,12 +162,16 @@ function decodeEntities(s: string): string {
   return s.replace(/&(?:amp|lt|gt|quot|#39|apos);/g, (m) => ENTITIES[m] ?? m)
 }
 
-/** Parse TMC biglist rows into directory entries. */
-export function parseBiglist(html: string): DirectoryEntry[] {
-  const entries: DirectoryEntry[] = []
+/**
+ * Parse TMC biglist rows into bare directory entries.
+ *
+ * Only used by the offline fallback now, so it fills the metadata fields with
+ * empty values rather than pretending to know a codebase.
+ */
+export function parseBiglist(html: string): DirectoryMud[] {
+  const entries: DirectoryMud[] = []
   const seen = new Set<string>()
-  const rows = html.split('<tr>')
-  for (const row of rows) {
+  for (const row of html.split('<tr>')) {
     const telnet = /url=telnet:\/\/([^:'"]+):(\d+)/.exec(row)
     if (!telnet) continue
     const name = /mode=mud_listing&mud=[^']*'[^>]*>([^<]+)<\/a>/.exec(row)
@@ -123,12 +185,41 @@ export function parseBiglist(html: string): DirectoryEntry[] {
     if (seen.has(key) || port <= 0 || port > 65535) continue
     seen.add(key)
     entries.push({
+      id: key,
       name: decodeEntities(name[1].trim()),
       host,
       port,
-      rank: rank ? Number(rank[1]) : null,
+      tlsPort: null,
+      alternates: [],
+      sources: ['tmc'],
+      codebase: null,
+      family: null,
+      ancestry: [],
+      codebaseRaw: [],
+      codebaseConflict: false,
+      categories: [],
+      genre: null,
+      gameplay: null,
+      language: null,
+      location: null,
+      created: null,
+      rooms: null,
+      areas: null,
+      players: null,
+      activePlayers: null,
       website: website ? decodeEntities(website[1]) : null,
-      connected
+      discord: null,
+      tagline: null,
+      rank: rank ? Number(rank[1]) : null,
+      protocols: [],
+      hiringBuilders: false,
+      hiringCoders: false,
+      payToPlay: false,
+      // TMC's connected flag is a good prior but unverified here.
+      state: connected ? 'up' : 'closed',
+      liveness: connected ? 'live' : 'ailing',
+      lastSeenUp: null,
+      strikes: 0
     })
   }
   entries.sort((a, b) => (a.rank ?? 99999) - (b.rank ?? 99999))

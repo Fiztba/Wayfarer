@@ -6,3 +6,12 @@ recovery-data/
 recovery-result.txt
 *.log
 .DS_Store
+
+# Secrets: the directory sweep reads its MUDVerse key from the environment,
+# never from a file in the tree. These patterns exist so a stray one can't be
+# committed by accident.
+.env
+.env.*
+!.env.example
+*.key
+secrets.json

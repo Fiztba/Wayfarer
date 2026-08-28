@@ -1,5 +1,6 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import React, { useCallback, useEffect, useRef, useState } from 'react'
 import type { Profile, Encoding, DirectoryResult } from '../../../shared/types'
+import { DirectoryBrowser } from './DirectoryBrowser'
 
 interface Props {
   onConnect(opts: {
@@ -24,7 +25,6 @@ export function ConnectScreen({ onConnect, onOpenHelp }: Props) {
   const [editingId, setEditingId] = useState<string | null>(null)
   const formRef = useRef<HTMLDivElement>(null)
   const [directory, setDirectory] = useState<DirectoryResult | null>(null)
-  const [dirSearch, setDirSearch] = useState('')
 
   useEffect(() => {
     let cancelled = false
@@ -36,16 +36,6 @@ export function ConnectScreen({ onConnect, onOpenHelp }: Props) {
     }
   }, [])
 
-  const dirMatches = useMemo(() => {
-    if (!directory) return []
-    const q = dirSearch.trim().toLowerCase()
-    const all = q
-      ? directory.entries.filter(
-          (e) => e.name.toLowerCase().includes(q) || e.host.includes(q)
-        )
-      : directory.entries
-    return all.slice(0, 30)
-  }, [directory, dirSearch])
 
   const [loadError, setLoadError] = useState(false)
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null)
@@ -348,12 +338,26 @@ export function ConnectScreen({ onConnect, onOpenHelp }: Props) {
 
         <h2>Browse the Realms</h2>
         <p className="dir-credit">
-          Listings courtesy of{' '}
+          Compiled from{' '}
           <a href="https://www.mudconnect.com/" target="_blank" rel="noreferrer">
             The Mud Connector
           </a>
-          {directory?.fetchedAt && (
-            <> · updated {new Date(directory.fetchedAt).toLocaleDateString()}</>
+          ,{' '}
+          <a href="https://tintin.mudhalla.net/protocols/mssp/" target="_blank" rel="noreferrer">
+            the MSSP crawler
+          </a>
+          ,{' '}
+          <a href="https://grapevine.haus/games" target="_blank" rel="noreferrer">
+            Grapevine
+          </a>{' '}
+          and{' '}
+          <a href="https://vineyard.haus/muds" target="_blank" rel="noreferrer">
+            Vineyard
+          </a>
+          {directory?.builtAt && (
+            <> · {directory.counts?.live ?? 0} online when checked{' '}
+              {new Date(directory.builtAt).toLocaleDateString()}
+            </>
           )}
         </p>
         {directory === null ? (
@@ -365,38 +369,23 @@ export function ConnectScreen({ onConnect, onOpenHelp }: Props) {
           </p>
         ) : (
           <>
-            <div className="field">
-              <input
-                placeholder={`Search ${directory.entries.length} worlds by name or host…`}
-                value={dirSearch}
-                onChange={(e) => setDirSearch(e.target.value)}
-              />
-            </div>
-            <div className="dir-list">
-              {dirMatches.map((e) => (
-                <div
-                  key={`${e.host}:${e.port}`}
-                  className="dir-row"
-                  title="Click to fill the connect form"
-                  onClick={() => {
-                    setEditingId(null)
-                    setName(e.name)
-                    setHost(e.host)
-                    setPort(String(e.port))
-                    formRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
-                  }}
-                >
-                  <span className={`dir-dot ${e.connected ? 'dir-dot-up' : ''}`}>●</span>
-                  <span className="dir-name">{e.name}</span>
-                  <span className="dir-addr">
-                    {e.host}:{e.port}
-                  </span>
-                </div>
-              ))}
-              {dirMatches.length === 0 && (
-                <p className="dir-status">No worlds match “{dirSearch}”.</p>
-              )}
-            </div>
+            {directory.source === 'biglist-fallback' && (
+              <p className="dir-status dir-status-warn">
+                Showing a direct listing — codebase and online filters are unavailable until the
+                snapshot can be reached.
+              </p>
+            )}
+            <DirectoryBrowser
+              directory={directory}
+              onPick={(m) => {
+                setEditingId(null)
+                setName(m.name)
+                setHost(m.host)
+                setPort(String(m.port))
+                setTls(m.tlsPort !== null)
+                formRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
+              }}
+            />
           </>
         )}
       </div>

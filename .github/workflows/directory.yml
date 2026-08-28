@@ -1,0 +1,93 @@
+name: MUD directory
+
+# Refreshes public-data/directory.json: re-reads every source, probes every
+# address, and commits the result. Wayfarer downloads that file, so the MUD
+# list improves without shipping an app update.
+#
+# Running the sweep here rather than in the app is deliberate. Every install
+# probing ~700 MUDs on launch is the rude version of this; one job a week is
+# defensible, and it means users probe nothing at all.
+#
+# The build refuses to write a snapshot whose failure rate jumps more than 15
+# points above the previous one, so a run with blocked egress or broken DNS
+# fails loudly instead of quietly burying the whole directory.
+
+on:
+  schedule:
+    # Sundays, 07:00 UTC. MSSP crawl delays are measured in hours, so weekly is
+    # comfortably inside what every source asks for.
+    - cron: '0 7 * * 0'
+  workflow_dispatch:
+    inputs:
+      skip_probe:
+        description: 'Rebuild from cached source data without probing'
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: mud-directory
+  cancel-in-progress: false
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      # Each source is allowed to fail without taking the build down: a
+      # directory site being briefly unreachable should cost us that source's
+      # freshness, not the whole snapshot. The builder reads whatever landed.
+      - name: Refresh The Mud Connector
+        continue-on-error: true
+        run: npm run directory:tmc
+
+      - name: Refresh MSSP crawler
+        continue-on-error: true
+        run: npm run directory:mssp
+
+      - name: Refresh Vineyard
+        continue-on-error: true
+        run: npm run directory:vineyard
+
+      - name: Refresh Grapevine
+        continue-on-error: true
+        run: npm run directory:grapevine
+
+      # Optional: only runs once MUDVERSE_API_KEY exists as a repository secret.
+      # The key is never committed and never shipped in the app.
+      - name: Refresh MUDVerse
+        continue-on-error: true
+        if: ${{ env.MUDVERSE_API_KEY != '' }}
+        env:
+          MUDVERSE_API_KEY: ${{ secrets.MUDVERSE_API_KEY }}
+        run: npm run directory:mudverse
+
+      - name: Build snapshot
+        run: npm run directory:build
+
+      - name: Commit if changed
+        run: |
+          if git diff --quiet -- public-data/directory.json; then
+            echo "No directory changes."
+            exit 0
+          fi
+          node -e "
+            const s = require('./public-data/directory.json');
+            console.log('total', s.counts.total, 'live', s.counts.live);
+          "
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add public-data/directory.json scripts/directory/data
+          git commit -m "Directory refresh: $(node -p "require('./public-data/directory.json').counts.live") live of $(node -p "require('./public-data/directory.json').counts.total")"
+          git push
