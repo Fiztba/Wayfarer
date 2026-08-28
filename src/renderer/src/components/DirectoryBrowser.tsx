@@ -1,12 +1,12 @@
 import React, { useMemo, useState } from 'react'
 import type { DirectoryMud, DirectoryResult } from '../../../shared/types'
-import { SORTS, SORT_LABELS, displayPlayers, playersTitle, type SortKey } from './directorySort'
+import { DirectoryDetail } from './DirectoryDetail'
+import { COLUMNS, compareBy, displayPlayers, playersTitle, type SortKey } from './directorySort'
 
 /**
  * Filterable browser over the MUD directory snapshot.
  *
- * Two deliberate behaviours, both learned from what the source data is actually
- * like:
+ * Three deliberate behaviours, all learned from what the source data is like:
  *
  * Codebase matching is lineage-inclusive. Picking "CircleMUD" also returns
  * tbaMUD and LuminariMUD, because sources label the same MUD at different
@@ -15,10 +15,12 @@ import { SORTS, SORT_LABELS, displayPlayers, playersTitle, type SortKey } from '
  *
  * Metadata filters are tri-state, not two-state. Asking for "Fantasy" should
  * return the MUDs tagged Fantasy, not those plus every MUD that never recorded
- * a genre — so unrecorded values are excluded by default. But coverage varies
- * enormously between fields, and a filter quietly hiding two thirds of the list
- * reads as a bug, so every control shows how many MUDs it actually knows about
- * and "Include unrecorded" widens the net when the data looks thin.
+ * a genre — so unrecorded values are excluded by default. Coverage varies
+ * enormously between fields, so every control shows how many MUDs it knows
+ * about and "Include unrecorded" widens the net when the data looks thin.
+ *
+ * Rows are a fixed grid rather than a flex line. At 683 entries, columns that
+ * line up are the difference between scanning and reading.
  */
 
 interface Props {
@@ -41,7 +43,9 @@ export function DirectoryBrowser({ directory, onPick }: Props): React.JSX.Elemen
   const [freeOnly, setFreeOnly] = useState(false)
   const [hiring, setHiring] = useState(false)
   const [sort, setSort] = useState<SortKey>('name')
-  const [limit, setLimit] = useState(60)
+  const [flipped, setFlipped] = useState(false)
+  const [selectedId, setSelectedId] = useState<string | null>(null)
+  const [limit, setLimit] = useState(200)
 
   const all = directory.entries
 
@@ -64,9 +68,7 @@ export function DirectoryBrowser({ directory, onPick }: Props): React.JSX.Elemen
   const knownCounts = useMemo(
     () => ({
       codebase: all.filter((m) => m.codebase).length,
-      category: all.filter((m) => m.categories.length || m.genre).length,
-      protocols: all.filter((m) => m.protocols.length).length,
-      players: all.filter((m) => m.players !== null || m.activePlayers !== null).length
+      category: all.filter((m) => m.categories.length || m.genre).length
     }),
     [all]
   )
@@ -106,7 +108,6 @@ export function DirectoryBrowser({ directory, onPick }: Props): React.JSX.Elemen
       if (needsTls && !m.protocols.includes('SSL') && m.tlsPort === null) return false
 
       // Matches the live count, so this never selects a MUD whose row shows 0.
-      // Using the rolling average here would do exactly that.
       if (hasPlayers && !((m.players ?? 0) > 0)) return false
       if (freeOnly && m.payToPlay) return false
       if (hiring && !(m.hiringBuilders || m.hiringCoders)) return false
@@ -114,17 +115,31 @@ export function DirectoryBrowser({ directory, onPick }: Props): React.JSX.Elemen
       return true
     })
 
-    return [...out].sort(SORTS[sort])
+    return [...out].sort(compareBy(sort, flipped))
   }, [
     all, search, codebase, strictCodebase, category, liveOnly, includeUnknown,
-    needsMapper, needsTls, hasPlayers, freeOnly, hiring, sort
+    needsMapper, needsTls, hasPlayers, freeOnly, hiring, sort, flipped
   ])
+
+  const selected = useMemo(
+    () => matches.find((m) => m.id === selectedId) ?? null,
+    [matches, selectedId]
+  )
+
+  /** Click a heading to sort by it; click the active heading to reverse it. */
+  const headerClick = (key: SortKey): void => {
+    if (key === sort) setFlipped((f) => !f)
+    else {
+      setSort(key)
+      setFlipped(false)
+    }
+  }
 
   const reset = (): void => {
     setSearch(''); setCodebase(''); setCategory(''); setStrictCodebase(false)
     setLiveOnly(true); setIncludeUnknown(false); setNeedsMapper(false)
     setNeedsTls(false); setHasPlayers(false); setFreeOnly(false); setHiring(false)
-    setSort('name'); setLimit(60)
+    setSort('name'); setFlipped(false); setLimit(200)
   }
 
   const activeFilters =
@@ -132,7 +147,7 @@ export function DirectoryBrowser({ directory, onPick }: Props): React.JSX.Elemen
     Number(needsTls) + Number(hasPlayers) + Number(freeOnly) + Number(hiring)
 
   return (
-    <>
+    <div className="dir-wrap">
       <div className="dir-controls">
         <div className="dir-search-row">
           <input
@@ -141,16 +156,6 @@ export function DirectoryBrowser({ directory, onPick }: Props): React.JSX.Elemen
             value={search}
             onChange={(e) => setSearch(e.target.value)}
           />
-          <select value={sort} onChange={(e) => setSort(e.target.value as SortKey)} title="Sort by">
-            {(Object.keys(SORT_LABELS) as SortKey[]).map((k) => (
-              <option key={k} value={k}>
-                Sort: {SORT_LABELS[k]}
-              </option>
-            ))}
-          </select>
-        </div>
-
-        <div className="dir-filter-row">
           <label className="dir-filter">
             <span>Codebase</span>
             <select value={codebase} onChange={(e) => setCodebase(e.target.value)}>
@@ -162,7 +167,6 @@ export function DirectoryBrowser({ directory, onPick }: Props): React.JSX.Elemen
               ))}
             </select>
           </label>
-
           <label className="dir-filter">
             <span>Theme</span>
             <select value={category} onChange={(e) => setCategory(e.target.value)}>
@@ -226,59 +230,100 @@ export function DirectoryBrowser({ directory, onPick }: Props): React.JSX.Elemen
               Clear filters
             </button>
           )}
+          <span className="dir-count">
+            {matches.length} of {all.length}
+            {codebase && !strictCodebase && ` · ${codebase} and everything derived from it`}
+          </span>
+        </div>
+      </div>
+
+      <div className="dir-body">
+        <div className="dir-table">
+          <div className="dir-head dir-grid">
+            <span />
+            {COLUMNS.map((c) =>
+              c.key ? (
+                <button
+                  key={c.label}
+                  className={`dir-th${c.align === 'end' ? ' dir-th-end' : ''}${
+                    sort === c.key ? ' dir-th-active' : ''
+                  }`}
+                  title={c.title}
+                  onClick={() => headerClick(c.key as SortKey)}
+                >
+                  {c.label}
+                  {sort === c.key && <span className="dir-caret">{flipped ? '▲' : '▼'}</span>}
+                </button>
+              ) : (
+                <span key={c.label} className="dir-th dir-th-end dir-th-static">
+                  {c.label}
+                </span>
+              )
+            )}
+          </div>
+
+          <div className="dir-list">
+            {matches.slice(0, limit).map((m) => (
+              <div
+                key={m.id}
+                className={`dir-row dir-grid${m.id === selectedId ? ' dir-row-selected' : ''}`}
+                onClick={() => setSelectedId(m.id)}
+                onDoubleClick={() => onPick(m)}
+                title="Click for details · double-click to fill the connect form"
+              >
+                <span className={`dir-dot dir-dot-${m.liveness}`} title={`${m.state} · ${m.liveness}`}>
+                  ●
+                </span>
+                <span className="dir-name">{m.name}</span>
+                <span className="dir-cb">
+                  {m.codebase && (
+                    <span
+                      className={`dir-tag${m.codebaseConflict ? ' dir-tag-warn' : ''}`}
+                      title={
+                        m.codebaseConflict
+                          ? `Sources disagree: ${m.codebaseRaw.join(', ')}`
+                          : m.codebaseRaw.join(', ')
+                      }
+                    >
+                      {m.codebase}
+                    </span>
+                  )}
+                </span>
+                <span className="dir-players" title={playersTitle(m)}>
+                  {displayPlayers(m) ?? ''}
+                </span>
+                <span className="dir-srcs" title={`Listed on: ${m.sources.join(', ')}`}>
+                  {m.sources.length}
+                  {m.protocols.some((p) => MAPPER_PROTOCOLS.includes(p)) && (
+                    <span className="dir-badge" title="Mapper tracks rooms exactly here">
+                      map
+                    </span>
+                  )}
+                </span>
+                <span className="dir-addr">
+                  {m.host}:{m.port}
+                </span>
+              </div>
+            ))}
+
+            {matches.length === 0 && (
+              <p className="dir-status">
+                Nothing matches. {liveOnly && 'Try turning off “Online only”'}
+                {liveOnly && activeFilters > 0 && ', or '}
+                {activeFilters > 0 && 'clear a filter'}.
+              </p>
+            )}
+
+            {matches.length > limit && (
+              <button className="dir-more" onClick={() => setLimit((l) => l + 300)}>
+                Show more ({matches.length - limit} remaining)
+              </button>
+            )}
+          </div>
         </div>
 
-        <p className="dir-count">
-          {matches.length} of {all.length} worlds
-          {codebase && !strictCodebase && ` · ${codebase} and everything derived from it`}
-        </p>
+        <DirectoryDetail mud={selected} onConnect={onPick} />
       </div>
-
-      <div className="dir-list">
-        {matches.slice(0, limit).map((m) => (
-          <div
-            key={m.id}
-            className="dir-row"
-            title="Click to fill the connect form"
-            onClick={() => onPick(m)}
-          >
-            <span className={`dir-dot dir-dot-${m.liveness}`} title={`${m.state} · ${m.liveness}`}>
-              ●
-            </span>
-            <span className="dir-name">{m.name}</span>
-            {m.codebase && (
-              <span className={`dir-tag${m.codebaseConflict ? ' dir-tag-warn' : ''}`}
-                    title={m.codebaseConflict
-                      ? `Sources disagree: ${m.codebaseRaw.join(', ')}`
-                      : m.codebaseRaw.join(', ')}>
-                {m.codebase}
-              </span>
-            )}
-            {displayPlayers(m) !== null && (
-              <span className="dir-players" title={playersTitle(m)}>
-                {displayPlayers(m)}
-              </span>
-            )}
-            {m.protocols.some((p) => MAPPER_PROTOCOLS.includes(p)) && (
-              <span className="dir-badge" title="Mapper tracks rooms exactly here">map</span>
-            )}
-            <span className="dir-addr">
-              {m.host}:{m.port}
-            </span>
-          </div>
-        ))}
-        {matches.length === 0 && (
-          <p className="dir-status">
-            Nothing matches. {liveOnly && 'Try turning off “Online only” — '}
-            {activeFilters > 0 && 'clearing a filter may help.'}
-          </p>
-        )}
-        {matches.length > limit && (
-          <button className="dir-more" onClick={() => setLimit((l) => l + 120)}>
-            Show more ({matches.length - limit} remaining)
-          </button>
-        )}
-      </div>
-    </>
+    </div>
   )
 }

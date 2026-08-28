@@ -137,6 +137,7 @@ export function ConnectScreen({ onConnect, onOpenHelp }: Props) {
   return (
     <div className="connect-screen">
       <div className="connect-panel">
+        <div className="connect-masthead">
         <h1 className="brand">Wayfarer</h1>
         <p className="tagline">
           Choose a world, or forge a path to a new one.{' '}
@@ -153,6 +154,7 @@ export function ConnectScreen({ onConnect, onOpenHelp }: Props) {
             New here? Read the feature guide →
           </a>
         </p>
+        </div>
 
         <div className="connect-columns">
           <div className="connect-col connect-col-left">
