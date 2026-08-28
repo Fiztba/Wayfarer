@@ -71,6 +71,11 @@ async function main(): Promise<void> {
   for (const r of mssp) push('mssp', r)
   for (const r of vineyard) push('vineyard', r)
   for (const r of mudverse) push('mudverse', r)
+  // Grapevine used to enrich by name only, because its listing pages carry no
+  // address. Now that each game's own page supplies one, it can create entries
+  // too — without which 56 online games were missing from the directory
+  // outright, NukeFire and its 62 players among them.
+  for (const r of grapevine) push('grapevine', r)
 
   process.stderr.write(
     `  tmc=${tmc.length} tms=${tms.length} mssp=${mssp.length} vineyard=${vineyard.length} ` +

@@ -29,12 +29,23 @@ const NOISE_LABELS = new Set([
   'www', 'mud', 'muds', 'play', 'server', 'game1'
 ])
 
-/** Collapse a MUD name to a comparison key. */
+/**
+ * Collapse a MUD name to a comparison key.
+ *
+ * The trailing game-type word has to come off whether or not a space precedes
+ * it. Sources write the same game both ways — Grapevine says "Luminari MUD"
+ * where the snapshot has "LuminariMUD" — and stripping only the spaced form
+ * left those as two different MUDs.
+ *
+ * The stem-length guard stops the strip from eating names that merely end in
+ * those letters: "Talmud" keeps its tail, "LuminariMUD" loses it.
+ */
 export function nameKey(name: string): string {
   let s = (name ?? '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim()
   s = s.replace(/^the\s+/, '')
-  s = s.replace(/\s+(mud|mush|muck|moo|mux)$/g, '')
-  return s.replace(/\s+/g, '')
+  s = s.replace(/\s+/g, '')
+  const stripped = s.replace(/(mud|mush|muck|moo|mux)$/, '')
+  return stripped.length >= 4 ? stripped : s
 }
 
 /** Distinctive labels in a hostname, minus TLDs and dynamic-DNS providers. */

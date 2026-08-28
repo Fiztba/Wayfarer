@@ -113,6 +113,20 @@ check('name keys ignore decoration', () => {
   assert.equal(nameKey('Doom Mud'), 'doom')
 })
 
+check('the trailing game-type word comes off with or without a space', () => {
+  // Grapevine writes "Luminari MUD" where the snapshot has "LuminariMUD";
+  // stripping only the spaced form left them as two different MUDs.
+  assert.equal(nameKey('Luminari MUD'), nameKey('LuminariMUD'))
+  assert.equal(nameKey('Arctic MUD'), nameKey('ArcticMUD'))
+  assert.equal(nameKey('Elendor MUSH'), nameKey('ElendorMUSH'))
+})
+
+check('a name that merely ends in those letters keeps its tail', () => {
+  // Guarded by stem length, so the strip cannot turn "Talmud" into "tal".
+  assert.equal(nameKey('Talmud'), 'talmud')
+  assert.equal(nameKey('Moo'), 'moo')
+})
+
 check('same name + same port merges across different domains', () => {
   // The real case: TMS has .org (dead), Vineyard has .com (up).
   const items: Candidate[] = [
