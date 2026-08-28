@@ -19,6 +19,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { politeText, decodeEntities } from '../lib/http.mts'
+import { parseSslValue } from '../lib/mssp.mts'
 
 const URL_LIST = 'https://tintin.mudhalla.net/protocols/mssp/mudlist.html'
 
@@ -44,8 +45,12 @@ export interface MsspRecord {
   areas: number | null
   website: string
   discord: string
-  /** Protocol flags as reported: ANSI, MCCP, MXP, MSP, SSL, UTF-8, ... */
+  /** Protocol flags as reported: ANSI, MCCP, MXP, MSP, UTF-8, ... */
   protocols: Record<string, string>
+  /** MSSP's SSL field is a PORT, not a flag. Null when none is offered. */
+  tlsPort: number | null
+  /** True when TLS is offered even if the MUD never stated which port. */
+  tlsOffered: boolean
   hiringBuilders: boolean
   hiringCoders: boolean
   payToPlay: boolean
@@ -53,7 +58,7 @@ export interface MsspRecord {
 
 const PROTOCOL_KEYS = [
   'ANSI', 'UTF-8', 'VT100', 'XTERM 256 COLORS', 'XTERM TRUE COLORS',
-  'MCCP', 'MCP', 'MSP', 'MXP', 'SSL', 'GMCP', 'MSDP'
+  'MCCP', 'MCP', 'MSP', 'MXP', 'GMCP', 'MSDP'
 ]
 
 const num = (s: string): number | null => {
@@ -109,6 +114,8 @@ export function parse(html: string): MsspRecord[] {
       protocols: Object.fromEntries(
         PROTOCOL_KEYS.filter((k) => m[k] !== undefined && m[k] !== '').map((k) => [k, m[k]])
       ),
+      tlsPort: parseSslValue(m.SSL).port,
+      tlsOffered: parseSslValue(m.SSL).offered,
       hiringBuilders: bool(m['HIRING BUILDERS'] ?? ''),
       hiringCoders: bool(m['HIRING CODERS'] ?? ''),
       payToPlay: bool(m['PAY TO PLAY'] ?? '')

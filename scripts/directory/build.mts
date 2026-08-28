@@ -15,6 +15,7 @@ import { fileURLToPath } from 'node:url'
 import { resolveMany } from './lib/codebases.mts'
 import { probeAll } from './lib/probe.mts'
 import { groupDuplicates, pickAddress, nameKey, type Candidate } from './lib/merge.mts'
+import { parseSslValue } from './lib/mssp.mts'
 import { livenessFor, type DirectoryMud, type DirectorySnapshot } from '../../src/shared/directory.ts'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
@@ -36,6 +37,8 @@ function load<T>(name: string): T[] {
   }
   return JSON.parse(fs.readFileSync(p, 'utf8')) as T[]
 }
+
+const NO_TLS_OFFER = { offered: false, port: null }
 
 const asNum = (v: unknown): number | null =>
   typeof v === 'number' && Number.isFinite(v) ? v : null
@@ -176,9 +179,24 @@ async function main(): Promise<void> {
     for (const g of group) {
       const p = g.protocols as Record<string, string> | undefined
       if (p) for (const [k, v] of Object.entries(p)) if (v === '1') protocols.add(k)
-      if (asNum(g.tlsPort)) protocols.add('SSL')
       for (const found of probes.get(`${g.host}:${g.port}`)?.protocols ?? []) protocols.add(found)
     }
+
+    // TLS is not a flag. MSSP defines SSL as the port number of the encrypted
+    // listener, and for all but one MUD in the corpus that port differs from
+    // the telnet one — Beutelland is 5678 plain and 5679 secure. Reading it as
+    // a boolean lost both most of the TLS-capable MUDs and every port.
+    const tls = [
+      // Whatever a source recorded directly (MUDVerse gives tls_port).
+      ...group.map((g) => parseSslValue(asNum(g.tlsPort))),
+      // The crawler's SSL field, now carried through as a port.
+      ...group.map((g) => (g.tlsOffered === true ? parseSslValue(asNum(g.tlsPort) ?? 1) : NO_TLS_OFFER)),
+      // And what the MUD told us itself during the handshake.
+      ...liveMssp.map((m) => parseSslValue(m.SSL))
+    ]
+    const tlsPort = tls.find((t) => t.port !== null)?.port ?? null
+    const tlsOffered = tls.some((t) => t.offered)
+    if (tlsOffered) protocols.add('SSL')
 
     const id = `${nameKey(name) || chosen.host}-${chosen.port}`
     const prev = prevById.get(id)
@@ -190,7 +208,8 @@ async function main(): Promise<void> {
       name,
       host: chosen.host,
       port: chosen.port,
-      tlsPort: first((g) => asNum(g.tlsPort)),
+      tlsPort,
+      tlsOffered,
       alternates: group
         .filter((g) => g.host !== chosen.host || g.port !== chosen.port)
         .map((g) => ({

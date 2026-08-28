@@ -190,6 +190,7 @@ export function parseBiglist(html: string): DirectoryMud[] {
       host,
       port,
       tlsPort: null,
+      tlsOffered: false,
       alternates: [],
       sources: ['tmc'],
       codebase: null,

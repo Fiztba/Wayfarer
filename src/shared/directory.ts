@@ -34,8 +34,21 @@ export interface DirectoryMud {
   name: string
   host: string
   port: number
-  /** Present when a source reports a distinct TLS port. */
+  /**
+   * The port to use for an encrypted connection, when one is known.
+   *
+   * Almost always different from `port` — Beutelland is 5678 plain and 5679
+   * secure, EternityMUD 23 and 992, The Last Outpost 4000 and 4443. Turning TLS
+   * on while keeping the plain port simply fails, so anything offering to
+   * connect securely has to switch the port too.
+   */
   tlsPort: number | null
+  /**
+   * True when the MUD offers TLS at all. Can be true with a null `tlsPort`:
+   * a few MUDs read MSSP's SSL field as a boolean and answer 1, which says
+   * "yes" without saying where.
+   */
+  tlsOffered: boolean
 
   /** Other addresses sources gave for this MUD, kept for diagnosis. */
   alternates: DirectoryAddress[]

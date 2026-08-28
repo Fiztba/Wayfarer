@@ -383,12 +383,17 @@ export function ConnectScreen({ onConnect, onOpenHelp }: Props) {
                 )}
                 <DirectoryBrowser
                   directory={directory}
-                  onPick={(m) => {
+                  onPick={(m, secure) => {
+                    // TLS lives on its own port on all but one MUD in the
+                    // corpus, so the flag and the port have to move together.
+                    // Ticking TLS while leaving the plain port in place is a
+                    // connection that cannot succeed.
+                    const useTls = Boolean(secure && m.tlsPort !== null)
                     setEditingId(null)
                     setName(m.name)
                     setHost(m.host)
-                    setPort(String(m.port))
-                    setTls(m.tlsPort !== null)
+                    setPort(String(useTls ? m.tlsPort : m.port))
+                    setTls(useTls)
                     formRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
                   }}
                 />

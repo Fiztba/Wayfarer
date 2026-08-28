@@ -15,7 +15,8 @@ import type { DirectoryMud } from '../../../shared/types'
 
 interface Props {
   mud: DirectoryMud | null
-  onConnect(mud: DirectoryMud): void
+  /** `secure` fills the encrypted port rather than the plain one. */
+  onConnect(mud: DirectoryMud, secure?: boolean): void
 }
 
 const SOURCE_NAMES: Record<string, string> = {
@@ -81,9 +82,22 @@ export function DirectoryDetail({ mud, onConnect }: Props): React.JSX.Element {
 
       {m.tagline && <p className="dd-tagline">{m.tagline}</p>}
 
-      <button className="dd-connect" onClick={() => onConnect(m)}>
-        Use this world
-      </button>
+      <div className="dd-actions">
+        <button className="dd-connect" onClick={() => onConnect(m)}>
+          Use this world
+        </button>
+        {/* A separate action, because TLS is a different port: offering it as a
+            checkbox on the plain address would just fail to connect. */}
+        {m.tlsPort !== null && (
+          <button
+            className="dd-connect dd-connect-tls"
+            title={`Encrypted connection on port ${m.tlsPort}`}
+            onClick={() => onConnect(m, true)}
+          >
+            Use over TLS · {m.tlsPort}
+          </button>
+        )}
+      </div>
 
       <div className="dd-rows">
         {m.codebase && (
@@ -97,6 +111,19 @@ export function DirectoryDetail({ mud, onConnect }: Props): React.JSX.Element {
             )}
           </Row>
         )}
+
+        <Row label="Encrypted">
+          {m.tlsPort !== null ? (
+            <>
+              yes, on port <strong>{m.tlsPort}</strong>
+              {m.tlsPort !== m.port && <span className="dd-unknown"> (plain is {m.port})</span>}
+            </>
+          ) : m.tlsOffered ? (
+            <>offered, but the port was not stated</>
+          ) : (
+            <span className="dd-unknown">not offered</span>
+          )}
+        </Row>
 
         {m.protocols.length > 0 && (
           <Row label="Protocols">

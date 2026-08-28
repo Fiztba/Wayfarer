@@ -11,6 +11,7 @@ import assert from 'node:assert/strict'
 import { resolveCodebase, resolveMany } from '../scripts/directory/lib/codebases.mts'
 import { nameKey, groupDuplicates, pickAddress, type Candidate } from '../scripts/directory/lib/merge.mts'
 import { consumeTelnet, type ProbeResult } from '../scripts/directory/lib/probe.mts'
+import { parseSslValue } from '../scripts/directory/lib/mssp.mts'
 import { livenessFor, type DirectoryMud } from '../src/shared/directory.ts'
 import { SORTS, displayPlayers, playersTitle } from '../src/renderer/src/components/directorySort.ts'
 
@@ -301,6 +302,43 @@ check('an absent rank sorts last, not as rank zero', () => {
   const r = (name: string, rank: number | null): DirectoryMud => ({ name, rank } as DirectoryMud)
   const sorted = [r('unranked', null), r('second', 2), r('first', 1)].sort(SORTS.rank)
   assert.deepEqual(sorted.map((m) => m.name), ['first', 'second', 'unranked'])
+})
+
+// ---- TLS ----------------------------------------------------------------
+// Raised by SlySven (Mudlet): whether a connection is secured affects which
+// port to show. MSSP defines SSL as the port number of the encrypted listener,
+// and we had been reading it as a boolean.
+check('an SSL value is a port, not a flag', () => {
+  // Real values from the crawler.
+  assert.deepEqual(parseSslValue('4443'), { offered: true, port: 4443 })
+  assert.deepEqual(parseSslValue('992'), { offered: true, port: 992 })
+  assert.deepEqual(parseSslValue('5679'), { offered: true, port: 5679 })
+})
+
+check('zero and -1 mean no encrypted connection', () => {
+  for (const v of ['0', '-1', '', null, undefined, 'nonsense']) {
+    assert.equal(parseSslValue(v).offered, false, String(v))
+  }
+})
+
+check('"1" means yes without saying where', () => {
+  // Four MUDs in the corpus read the spec as a boolean. Port 1 is a privileged
+  // system port; taking it literally would produce a connection to nowhere.
+  assert.deepEqual(parseSslValue('1'), { offered: true, port: null })
+})
+
+check('a port outside the valid range is not a port', () => {
+  assert.equal(parseSslValue('70000').offered, false)
+})
+
+check('reading SSL as a boolean loses most TLS-capable MUDs', () => {
+  // The regression this replaced: `v === '1'` matched 4 of the 16 that offer
+  // encryption, and discarded every port.
+  const corpus = ['0', '1', '4443', '992', '5679', '0', '1', '3334']
+  const oldWay = corpus.filter((v) => v === '1').length
+  const nowWay = corpus.filter((v) => parseSslValue(v).offered).length
+  assert.equal(oldWay, 2)
+  assert.equal(nowWay, 6)
 })
 
 console.log(`directory-smoke: ${passed} checks passed`)

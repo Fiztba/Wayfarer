@@ -25,7 +25,7 @@ import { COLUMNS, compareBy, displayPlayers, playersTitle, type SortKey } from '
 
 interface Props {
   directory: DirectoryResult
-  onPick(mud: DirectoryMud): void
+  onPick(mud: DirectoryMud, secure?: boolean): void
 }
 
 const MAPPER_PROTOCOLS = ['GMCP', 'MSDP']
@@ -105,7 +105,7 @@ export function DirectoryBrowser({ directory, onPick }: Props): React.JSX.Elemen
       // that never advertised GMCP is not a MUD where the mapper is known to
       // work, so silence has to read as "no" here.
       if (needsMapper && !m.protocols.some((p) => MAPPER_PROTOCOLS.includes(p))) return false
-      if (needsTls && !m.protocols.includes('SSL') && m.tlsPort === null) return false
+      if (needsTls && !m.tlsOffered) return false
 
       // Matches the live count, so this never selects a MUD whose row shows 0.
       if (hasPlayers && !((m.players ?? 0) > 0)) return false
@@ -297,6 +297,18 @@ export function DirectoryBrowser({ directory, onPick }: Props): React.JSX.Elemen
                   {m.protocols.some((p) => MAPPER_PROTOCOLS.includes(p)) && (
                     <span className="dir-badge" title="Mapper tracks rooms exactly here">
                       map
+                    </span>
+                  )}
+                  {m.tlsOffered && (
+                    <span
+                      className="dir-badge dir-badge-tls"
+                      title={
+                        m.tlsPort !== null
+                          ? `Encrypted connection on port ${m.tlsPort}`
+                          : 'Offers an encrypted connection'
+                      }
+                    >
+                      TLS
                     </span>
                   )}
                 </span>

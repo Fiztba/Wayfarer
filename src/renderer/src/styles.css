@@ -2084,3 +2084,32 @@ body,
   color: var(--fg-dim);
   font-style: italic;
 }
+
+.dd-actions {
+  display: flex;
+  gap: 6px;
+  margin: 4px 0 12px;
+}
+
+.dd-actions .dd-connect {
+  margin: 0;
+}
+
+/* The secure option is offered separately rather than as a checkbox, because
+   choosing it changes the port as well as the flag. */
+.dd-connect-tls {
+  flex: none;
+  background: none;
+  border: 1px solid var(--accent);
+  color: var(--accent);
+  white-space: nowrap;
+}
+
+.dd-connect-tls:hover {
+  background: var(--bg-raised);
+  filter: none;
+}
+
+.dir-badge-tls {
+  color: #98c379;
+}
