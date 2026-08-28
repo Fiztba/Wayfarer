@@ -426,6 +426,46 @@ body,
   padding: 48px 0 64px;
 }
 
+/* ---- Wide layout ----------------------------------------------------------
+   Below the breakpoint everything stacks exactly as it always has, so laptops
+   and the pop-out window are untouched. Above it the screen splits: your own
+   worlds and the connect form on the left, where they are read first and used
+   most, and the directory on the right, where it can actually breathe.
+
+   The panel widens but is still capped. The complaint was a 560px column on a
+   3440px display, not the existence of margins — a list row stretched the full
+   width of an ultrawide puts the address so far from the name that the row
+   stops being scannable. */
+@media (min-width: 1180px) {
+  .connect-panel {
+    width: min(1800px, 94%);
+  }
+
+  .connect-columns {
+    display: grid;
+    grid-template-columns: 380px minmax(0, 1fr);
+    gap: 44px;
+    align-items: start;
+  }
+
+  /* The left rail is short and the directory is tall; without this the rail's
+     headings would drift to the vertical middle of the row. */
+  .connect-col {
+    min-width: 0;
+  }
+
+  .connect-col-left > h2:first-child,
+  .connect-col-right > h2:first-child {
+    margin-top: 0;
+  }
+
+  /* The point of the exercise: ~25 rows visible instead of 8. Capped in vh so
+     the list scrolls inside itself and the page as a whole does not. */
+  .dir-list {
+    max-height: min(74vh, 980px);
+  }
+}
+
 .brand {
   font-size: 42px;
   font-weight: 300;
