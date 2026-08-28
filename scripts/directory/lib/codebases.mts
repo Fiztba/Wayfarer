@@ -205,7 +205,9 @@ export interface Verdict extends Resolved {
  * tree still matches the MUD.
  */
 export function resolveMany(raws: (string | null | undefined)[]): Verdict {
-  const raw = raws.filter((r): r is string => Boolean(r && r.trim()))
+  // Several sources often supply the same string; the raw list is surfaced in
+  // the UI as "what the sources actually said", so repeats are just noise.
+  const raw = [...new Set(raws.filter((r): r is string => Boolean(r && r.trim())).map((r) => r.trim()))]
   const hits = raw.map(resolveCodebase).filter((r) => r.codebase)
   if (hits.length === 0) {
     return { codebase: null, family: null, ancestry: [], raw, candidates: [], conflict: false }

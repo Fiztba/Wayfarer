@@ -12,10 +12,12 @@ import type { DirectoryMud, DirectoryResult } from '../../../shared/types'
  * levels of the tree — The Builder Academy is filed as plain CircleMUD by its
  * own host. Strict mode narrows to exactly the chosen label.
  *
- * Metadata filters are tri-state, not two-state. Most fields are populated on a
- * minority of MUDs, so a filter that silently dropped every MUD with no genre
- * recorded would hide most of the list and look like a bug. "Include unknown"
- * is on by default and each control shows how many MUDs it actually knows about.
+ * Metadata filters are tri-state, not two-state. Asking for "Fantasy" should
+ * return the MUDs tagged Fantasy, not those plus every MUD that never recorded
+ * a genre — so unrecorded values are excluded by default. But coverage varies
+ * enormously between fields, and a filter quietly hiding two thirds of the list
+ * reads as a bug, so every control shows how many MUDs it actually knows about
+ * and "Include unrecorded" widens the net when the data looks thin.
  */
 
 interface Props {
@@ -33,7 +35,7 @@ export function DirectoryBrowser({ directory, onPick }: Props): React.JSX.Elemen
   const [strictCodebase, setStrictCodebase] = useState(false)
   const [category, setCategory] = useState('')
   const [liveOnly, setLiveOnly] = useState(true)
-  const [includeUnknown, setIncludeUnknown] = useState(true)
+  const [includeUnknown, setIncludeUnknown] = useState(false)
   const [needsMapper, setNeedsMapper] = useState(false)
   const [needsTls, setNeedsTls] = useState(false)
   const [hasPlayers, setHasPlayers] = useState(false)
@@ -128,7 +130,7 @@ export function DirectoryBrowser({ directory, onPick }: Props): React.JSX.Elemen
 
   const reset = (): void => {
     setSearch(''); setCodebase(''); setCategory(''); setStrictCodebase(false)
-    setLiveOnly(true); setIncludeUnknown(true); setNeedsMapper(false)
+    setLiveOnly(true); setIncludeUnknown(false); setNeedsMapper(false)
     setNeedsTls(false); setHasPlayers(false); setFreeOnly(false); setHiring(false)
     setSort('name'); setLimit(60)
   }
@@ -219,7 +221,7 @@ export function DirectoryBrowser({ directory, onPick }: Props): React.JSX.Elemen
             </label>
           )}
           {(codebase || category) && (
-            <label title="Most MUDs never reported this field; excluding them hides most of the list">
+            <label title="Also show MUDs that never recorded this field">
               <input
                 type="checkbox"
                 checked={includeUnknown}

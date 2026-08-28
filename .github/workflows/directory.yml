@@ -35,6 +35,15 @@ jobs:
   refresh:
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    env:
+      # Job level, not step level: a step's own `env` block is not in scope when
+      # that step's `if:` is evaluated, so gating the MUDVerse step on a
+      # step-level var would skip it forever, silently, even once the secret
+      # exists.
+      MUDVERSE_API_KEY: ${{ secrets.MUDVERSE_API_KEY }}
+      # dns.lookup runs on libuv's thread pool, which defaults to 4. The sweep
+      # is DNS-bound on dead hosts, and half these listings are dead.
+      UV_THREADPOOL_SIZE: 64
     steps:
       - uses: actions/checkout@v4
 
@@ -73,8 +82,6 @@ jobs:
       - name: Refresh MUDVerse
         continue-on-error: true
         if: ${{ env.MUDVERSE_API_KEY != '' }}
-        env:
-          MUDVERSE_API_KEY: ${{ secrets.MUDVERSE_API_KEY }}
         run: npm run directory:mudverse
 
       - name: Build snapshot
