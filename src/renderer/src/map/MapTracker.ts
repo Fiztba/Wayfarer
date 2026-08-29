@@ -11,7 +11,7 @@
  * "I am here" or walks somewhere recognizable). It never guesses into the map.
  */
 import type { MapModel } from './MapModel.ts'
-import { RoomCapture, isMoveFailure, isClosedDoorFailure } from './capture.ts'
+import { RoomCapture, closedDoorName, isMoveFailure, isClosedDoorFailure } from './capture.ts'
 import {
   DIR_DELTA,
   normalizeRoomName,
@@ -38,8 +38,9 @@ const PENDING_TTL_MS = 15_000
 export interface TrackerHost {
   /** Informational output to the session (system-style line). */
   info(text: string): void
-  /** A movement command failed; closedDoor = blocked by a shut door. */
-  onMoveFailed?(dir: Direction, closedDoor: boolean): void
+  /** A movement command failed; closedDoor = blocked by a shut door, and
+   *  doorName is what the MUD called it when it said so. */
+  onMoveFailed?(dir: Direction, closedDoor: boolean, doorName?: string): void
 }
 
 export class MapTracker implements TrackerControl {
@@ -151,11 +152,14 @@ export class MapTracker implements TrackerControl {
       const failed = this.pending.shift()
       if (failed) {
         const closedDoor = isClosedDoorFailure(plain)
+        const named = closedDoor ? closedDoorName(plain) : null
         if (closedDoor && this.currentRoomId && !this.lost) {
-          // Door in the way: record it (and a stub exit) without moving.
-          this.model.setDoor(this.currentRoomId, failed.dir, true)
+          // Door in the way: record it (and a stub exit) without moving. The
+          // refusal usually names the thing, and that name is what has to be
+          // opened -- "grate", not "door".
+          this.model.setDoor(this.currentRoomId, failed.dir, true, named ?? undefined)
         }
-        this.host.onMoveFailed?.(failed.dir, closedDoor)
+        this.host.onMoveFailed?.(failed.dir, closedDoor, named ?? undefined)
       }
       return
     }
@@ -311,45 +315,53 @@ export class MapTracker implements TrackerControl {
         return
       }
       // Unmapped direction from a known room.
-      if (this.mode === 'map') {
-        // Re-entry check: walking into a room we already know via an exit we
-        // hadn't traversed yet. Identical room names are normal, so arrival
-        // context (back-links, then grid position) disambiguates; only a
-        // still-unresolvable match creates a new room. The reverse link is
-        // only added when the return path is unclaimed or already ours:
-        // `s` from A landing in B does NOT imply `n` from B returns to A.
-        const candidates = this.model.findByFingerprint(det.name, dirs)
-        const known = this.pickArrival(candidates, current, move.dir)
-        if (known) {
+      //
+      // Re-entry check: walking into a room we already know via an exit we
+      // hadn't traversed yet. Identical room names are normal, so arrival
+      // context disambiguates; only a still-unresolvable match creates.
+      //
+      // Identification runs in EVERY mode. Adopting a room already on the map
+      // is identification, not creation -- the rule onServerRoom already
+      // states. Follow mode used to go lost here without even looking, on
+      // rooms it knew perfectly well.
+      const candidates = this.model.findByFingerprint(det.name, dirs)
+      const known = this.pickArrival(candidates, current, move.dir)
+      if (known) {
+        if (this.mode === 'map') {
+          // The reverse link is only added when the return path is unclaimed
+          // or already ours: `s` from A landing in B does NOT imply `n` from
+          // B returns to A.
           const back = this.model.exitOf(known, OPPOSITE[move.dir])
           const twoWay = back !== undefined && (back.to === null || back.to === current.id)
           this.model.linkRooms(current.id, move.dir, known.id, twoWay)
-          this.currentRoomId = known.id
           this.refreshExits(known, det)
           this.syncName(known, det)
-          this.notify()
-          return
         }
-        if (candidates.length > 0) {
-          this.host.info(
-            `Mapper: created a new "${det.name}" — ${candidates.length + 1} rooms with identical name/exits will exist. If this is really one of them, merge (right-click) or use 🧹.`
-          )
-        }
-        const pos = this.model.placeFrom(current, move.dir)
-        const room = this.model.createRoom({
-          name: det.name,
-          ...pos,
-          zoneId: this.zoneForNewRoom(current)
-        })
-        this.applyDetectedExits(room, det)
-        // Two-way link only if the new room reports the return exit.
-        const hasReturn = dirs.includes(OPPOSITE[move.dir])
-        this.model.linkRooms(current.id, move.dir, room.id, hasReturn)
-        this.currentRoomId = room.id
+        this.currentRoomId = known.id
         this.notify()
-      } else {
-        this.markLost(`moved ${move.dir} into unmapped territory.`)
+        return
       }
+      if (this.mode !== 'map') {
+        this.markLost(`moved ${move.dir} into unmapped territory.`)
+        return
+      }
+      if (candidates.length > 0) {
+        this.host.info(
+          `Mapper: created a new "${det.name}" — ${candidates.length + 1} rooms with identical name/exits will exist. If this is really one of them, merge (right-click) or use 🧹.`
+        )
+      }
+      const pos = this.model.placeFrom(current, move.dir)
+      const room = this.model.createRoom({
+        name: det.name,
+        ...pos,
+        zoneId: this.zoneForNewRoom(current)
+      })
+      this.applyDetectedExits(room, det)
+      // Two-way link only if the new room reports the return exit.
+      const hasReturn = dirs.includes(OPPOSITE[move.dir])
+      this.model.linkRooms(current.id, move.dir, room.id, hasReturn)
+      this.currentRoomId = room.id
+      this.notify()
       return
     }
 
@@ -431,6 +443,36 @@ export class MapTracker implements TrackerControl {
         c.z === current.z + dz
     )
     if (adjacent.length === 1) return adjacent[0]
+
+    // 3. exactly one NEIGHBOURING candidate, on the side we moved toward,
+    //    holding an unclaimed exit back the way we came. A passage first
+    //    walked from its far side has no back-link yet, and greedy placement
+    //    may have drawn its room a cell off the one `dir` points at, so
+    //    neither test above can fire -- that is how walking `nw` out of "A
+    //    Moldy Tunnel" into the already-mapped "A Bright Tunnel" minted a twin
+    //    instead of recognising it.
+    //
+    //    Both guards are load-bearing, and each has a test. Requiring the
+    //    candidate to sit on the side we walked toward stops a twin BEHIND us
+    //    capturing the arrival. Requiring it to be adjacent stops a twin
+    //    further along our own heading capturing it -- that is the gap case,
+    //    where the honest reading is an unmapped room in between, so it must
+    //    still create. Horizontal moves only; up/down displacement has no
+    //    equivalent and exact adjacency already covers it.
+    const facing =
+      dz !== 0
+        ? []
+        : others.filter((c) => {
+            if (c.zoneId !== current.zoneId || c.z !== current.z) return false
+            const ox = c.x - current.x
+            const oy = c.y - current.y
+            if (Math.max(Math.abs(ox), Math.abs(oy)) !== 1) return false
+            if (ox * dx + oy * dy <= 0) return false
+            const back = this.model.exitOf(c, OPPOSITE[dir])
+            return back !== undefined && back.to === null
+          })
+    if (facing.length === 1) return facing[0]
+
     return null
   }
 

@@ -191,10 +191,33 @@ const MOVE_FAIL_PATTERNS =
 /** Closed-door subset of the failures (marks a door on the attempted exit). */
 const DOOR_FAIL_PATTERNS = /seems to be closed|is closed\.?$|the .{1,30} is closed/i
 
+/**
+ * The noun the MUD used for the thing in the way. A door is only called "door"
+ * on some MUDs — Dawn of Demise calls the one out of Knat's town square a
+ * grate, so `open door down` answers "You see no door here." and the auto-open
+ * gives up on a door that was never locked. The refusal names it for us.
+ */
+const DOOR_NAME_PATTERNS = [
+  /^\s*the\s+([a-z][a-z' -]{0,28}?)\s+(?:seems to be|appears to be|is)\s+(?:closed|shut)/i,
+  /^\s*a\s+([a-z][a-z' -]{0,28}?)\s+(?:blocks|bars)\s+your\s+way/i
+]
+
 export function isMoveFailure(line: string): boolean {
   return MOVE_FAIL_PATTERNS.test(line)
 }
 
 export function isClosedDoorFailure(line: string): boolean {
   return DOOR_FAIL_PATTERNS.test(line)
+}
+
+/** Name of the closed thing, lowercased, or null if the line doesn't say. */
+export function closedDoorName(line: string): string | null {
+  for (const pattern of DOOR_NAME_PATTERNS) {
+    const m = pattern.exec(line)
+    if (m) {
+      const name = m[1].trim().toLowerCase()
+      if (name.length > 0) return name
+    }
+  }
+  return null
 }

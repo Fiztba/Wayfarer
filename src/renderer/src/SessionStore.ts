@@ -210,7 +210,8 @@ export class SessionStore {
     const model = await modelPromise
     const tracker = new MapTracker(model, {
       info: (text) => this.addSystemLine(text, 'system'),
-      onMoveFailed: (dir, closedDoor) => this.handleMoveFailed(dir, closedDoor)
+      onMoveFailed: (dir, closedDoor, doorName) =>
+        this.handleMoveFailed(dir, closedDoor, doorName)
     })
     this.walker = new Walker(tracker, {
       transmit: (command) => this.transmitRaw(command),
@@ -241,27 +242,43 @@ export class SessionStore {
    * open it and retry the move once. Anything else — or a door that stays
    * shut — halts any active walk with the reason.
    */
-  private lastAutoOpen: { dir: Direction; at: number } | null = null
+  private lastAutoOpen: { dir: Direction; at: number; tries: number } | null = null
 
-  private handleMoveFailed(dir: Direction, closedDoor: boolean): void {
+  private handleMoveFailed(dir: Direction, closedDoor: boolean, doorName?: string): void {
     if (!closedDoor) {
       this.walker?.notifyStepFailed(`the way ${DIR_FULL[dir]} is blocked`)
       return
     }
     const now = Date.now()
-    if (this.lastAutoOpen && this.lastAutoOpen.dir === dir && now - this.lastAutoOpen.at < 4000) {
-      // We already tried once — probably locked.
+    const tried =
+      this.lastAutoOpen && this.lastAutoOpen.dir === dir && now - this.lastAutoOpen.at < 4000
+        ? this.lastAutoOpen.tries
+        : 0
+    if (tried >= 2) {
+      // Both forms bounced — genuinely locked, or named something we can't guess.
       this.lastAutoOpen = null
       this.addSystemLine(`Auto-open ${DIR_FULL[dir]} didn't work — the door may be locked.`, 'error')
       this.walker?.notifyStepFailed(`the door ${DIR_FULL[dir]} won't open`)
       return
     }
-    this.lastAutoOpen = { dir, at: now }
     const room = this.tracker?.currentRoom
     const exit = room && this.mapModel ? this.mapModel.exitOf(room, dir) : undefined
-    const doorName = exit?.doorName?.trim() || 'door'
-    this.addSystemLine(`Blocked by a door ${DIR_FULL[dir]} — opening it and retrying.`, 'system')
-    this.transmitRaw(`open ${doorName} ${DIR_FULL[dir]}`)
+    const name = doorName?.trim() || exit?.doorName?.trim()
+    // Bare direction first: `open down` needs no noun and is accepted across
+    // Diku/SMAUG derivatives, where `open door down` fails outright on any MUD
+    // that calls the thing something else — a grate, a gate, a hatch. Only if
+    // that bounces do we name it, by which point the refusal has usually said
+    // what it is.
+    const command =
+      tried === 0 ? `open ${DIR_FULL[dir]}` : `open ${name || 'door'} ${DIR_FULL[dir]}`
+    this.lastAutoOpen = { dir, at: now, tries: tried + 1 }
+    this.addSystemLine(
+      tried === 0
+        ? `Blocked by a door ${DIR_FULL[dir]} — opening it and retrying.`
+        : `Still shut — trying "${command}".`,
+      'system'
+    )
+    this.transmitRaw(command)
     this.transmitRaw(dir)
   }
 

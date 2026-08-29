@@ -19,8 +19,14 @@ export function exitCommand(exit: MapExit): string {
 
 export function exitOpenCommand(exit: MapExit): string | undefined {
   if (!exit.door) return undefined
-  const name = exit.doorName?.trim() || 'door'
-  return exit.dir ? `open ${name} ${DIR_FULL[exit.dir as Direction]}` : `open ${name}`
+  const name = exit.doorName?.trim()
+  // No noun unless we actually learned one: `open down` works where
+  // `open door down` answers "You see no door here."
+  if (exit.dir) {
+    const dir = DIR_FULL[exit.dir as Direction]
+    return name ? `open ${name} ${dir}` : `open ${dir}`
+  }
+  return `open ${name || 'door'}`
 }
 
 /** Shortest path fromId → toId, or null if unreachable. */

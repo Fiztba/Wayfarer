@@ -2,7 +2,7 @@
  * Headless tests for the mapper core: capture, model, tracker, pathfinder.
  * Run with: node --experimental-strip-types test/map-smoke.mts
  */
-import { parseExitsLine, RoomCapture } from '../src/renderer/src/map/capture.ts'
+import { closedDoorName, parseExitsLine, RoomCapture } from '../src/renderer/src/map/capture.ts'
 import { MapModel } from '../src/renderer/src/map/MapModel.ts'
 import {
   MODEL_ACTION_METHODS,
@@ -10,10 +10,10 @@ import {
   type MapAction
 } from '../src/renderer/src/map/RemoteMap.ts'
 import { MapTracker } from '../src/renderer/src/map/MapTracker.ts'
-import { findPath } from '../src/renderer/src/map/Pathfinder.ts'
+import { exitOpenCommand, findPath } from '../src/renderer/src/map/Pathfinder.ts'
 import { Walker } from '../src/renderer/src/map/Walker.ts'
 import { emptyMap, stripPromptPrefix } from '../src/renderer/src/map/types.ts'
-import { bowControl, bowMidpoint, isObstructed } from '../src/renderer/src/map/geometry.ts'
+import { cubicPoint, cubicTangent, isObstructed, linkPath } from '../src/renderer/src/map/geometry.ts'
 import { AnsiParser } from '../src/renderer/src/ansi.ts'
 
 let failures = 0
@@ -852,85 +852,186 @@ function makeWorld() {
   )
 }
 
-// ---- link geometry: bowing around rooms a straight line would cross ----
+// ---- displaced diagonal neighbour: recognise it, do not mint a twin ----
+// Straight from Dawn of Demise: "A Moldy Tunnel" has an unwalked `nw`, and the
+// already-mapped "A Bright Tunnel" holds the matching unwalked `se` -- but
+// greedy placement drew it due WEST, so neither the back-link nor the exact
+// cell test fires and the mapper created a second Bright Tunnel.
+{
+  const { model, tracker, seeRoom } = makeWorld()
+  const moldy = model.createRoom({
+    name: 'A Moldy Tunnel', x: 0, y: 0, z: 0,
+    exits: [
+      { dir: 'n', to: null, door: false },
+      { dir: 's', to: null, door: false },
+      { dir: 'nw', to: null, door: false }
+    ]
+  })
+  const bright = model.createRoom({
+    name: 'A Bright Tunnel', x: -1, y: 0, z: 0, // drawn WEST, not north-west
+    exits: [
+      { dir: 'w', to: null, door: false },
+      { dir: 'nw', to: null, door: false },
+      { dir: 'se', to: null, door: false } // unclaimed, faces back at moldy
+    ]
+  })
+  const before = Object.keys(model.map.rooms).length
+  tracker.setCurrentRoom(moldy.id)
+  tracker.onCommand('nw')
+  seeRoom('A Bright Tunnel', '[ Exits: w nw se ]')
+  check('displaced: recognised, no twin', Object.keys(model.map.rooms).length, before)
+  check('displaced: standing in the known room', tracker.currentRoomId, bright.id)
+  check('displaced: link written', model.exitOf(model.room(moldy.id)!, 'nw')?.to, bright.id)
+  check('displaced: not lost', tracker.lost, false)
+}
+
+// ---- follow mode identifies known rooms; it just never creates ----
+{
+  const { model, tracker, seeRoom, infos } = makeWorld()
+  const moldy = model.createRoom({
+    name: 'A Moldy Tunnel', x: 0, y: 0, z: 0,
+    exits: [{ dir: 'nw', to: null, door: false }]
+  })
+  const bright = model.createRoom({
+    name: 'A Bright Tunnel', x: -1, y: 0, z: 0,
+    exits: [
+      { dir: 'w', to: null, door: false },
+      { dir: 'se', to: null, door: false }
+    ]
+  })
+  const before = Object.keys(model.map.rooms).length
+  tracker.setCurrentRoom(moldy.id)
+  tracker.setMode('follow')
+  tracker.onCommand('nw')
+  seeRoom('A Bright Tunnel', '[ Exits: w se ]')
+  check('follow: identified instead of going lost', tracker.currentRoomId, bright.id)
+  check('follow: not lost', tracker.lost, false)
+  check('follow: created nothing', Object.keys(model.map.rooms).length, before)
+  check('follow: wrote no link', model.exitOf(model.room(moldy.id)!, 'nw')?.to, null)
+  check('follow: said nothing about being lost',
+    infos.some((t) => t.startsWith('Mapper lost')), false)
+}
+
+// ---- follow mode still goes lost in genuinely unknown territory ----
+{
+  const { model, tracker, seeRoom } = makeWorld()
+  const start = model.createRoom({
+    name: 'A Moldy Tunnel', x: 0, y: 0, z: 0,
+    exits: [{ dir: 'n', to: null, door: false }]
+  })
+  tracker.setCurrentRoom(start.id)
+  tracker.setMode('follow')
+  tracker.onCommand('n')
+  seeRoom('Somewhere Entirely New', '[ Exits: s ]')
+  check('follow: unknown territory is still lost', tracker.lost, true)
+}
+
+// ---- the MUD names the door for us ----
+check('door name: grate', closedDoorName('The grate is closed.'), 'grate')
+check('door name: multiword', closedDoorName('The iron gate seems to be closed.'), 'iron gate')
+check('door name: plain door', closedDoorName('The door is closed.'), 'door')
+check('door name: not a door line', closedDoorName('Bob says: the grate is closed.'), null)
+check('door name: prose is not a name', closedDoorName('Alas, you cannot go that way.'), null)
+
+// ---- opening a door names it only once we know the noun ----
+check('open cmd: bare direction when unnamed',
+  exitOpenCommand({ dir: 'd', to: null, door: true }), 'open down')
+check('open cmd: learned noun once known',
+  exitOpenCommand({ dir: 'd', to: null, door: true, doorName: 'grate' }), 'open grate down')
+check('open cmd: no door, no command',
+  exitOpenCommand({ dir: 'd', to: null, door: false }), undefined)
+
+// ---- link geometry: obstruction, direction fidelity, long spans ----
 {
   const occ = (cells: Array<[number, number]>) => {
     const set = new Set(cells.map(([x, y]) => `${x},${y}`))
     return (x: number, y: number): boolean => set.has(`${x},${y}`)
   }
+  const empty = occ([])
+  const r3 = (n: number) => Math.round(n * 1000) / 1000
 
+  // ---- obstruction ----
   // The reported case: c(0,1) linked east to e(2,1) with d(1,1) between them,
   // d itself connected only north. Drawn straight, the c–e line is painted
   // over by d's opaque box and survives as "c–d" plus "d–e".
   const cde = occ([[0, 1], [1, 1], [2, 1]])
-  check(
-    'geometry: link across an occupied cell is obstructed',
-    isObstructed({ x: 0, y: 1 }, { x: 2, y: 1 }, cde),
-    true
-  )
-  const bow = bowControl({ x: 0, y: 1 }, { x: 2, y: 1 }, cde)
-  check('geometry: obstructed link is bowed', bow !== null, true)
-  check('geometry: bow leaves the chord', bow !== null && bow.y !== 1, true)
+  check('geometry: link across an occupied cell is obstructed',
+    isObstructed({ x: 0, y: 1 }, { x: 2, y: 1 }, cde), true)
+  const bowed = linkPath({ x: 0, y: 1 }, { x: 2, y: 1 }, 'e', cde)
+  check('geometry: obstructed link is bowed', bowed.bowed, true)
+  check('geometry: bow leaves the chord', bowed.c1.y !== 1 && bowed.c2.y !== 1, true)
 
-  // Adjacent rooms are never bowed.
-  check(
-    'geometry: adjacent link stays straight',
-    bowControl({ x: 0, y: 0 }, { x: 1, y: 0 }, occ([[0, 0], [1, 0]])),
-    null
-  )
+  check('geometry: adjacent link is not bowed',
+    linkPath({ x: 0, y: 0 }, { x: 1, y: 0 }, 'e', occ([[0, 0], [1, 0]])).bowed, false)
 
-  // A two-cell span over EMPTY ground stays straight — that gap is unmapped
-  // map, not an obstruction, and bowing it would imply something is there.
-  check(
-    'geometry: two-cell span over empty ground stays straight',
-    bowControl({ x: 0, y: 0 }, { x: 2, y: 0 }, occ([[0, 0], [2, 0]])),
-    null
-  )
+  // A two-cell span over EMPTY ground is not an obstruction — that gap is
+  // unmapped ground, and bowing it would imply something is hiding there.
+  check('geometry: two-cell span over empty ground is not bowed',
+    linkPath({ x: 0, y: 0 }, { x: 2, y: 0 }, 'e', occ([[0, 0], [2, 0]])).bowed, false)
 
-  // A perpendicular-nudged destination: the line threads between (1,0) and
-  // (1,1) and clips neither box, so it needs no bow.
-  check(
-    'geometry: nudged span threads between two rooms',
-    isObstructed({ x: 0, y: 0 }, { x: 2, y: 1 }, occ([[0, 0], [1, 0], [1, 1], [2, 1]])),
-    false
-  )
-  // ...but a room sitting squarely on that diagonal does obstruct it.
-  check(
-    'geometry: nudged span blocked by a room on the line',
-    isObstructed({ x: 0, y: 0 }, { x: 4, y: 2 }, occ([[0, 0], [2, 1], [4, 2]])),
-    true
-  )
+  // A perpendicular-nudged destination threads between (1,0) and (1,1),
+  // clipping neither box.
+  check('geometry: nudged span threads between two rooms',
+    isObstructed({ x: 0, y: 0 }, { x: 2, y: 1 }, occ([[0, 0], [1, 0], [1, 1], [2, 1]])), false)
+  check('geometry: nudged span blocked by a room on the line',
+    isObstructed({ x: 0, y: 0 }, { x: 4, y: 2 }, occ([[0, 0], [2, 1], [4, 2]])), true)
 
-  // The side must be stable: a room appearing elsewhere cannot flip an
-  // existing bow, or the map wiggles as the player explores.
-  check(
-    'geometry: bow side unchanged by unrelated rooms',
-    bowControl({ x: 0, y: 1 }, { x: 2, y: 1 }, occ([[0, 1], [1, 1], [2, 1], [5, 5], [0, 3]])),
-    bow
-  )
-  // Asked from the far end, the same link must bow to the same side — the
-  // highlight pass redraws a selected room's face itself, and two opposite
-  // arcs for one link would render a lens.
-  check(
-    'geometry: bow is the same from either endpoint',
-    bowControl({ x: 2, y: 1 }, { x: 0, y: 1 }, cde),
-    bow
-  )
-
-  // ...and so must the door tick that rides on it.
-  check(
-    'geometry: bowed door tick sits at the same point from either end',
-    bowMidpoint({ x: 0, y: 1 }, bow!, { x: 2, y: 1 }),
-    bowMidpoint({ x: 2, y: 1 }, bow!, { x: 0, y: 1 })
-  )
-
+  // A room appearing elsewhere must not flip an established bow, or the map
+  // wiggles as the player explores.
+  check('geometry: bow side unchanged by unrelated rooms',
+    linkPath({ x: 0, y: 1 }, { x: 2, y: 1 }, 'e',
+      occ([[0, 1], [1, 1], [2, 1], [5, 5], [0, 3]])).c1, bowed.c1)
   // Occupying the apex cell itself is the one thing that flips it.
-  const flipped = bowControl({ x: 0, y: 1 }, { x: 2, y: 1 }, occ([[0, 1], [1, 1], [2, 1], [1, 2]]))
-  check(
-    'geometry: bow flips when its apex cell is taken',
-    flipped !== null && bow !== null && Math.sign(flipped.y - 1) === -Math.sign(bow.y - 1),
-    true
-  )
+  const flipped = linkPath({ x: 0, y: 1 }, { x: 2, y: 1 }, 'e',
+    occ([[0, 1], [1, 1], [2, 1], [1, 2]]))
+  check('geometry: bow flips when its apex cell is taken',
+    Math.sign(flipped.c1.y - 1) === -Math.sign(bowed.c1.y - 1), true)
+
+  // Asked from the far end the SAME curve must come back, controls swapped —
+  // the highlight pass redraws a selected room's own face, and two disagreeing
+  // arcs for one link would render a lens.
+  const back = linkPath({ x: 2, y: 1 }, { x: 0, y: 1 }, 'w', cde)
+  check('geometry: same curve from either endpoint',
+    [r3(back.c1.x), r3(back.c1.y), r3(back.c2.x), r3(back.c2.y)],
+    [r3(bowed.c2.x), r3(bowed.c2.y), r3(bowed.c1.x), r3(bowed.c1.y)])
+
+  // ---- direction fidelity ----
+  // Honest geometry must still draw dead straight: the controls land on the
+  // chord, so the cubic degenerates to the line it always was.
+  const honest = linkPath({ x: 0, y: 0 }, { x: 0, y: -1 }, 'n', empty)
+  check('geometry: honest link keeps its controls on the chord',
+    [r3(honest.c1.x), r3(honest.c2.x), honest.c1.y < 0, honest.c2.y > -1],
+    [0, 0, true, true])
+
+  // The real case from Dawn of Demise: A Moldy Tunnel's `nw` exit reaching a
+  // room that placement drew due WEST. The curve must still leave heading
+  // north-west, or the map claims a direction the MUD never reported.
+  const lying = linkPath({ x: 0, y: 0 }, { x: -1, y: 0 }, 'nw', empty)
+  check('geometry: nw drawn west still departs northward', lying.c1.y < 0, true)
+  check('geometry: nw drawn west still departs westward', lying.c1.x < 0, true)
+  check('geometry: and arrives from the south-east side',
+    lying.c2.y > 0 && lying.c2.x > -1, true)
+  // A genuine west exit over the same two cells stays flat.
+  check('geometry: a real west exit has no northward lean',
+    linkPath({ x: 0, y: 0 }, { x: -1, y: 0 }, 'w', empty).c1.y, 0)
+
+  // ---- span ----
+  check('geometry: one-step link spans 1',
+    linkPath({ x: 0, y: 0 }, { x: 1, y: 0 }, 'e', empty).span, 1)
+  check('geometry: two-step link spans 2 (gets the direct-connection mark)',
+    linkPath({ x: -7, y: -11 }, { x: -7, y: -9 }, 's', empty).span, 2)
+  check('geometry: diagonal span uses Chebyshev distance',
+    linkPath({ x: 0, y: 0 }, { x: 2, y: 2 }, 'se', empty).span, 2)
+
+  // ---- curve sampling ----
+  const P0 = { x: 0, y: 1 }, P3 = { x: 2, y: 1 }
+  check('geometry: midpoint is the same sampled from either end',
+    [r3(cubicPoint(P0, bowed.c1, bowed.c2, P3, 0.5).x),
+     r3(cubicPoint(P0, bowed.c1, bowed.c2, P3, 0.5).y)],
+    [r3(cubicPoint(P3, bowed.c2, bowed.c1, P0, 0.5).x),
+     r3(cubicPoint(P3, bowed.c2, bowed.c1, P0, 0.5).y)])
+  check('geometry: tangent on a straight link points along it',
+    r3(cubicTangent({ x: 0, y: 0 }, honest.c1, honest.c2, { x: 0, y: -1 }, 0.5).x), 0)
 }
 
 console.log(failures === 0 ? '\nALL PASS' : `\n${failures} FAILURES`)

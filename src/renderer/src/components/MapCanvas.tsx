@@ -5,7 +5,7 @@
  */
 import React, { useCallback, useEffect, useRef } from 'react'
 import type { MapExit, MapRoom, MudMap } from '../map/types'
-import { CELL, ROOM, bowControl, bowMidpoint } from '../map/geometry'
+import { CELL, DIR_UNIT, ROOM, cubicPoint, cubicTangent, linkPath } from '../map/geometry'
 
 export interface MapContextInfo {
   roomId: string | null
@@ -120,49 +120,82 @@ export function MapCanvas(props: Props) {
       let ey: number
       let stub = false
       let door = exit.door
-      let control: [number, number] | null = null
+      let curve: { c1: [number, number]; c2: [number, number]; span: number } | null = null
       if (dest && visibleById.has(dest.id)) {
         const [dx, dy] = roomPos(dest)
         ;[ex, ey] = toScreen(dx, dy)
-        const bow = bowControl({ x: rx, y: ry }, { x: dx, y: dy }, isOccupied)
-        if (bow) control = toScreen(bow.x, bow.y)
+        const path = linkPath({ x: rx, y: ry }, { x: dx, y: dy }, exit.dir ?? '', isOccupied)
+        curve = {
+          c1: toScreen(path.c1.x, path.c1.y),
+          c2: toScreen(path.c2.x, path.c2.y),
+          span: path.span
+        }
         // This face may be the only one carrying the door if the pair was
         // linked one-way, and it is the only face drawn (see dedupe below).
         if (dest.exits.find((e) => e.to === room.id)?.door) door = true
       } else if (exit.dir) {
-        const delta: Record<string, [number, number]> = {
-          n: [0, -1], s: [0, 1], e: [1, 0], w: [-1, 0],
-          ne: [1, -1], nw: [-1, -1], se: [1, 1], sw: [-1, 1]
-        }
-        const d = delta[exit.dir] ?? [0, 0]
+        const d = DIR_UNIT[exit.dir] ?? [0, 0]
         ex = sx + d[0] * cell * 0.55
         ey = sy + d[1] * cell * 0.55
         stub = true
       } else {
         return // special exit to elsewhere: glyph only
       }
-      ctx.strokeStyle = highlight
+
+      // Sample the drawn path (straight or cubic) — used for the door tick and
+      // the direct-connection chevrons, so both ride the curve rather than the
+      // chord they may no longer follow.
+      const P0 = { x: sx, y: sy }
+      const P3 = { x: ex, y: ey }
+      const C1 = curve ? { x: curve.c1[0], y: curve.c1[1] } : P0
+      const C2 = curve ? { x: curve.c2[0], y: curve.c2[1] } : P3
+      const at = (t: number) =>
+        curve ? cubicPoint(P0, C1, C2, P3, t) : { x: sx + (ex - sx) * t, y: sy + (ey - sy) * t }
+      const dirAt = (t: number) =>
+        curve ? cubicTangent(P0, C1, C2, P3, t) : { x: ex - sx, y: ey - sy }
+
+      const base = highlight
         ? '#ffffff'
         : stub
           ? dest
             ? '#8b6f47' // leads off-view (other zone/level)
             : '#4a5568' // unexplored stub
           : '#5c6370'
+      ctx.strokeStyle = base
       ctx.lineWidth = highlight ? Math.max(2, 2.4 * view.scale) : thin
       ctx.setLineDash(exit.to === null ? [3, 3] : [])
       ctx.beginPath()
       ctx.moveTo(sx, sy)
-      if (control) ctx.quadraticCurveTo(control[0], control[1], ex, ey)
+      if (curve) ctx.bezierCurveTo(curve.c1[0], curve.c1[1], curve.c2[0], curve.c2[1], ex, ey)
       else ctx.lineTo(ex, ey)
       ctx.stroke()
       ctx.setLineDash([])
+
+      if (curve && curve.span > 1) {
+        // Direct-connection chevrons. A link drawn longer than one grid step is
+        // still a single passage, but the map's own grammar reads empty space
+        // as unmapped ground, so the length has to be marked as layout rather
+        // than distance. Placed off-centre to leave the midpoint to the door.
+        ctx.lineWidth = Math.max(1, 1.2 * view.scale)
+        for (const t of [0.34, 0.66]) {
+          const p = at(t)
+          const g = dirAt(t)
+          const a = Math.atan2(g.y, g.x)
+          const len = 4 * view.scale
+          ctx.beginPath()
+          ctx.moveTo(p.x - Math.cos(a - 0.6) * len, p.y - Math.sin(a - 0.6) * len)
+          ctx.lineTo(p.x, p.y)
+          ctx.lineTo(p.x - Math.cos(a + 0.6) * len, p.y - Math.sin(a + 0.6) * len)
+          ctx.stroke()
+        }
+      }
+
       if (door) {
-        // Door tick: short perpendicular bar at the midpoint — the curve's
-        // apex when bowed, whose tangent is parallel to the chord either way.
-        const mid = control
-          ? bowMidpoint({ x: sx, y: sy }, { x: control[0], y: control[1] }, { x: ex, y: ey })
-          : { x: (sx + ex) / 2, y: (sy + ey) / 2 }
-        const angle = Math.atan2(ey - sy, ex - sx) + Math.PI / 2
+        // Door tick: short bar across the path at its midpoint, perpendicular
+        // to the direction the path is actually travelling there.
+        const mid = at(0.5)
+        const g = dirAt(0.5)
+        const angle = Math.atan2(g.y, g.x) + Math.PI / 2
         const t = 5 * view.scale
         ctx.strokeStyle = '#e5c07b'
         ctx.lineWidth = Math.max(1.5, 2 * view.scale)
