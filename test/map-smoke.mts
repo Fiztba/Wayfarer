@@ -13,7 +13,13 @@ import { MapTracker } from '../src/renderer/src/map/MapTracker.ts'
 import { exitOpenCommand, findPath } from '../src/renderer/src/map/Pathfinder.ts'
 import { Walker } from '../src/renderer/src/map/Walker.ts'
 import { emptyMap, stripPromptPrefix } from '../src/renderer/src/map/types.ts'
-import { cubicPoint, cubicTangent, isObstructed, linkPath } from '../src/renderer/src/map/geometry.ts'
+import {
+  cubicPoint,
+  cubicTangent,
+  drawnAsClaimed,
+  isObstructed,
+  linkPath
+} from '../src/renderer/src/map/geometry.ts'
 import { AnsiParser } from '../src/renderer/src/ansi.ts'
 
 let failures = 0
@@ -995,25 +1001,34 @@ check('open cmd: no door, no command',
     [r3(back.c1.x), r3(back.c1.y), r3(back.c2.x), r3(back.c2.y)],
     [r3(bowed.c2.x), r3(bowed.c2.y), r3(bowed.c1.x), r3(bowed.c1.y)])
 
-  // ---- direction fidelity ----
-  // Honest geometry must still draw dead straight: the controls land on the
-  // chord, so the cubic degenerates to the line it always was.
+  // ---- bearing fidelity ----
+  // An unobstructed link is dead straight: controls sit on the chord. Bending
+  // it to convey direction does not work -- a true departure tangent at both
+  // ends of a link between two level rooms makes an S symmetric about the
+  // chord, so half of it leans the wrong way and reads as the opposite
+  // diagonal. Bearing is marked, not drawn.
   const honest = linkPath({ x: 0, y: 0 }, { x: 0, y: -1 }, 'n', empty)
-  check('geometry: honest link keeps its controls on the chord',
-    [r3(honest.c1.x), r3(honest.c2.x), honest.c1.y < 0, honest.c2.y > -1],
-    [0, 0, true, true])
+  check('geometry: unobstructed link is straight',
+    [r3(honest.c1.x), r3(honest.c1.y), r3(honest.c2.x), r3(honest.c2.y)],
+    [0, -0.45, 0, -0.55])
+  const sideways = linkPath({ x: 0, y: 0 }, { x: -1, y: 0 }, 'nw', empty)
+  check('geometry: a mis-drawn link is straight too, not bent',
+    [r3(sideways.c1.y), r3(sideways.c2.y)], [0, 0])
 
-  // The real case from Dawn of Demise: A Moldy Tunnel's `nw` exit reaching a
-  // room that placement drew due WEST. The curve must still leave heading
-  // north-west, or the map claims a direction the MUD never reported.
-  const lying = linkPath({ x: 0, y: 0 }, { x: -1, y: 0 }, 'nw', empty)
-  check('geometry: nw drawn west still departs northward', lying.c1.y < 0, true)
-  check('geometry: nw drawn west still departs westward', lying.c1.x < 0, true)
-  check('geometry: and arrives from the south-east side',
-    lying.c2.y > 0 && lying.c2.x > -1, true)
-  // A genuine west exit over the same two cells stays flat.
-  check('geometry: a real west exit has no northward lean',
-    linkPath({ x: 0, y: 0 }, { x: -1, y: 0 }, 'w', empty).c1.y, 0)
+  // Bearing test: distance may differ, direction may not.
+  check('bearing: one step the right way', drawnAsClaimed({ x: 0, y: 0 }, { x: 0, y: -1 }, 'n'), true)
+  check('bearing: two steps the right way is still the right way',
+    drawnAsClaimed({ x: -7, y: -11 }, { x: -7, y: -9 }, 's'), true)
+  check('bearing: correct diagonal', drawnAsClaimed({ x: 0, y: 0 }, { x: 1, y: 1 }, 'se'), true)
+  // The Dawn of Demise case: `nw` out of A Moldy Tunnel reaching a room that
+  // placement drew due WEST. This is what earns an arrow.
+  check('bearing: nw drawn due west is a lie',
+    drawnAsClaimed({ x: -7, y: -11 }, { x: -8, y: -11 }, 'nw'), false)
+  check('bearing: backwards is a lie', drawnAsClaimed({ x: 0, y: 0 }, { x: -1, y: 0 }, 'e'), false)
+  check('bearing: right axis wrong sense is a lie',
+    drawnAsClaimed({ x: 0, y: 0 }, { x: 0, y: 1 }, 'n'), false)
+  check('bearing: up and down are never marked',
+    drawnAsClaimed({ x: 0, y: 0 }, { x: 3, y: 3 }, 'u'), true)
 
   // ---- span ----
   check('geometry: one-step link spans 1',

@@ -220,6 +220,12 @@ export class SessionStore {
     })
     this.mapModel = model
     this.tracker = tracker
+    // A map that already holds rooms means the mapper has been used on this
+    // MUD before, so open the pane without being asked. This only decides the
+    // starting state — closing it stays closed for the rest of the session.
+    if (Object.keys(model.map.rooms).length > 0) {
+      this.showMap = true
+    }
     if (tracker.currentRoom) {
       this.addSystemLine(
         `Mapper: resuming at "${tracker.currentRoom.name}" — your first room description re-verifies this.`,

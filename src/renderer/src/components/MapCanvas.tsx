@@ -5,7 +5,16 @@
  */
 import React, { useCallback, useEffect, useRef } from 'react'
 import type { MapExit, MapRoom, MudMap } from '../map/types'
-import { CELL, DIR_UNIT, ROOM, cubicPoint, cubicTangent, linkPath } from '../map/geometry'
+import {
+  BEARING_AT,
+  CELL,
+  DIR_UNIT,
+  ROOM,
+  cubicPoint,
+  cubicTangent,
+  drawnAsClaimed,
+  linkPath
+} from '../map/geometry'
 
 export interface MapContextInfo {
   roomId: string | null
@@ -121,8 +130,10 @@ export function MapCanvas(props: Props) {
       let stub = false
       let door = exit.door
       let curve: { c1: [number, number]; c2: [number, number]; span: number } | null = null
+      let destCell: { x: number; y: number } | null = null
       if (dest && visibleById.has(dest.id)) {
         const [dx, dy] = roomPos(dest)
+        destCell = { x: dx, y: dy }
         ;[ex, ey] = toScreen(dx, dy)
         const path = linkPath({ x: rx, y: ry }, { x: dx, y: dy }, exit.dir ?? '', isOccupied)
         curve = {
@@ -170,6 +181,40 @@ export function MapCanvas(props: Props) {
       else ctx.lineTo(ex, ey)
       ctx.stroke()
       ctx.setLineDash([])
+
+      // Bearing arrows. Where a link is NOT drawn along the compass direction it
+      // claims -- greedy placement put the room somewhere else, and often no
+      // coordinate assignment could have done better -- the line itself cannot
+      // carry that direction, so a small arrow just outside each room points
+      // the way its own exit really goes. Only the liars get marked: on a real
+      // 859-room map that was 44 links of 1870.
+      if (curve && dest && destCell && exit.dir) {
+        const here = { x: rx, y: ry }
+        const back = dest.exits.find((e) => e.to === room.id)
+        const marks: Array<[number, number, string]> = []
+        if (!drawnAsClaimed(here, destCell, exit.dir)) marks.push([sx, sy, exit.dir])
+        if (back?.dir && !drawnAsClaimed(destCell, here, back.dir)) {
+          marks.push([ex, ey, back.dir])
+        }
+        if (marks.length > 0) {
+          ctx.strokeStyle = highlight ? '#ffffff' : '#8b949e'
+          ctx.lineWidth = Math.max(1, 1.3 * view.scale)
+          for (const [cx, cy, d] of marks) {
+            const u = DIR_UNIT[d]
+            if (!u) continue
+            const tipX = cx + u[0] * BEARING_AT * cell
+            const tipY = cy + u[1] * BEARING_AT * cell
+            const a = Math.atan2(u[1], u[0])
+            const len = 5 * view.scale
+            ctx.beginPath()
+            ctx.moveTo(tipX - Math.cos(a - 0.5) * len, tipY - Math.sin(a - 0.5) * len)
+            ctx.lineTo(tipX, tipY)
+            ctx.lineTo(tipX - Math.cos(a + 0.5) * len, tipY - Math.sin(a + 0.5) * len)
+            ctx.stroke()
+          }
+          ctx.strokeStyle = base
+        }
+      }
 
       if (curve && curve.span > 1) {
         // Direct-connection chevrons. A link drawn longer than one grid step is

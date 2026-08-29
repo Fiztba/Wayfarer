@@ -41,10 +41,12 @@ const HIT_HALF = ROOM_HALF + HIT_MARGIN
 /** How far the bow is pushed off the chord, in cells. */
 export const BOW_OFFSET = 1.2
 
-/** How far the direction-true control points reach out of each room, in cells.
- *  Big enough to read as a departure angle, small enough that a one-cell link
- *  stays a gentle S rather than a loop. */
+/** How far the control points sit along the chord, in cells. */
 export const STUB_REACH = 0.45
+
+/** Where a bearing arrow sits, measured from the room centre in cells — just
+ *  clear of the box, so it reads as leaving that room. */
+export const BEARING_AT = 0.42
 
 const SQ = Math.SQRT1_2
 
@@ -52,6 +54,33 @@ const SQ = Math.SQRT1_2
 export const DIR_UNIT: Record<string, [number, number]> = {
   n: [0, -1], s: [0, 1], e: [1, 0], w: [-1, 0],
   ne: [SQ, -SQ], nw: [-SQ, -SQ], se: [SQ, SQ], sw: [-SQ, SQ]
+}
+
+/** One grid step per direction, for comparing a link's drawn offset with the
+ *  bearing it claims. */
+const DIR_STEP: Record<string, [number, number]> = {
+  n: [0, -1], s: [0, 1], e: [1, 0], w: [-1, 0],
+  ne: [1, -1], nw: [-1, -1], se: [1, 1], sw: [-1, 1]
+}
+
+/**
+ * Is this link drawn along the bearing it claims? Distance is allowed to
+ * differ — a two-cell `s` link is still pointing south — so this tests the
+ * bearing only: the offset must be a positive multiple of the step.
+ *
+ * Where it is false the line cannot be trusted to convey direction, and the
+ * caller marks the bearing separately. Bending the line instead does NOT
+ * work: forcing a true departure tangent at both ends of a link between two
+ * level rooms yields an S symmetric about the chord, so half of it leans the
+ * wrong way and reads as the opposite diagonal. Measured at ±4px for a
+ * one-cell link, growing to ±11px as the effect is strengthened.
+ */
+export function drawnAsClaimed(from: Cell, to: Cell, dir: string): boolean {
+  const step = DIR_STEP[dir]
+  if (!step) return true
+  const ox = to.x - from.x
+  const oy = to.y - from.y
+  return ox * step[1] - oy * step[0] === 0 && ox * step[0] + oy * step[1] > 0
 }
 
 export interface Cell {
@@ -165,9 +194,17 @@ export function linkPath(
   dir: string,
   isOccupied: (x: number, y: number) => boolean
 ): LinkPath {
-  const u = DIR_UNIT[dir] ?? [to.x - from.x, to.y - from.y]
-  const c1: Cell = { x: from.x + u[0] * STUB_REACH, y: from.y + u[1] * STUB_REACH }
-  const c2: Cell = { x: to.x - u[0] * STUB_REACH, y: to.y - u[1] * STUB_REACH }
+  // Controls sit on the chord, so an unobstructed link is dead straight and a
+  // bowed one is a clean symmetric arc. Bearing is carried by the marker (see
+  // drawnAsClaimed), never by bending the line.
+  void dir
+  const dx = to.x - from.x
+  const dy = to.y - from.y
+  const len = Math.hypot(dx, dy) || 1
+  const ux = dx / len
+  const uy = dy / len
+  const c1: Cell = { x: from.x + ux * STUB_REACH, y: from.y + uy * STUB_REACH }
+  const c2: Cell = { x: to.x - ux * STUB_REACH, y: to.y - uy * STUB_REACH }
   const bow = bowOffset(from, to, isOccupied)
   if (bow) {
     c1.x += bow.x; c1.y += bow.y
