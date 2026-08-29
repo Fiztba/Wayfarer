@@ -158,6 +158,7 @@ export class RemoteTracker {
   currentRoomId: string | null = null
   lost = false
   mode: TrackerMode = 'map'
+  speculative = false
 
   private model: MapModel
   private send: (action: MapAction) => void
@@ -181,10 +182,16 @@ export class RemoteTracker {
     for (const fn of this.subs) fn()
   }
 
-  update(state: { currentRoomId: string | null; lost: boolean; mode: TrackerMode }): void {
+  update(state: {
+    currentRoomId: string | null
+    lost: boolean
+    mode: TrackerMode
+    speculative?: boolean
+  }): void {
     this.currentRoomId = state.currentRoomId
     this.lost = state.lost
     this.mode = state.mode
+    this.speculative = state.speculative ?? false
     this.notify()
   }
 
@@ -207,6 +214,8 @@ export interface TrackerControl {
   currentRoomId: string | null
   lost: boolean
   mode: TrackerMode
+  /** currentRoomId is a bet, not a settled position: the map draws it as one. */
+  readonly speculative: boolean
   readonly currentRoom: MapRoom | null
   subscribe(fn: () => void): () => void
   setMode(mode: TrackerMode): void

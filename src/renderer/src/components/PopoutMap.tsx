@@ -15,6 +15,7 @@ interface MirrorState {
   activeZoneId: string
   currentRoomId: string | null
   lost: boolean
+  speculative?: boolean
   mode: TrackerMode
   name: string
 }

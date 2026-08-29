@@ -32,6 +32,49 @@ interface PendingMove {
   at: number
 }
 
+/**
+ * One reading of where the player might be, while more than one is possible.
+ *
+ * A hypothesis survives only by continuing to predict MAPPED rooms correctly.
+ * The moment it would step through an exit we have never walked, it stops
+ * being distinguishable from "somewhere new" and is dropped -- which is what
+ * keeps a stale reading from surviving forever on unexplored exits while the
+ * player walks genuinely new ground.
+ */
+interface Hypothesis {
+  /** Rooms this reading says we walked through, one per buffered step. */
+  path: string[]
+  /** Times it predicted a mapped room and the detection matched. */
+  corroborations: number
+}
+
+/**
+ * A run of moves we have deliberately not written down yet, because more than
+ * one existing room explained the first one. Nothing reaches the map until it
+ * resolves: a duplicate is recoverable, but a wrong link actively misleads.
+ */
+interface Speculation {
+  /** Last room we were certain of. */
+  anchorRoomId: string
+  /** How many rooms explained the first step, for the message if it creates. */
+  ambiguity: number
+  /** Observations since the anchor, replayed on commit. */
+  steps: Array<{ dir: Direction | null; det: RoomDetection }>
+  hypotheses: Hypothesis[]
+}
+
+/**
+ * Safety valve only. Every surviving hypothesis has to corroborate on each
+ * step, so the set shrinks or the player is genuinely walking terrain that
+ * repeats -- a parapet wall resolves at its far end however long it is. This
+ * bound exists so a pathological map cannot buffer without limit.
+ */
+const SPECULATION_CAP = 30
+
+/** Said when a room is created that an existing one could also have been. */
+const MSG_DUPE = (name: string, count: number): string =>
+  `Mapper: created a new "${name}" — ${count} rooms with identical name/exits will exist. If this is really one of them, merge (right-click) or use 🧹.`
+
 const PENDING_CAP = 30
 const PENDING_TTL_MS = 15_000
 
@@ -47,6 +90,12 @@ export class MapTracker implements TrackerControl {
   mode: TrackerMode = 'map'
   lost = false
   currentRoomId: string | null = null
+
+  /** Set while more than one room explains where we are (see Speculation). */
+  speculation: Speculation | null = null
+  /** True while draining a settled speculation back through the normal path,
+   *  so replayed steps commit instead of opening a fresh speculation. */
+  private replaying = false
 
   private model: MapModel
   private host: TrackerHost
@@ -70,7 +119,9 @@ export class MapTracker implements TrackerControl {
   }
 
   private notify(): void {
-    this.model.setLastRoom(this.currentRoomId)
+    // Only ever persist a settled position. Restoring a bet on the next
+    // session would hand it the confidence it never earned.
+    if (!this.speculation) this.model.setLastRoom(this.currentRoomId)
     // An armed #zone is fulfilled once we're standing in that zone.
     if (this.model.pendingZoneId && this.currentRoom?.zoneId === this.model.pendingZoneId) {
       this.model.pendingZoneId = null
@@ -96,13 +147,27 @@ export class MapTracker implements TrackerControl {
     return this.model.room(this.currentRoomId)
   }
 
+  /** True while currentRoomId is a bet rather than a settled position. The map
+   *  draws it differently, and Walker must not treat it as having arrived. */
+  get speculative(): boolean {
+    return this.speculation !== null
+  }
+
+  /** Drop a run of unwritten moves. Used whenever something authoritative
+   *  overrides the guess -- a server room id, "I am here", a mode change. */
+  private abandonSpeculation(): void {
+    this.speculation = null
+  }
+
   setMode(mode: TrackerMode): void {
     this.mode = mode
+    this.abandonSpeculation()
     this.notify()
   }
 
   /** Manual re-sync: "I am here". Clears lost. */
   setCurrentRoom(roomId: string | null): void {
+    this.abandonSpeculation()
     this.currentRoomId = roomId
     this.lost = false
     this.pending = []
@@ -110,6 +175,7 @@ export class MapTracker implements TrackerControl {
   }
 
   private markLost(reason: string): void {
+    this.abandonSpeculation()
     if (!this.lost) {
       this.lost = true
       this.host.info(`Mapper lost: ${reason} Right-click your room on the map → "I am here".`)
@@ -178,6 +244,10 @@ export class MapTracker implements TrackerControl {
   /** Structured room info from GMCP/MSDP — authoritative identity. */
   onServerRoom(info: ServerRoomInfo): void {
     if (this.mode === 'off') return
+    // An authoritative id settles identity outright, so any run of guesses is
+    // moot. Only reachable on MUDs that report room ids, which are exactly the
+    // MUDs that never had to guess in the first place.
+    this.abandonSpeculation()
     this.expirePending()
     const existing = this.model.findByServerId(info.serverId)
     const move = this.pending.shift()
@@ -266,10 +336,101 @@ export class MapTracker implements TrackerControl {
 
   // ---- text-based dead reckoning ------------------------------------------
 
+  /**
+   * The committed path for one arrival: decide it and write it down. Draining
+   * a settled speculation replays back through here, so a run of held moves
+   * lands exactly as it would have had it never been in doubt.
+   */
+  private handleMove(current: MapRoom, dir: Direction, det: RoomDetection): void {
+    const dirs = det.exits.map((e) => e.dir)
+    const exit = this.model.exitOf(current, dir)
+    if (exit?.to) {
+      const dest = this.model.room(exit.to)
+      if (dest && this.roomMatches(dest, det)) {
+        this.currentRoomId = dest.id
+        this.refreshExits(dest, det)
+        this.syncName(dest, det)
+        this.notify()
+        return
+      }
+      // The link may be a wrong guess (reverse links are heuristic, and MUD
+      // geometry is often asymmetric). On solid evidence, correct the exit
+      // and follow the player instead of going lost.
+      const fixes = this.model.findByFingerprint(det.name, dirs)
+      const fixed = this.pickArrival(fixes, current, dir)
+      if (fixed) {
+        this.model.linkRooms(current.id, dir, fixed.id, false)
+        this.currentRoomId = fixed.id
+        this.refreshExits(fixed, det)
+        this.host.info(
+          `Mapper corrected the ${dir} exit of "${current.name}" → "${fixed.name}".`
+        )
+        this.notify()
+        return
+      }
+      this.markLost(
+        `expected "${dest?.name ?? '?'}" ${dir} of "${current.name}" but saw "${det.name}".`
+      )
+      return
+    }
+    // Unmapped direction from a known room.
+    //
+    // Re-entry check: walking into a room we already know via an exit we
+    // hadn't traversed yet. Identical room names are normal, so arrival
+    // context disambiguates; only a still-unresolvable match creates.
+    //
+    // Identification runs in EVERY mode. Adopting a room already on the map
+    // is identification, not creation -- the rule onServerRoom already
+    // states. Follow mode used to go lost here without even looking, on
+    // rooms it knew perfectly well.
+    const candidates = this.model.findByFingerprint(det.name, dirs)
+    const known = this.pickArrival(candidates, current, dir)
+    if (known) {
+      if (this.mode === 'map') {
+        // The reverse link is only added when the return path is unclaimed
+        // or already ours: `s` from A landing in B does NOT imply `n` from
+        // B returns to A.
+        const back = this.model.exitOf(known, OPPOSITE[dir])
+        const twoWay = back !== undefined && (back.to === null || back.to === current.id)
+        this.model.linkRooms(current.id, dir, known.id, twoWay)
+        this.refreshExits(known, det)
+        this.syncName(known, det)
+      }
+      this.currentRoomId = known.id
+      this.notify()
+      return
+    }
+    if (this.mode !== 'map') {
+      this.markLost(`moved ${dir} into unmapped territory.`)
+      return
+    }
+    const others = candidates.filter((c) => c.id !== current.id)
+    if (others.length > 0 && !this.replaying) {
+      // Several rooms could be this one and nothing corroborates yet. Rather
+      // than mint a twin on the spot, hold the move unwritten and let the next
+      // few steps decide which reading survives.
+      this.beginSpeculation(current, dir, det, others)
+      return
+    }
+    if (others.length > 0) {
+      this.host.info(
+        MSG_DUPE(det.name, others.length + 1)
+      )
+    }
+    this.currentRoomId = this.createArrival(current, dir, det).id
+    this.notify()
+    return
+  }
+
   private handleDetection(det: RoomDetection): void {
     const dirs = det.exits.map((e) => e.dir)
     const move = this.pending.shift()
     const current = this.model.room(this.currentRoomId)
+
+    if (this.speculation) {
+      this.advanceSpeculation(move, det)
+      return
+    }
 
     if (this.lost) {
       // While lost we only re-anchor on an unambiguous fingerprint.
@@ -284,84 +445,7 @@ export class MapTracker implements TrackerControl {
     }
 
     if (move && current) {
-      const exit = this.model.exitOf(current, move.dir)
-      if (exit?.to) {
-        const dest = this.model.room(exit.to)
-        if (dest && this.roomMatches(dest, det)) {
-          this.currentRoomId = dest.id
-          this.refreshExits(dest, det)
-          this.syncName(dest, det)
-          this.notify()
-          return
-        }
-        // The link may be a wrong guess (reverse links are heuristic, and MUD
-        // geometry is often asymmetric). On solid evidence, correct the exit
-        // and follow the player instead of going lost.
-        const fixes = this.model.findByFingerprint(det.name, dirs)
-        const fixed = this.pickArrival(fixes, current, move.dir)
-        if (fixed) {
-          this.model.linkRooms(current.id, move.dir, fixed.id, false)
-          this.currentRoomId = fixed.id
-          this.refreshExits(fixed, det)
-          this.host.info(
-            `Mapper corrected the ${move.dir} exit of "${current.name}" → "${fixed.name}".`
-          )
-          this.notify()
-          return
-        }
-        this.markLost(
-          `expected "${dest?.name ?? '?'}" ${move.dir} of "${current.name}" but saw "${det.name}".`
-        )
-        return
-      }
-      // Unmapped direction from a known room.
-      //
-      // Re-entry check: walking into a room we already know via an exit we
-      // hadn't traversed yet. Identical room names are normal, so arrival
-      // context disambiguates; only a still-unresolvable match creates.
-      //
-      // Identification runs in EVERY mode. Adopting a room already on the map
-      // is identification, not creation -- the rule onServerRoom already
-      // states. Follow mode used to go lost here without even looking, on
-      // rooms it knew perfectly well.
-      const candidates = this.model.findByFingerprint(det.name, dirs)
-      const known = this.pickArrival(candidates, current, move.dir)
-      if (known) {
-        if (this.mode === 'map') {
-          // The reverse link is only added when the return path is unclaimed
-          // or already ours: `s` from A landing in B does NOT imply `n` from
-          // B returns to A.
-          const back = this.model.exitOf(known, OPPOSITE[move.dir])
-          const twoWay = back !== undefined && (back.to === null || back.to === current.id)
-          this.model.linkRooms(current.id, move.dir, known.id, twoWay)
-          this.refreshExits(known, det)
-          this.syncName(known, det)
-        }
-        this.currentRoomId = known.id
-        this.notify()
-        return
-      }
-      if (this.mode !== 'map') {
-        this.markLost(`moved ${move.dir} into unmapped territory.`)
-        return
-      }
-      if (candidates.length > 0) {
-        this.host.info(
-          `Mapper: created a new "${det.name}" — ${candidates.length + 1} rooms with identical name/exits will exist. If this is really one of them, merge (right-click) or use 🧹.`
-        )
-      }
-      const pos = this.model.placeFrom(current, move.dir)
-      const room = this.model.createRoom({
-        name: det.name,
-        ...pos,
-        zoneId: this.zoneForNewRoom(current)
-      })
-      this.applyDetectedExits(room, det)
-      // Two-way link only if the new room reports the return exit.
-      const hasReturn = dirs.includes(OPPOSITE[move.dir])
-      this.model.linkRooms(current.id, move.dir, room.id, hasReturn)
-      this.currentRoomId = room.id
-      this.notify()
+      this.handleMove(current, move.dir, det)
       return
     }
 
@@ -474,6 +558,186 @@ export class MapTracker implements TrackerControl {
     if (facing.length === 1) return facing[0]
 
     return null
+  }
+
+  // ---- speculation --------------------------------------------------------
+
+  /** Start holding moves back because more than one room explains this one. */
+  private beginSpeculation(
+    anchor: MapRoom,
+    dir: Direction,
+    det: RoomDetection,
+    candidates: MapRoom[]
+  ): void {
+    this.speculation = {
+      anchorRoomId: anchor.id,
+      ambiguity: candidates.length,
+      steps: [{ dir, det }],
+      hypotheses: candidates.map((c) => ({ path: [c.id], corroborations: 0 }))
+    }
+    // Show a bet only where one is genuinely plausible; otherwise hold at the
+    // anchor. A wrong bet draws the player teleporting, which is worse than
+    // admitting we are unsure.
+    const bet = this.plausibleBet(candidates, anchor, dir)
+    if (bet) this.currentRoomId = bet.id
+    this.notify()
+  }
+
+  /**
+   * Which candidate is worth showing while unsure. Deliberately narrow: a
+   * neighbour on the side we actually walked toward. A twin behind us would
+   * draw the player moving backwards, and one further along our own heading is
+   * the gap case, where the honest reading is an unmapped room in between.
+   */
+  private plausibleBet(candidates: MapRoom[], from: MapRoom, dir: Direction): MapRoom | null {
+    const [dx, dy, dz] = DIR_DELTA[dir]
+    for (const c of candidates) {
+      if (c.zoneId !== from.zoneId) continue
+      if (dz !== 0) {
+        if (c.z === from.z + dz) return c
+        continue
+      }
+      if (c.z !== from.z) continue
+      const ox = c.x - from.x
+      const oy = c.y - from.y
+      if (Math.max(Math.abs(ox), Math.abs(oy)) !== 1) continue
+      if (ox * dx + oy * dy > 0) return c
+    }
+    return null
+  }
+
+  /**
+   * Fold one more observation into the open readings.
+   *
+   * A reading survives only by predicting a room already on the map and being
+   * right. Stepping through an exit we have never walked makes it no better
+   * than "somewhere new", so it is dropped rather than carried indefinitely --
+   * that is what stops a stale reading surviving on unexplored exits forever.
+   */
+  private advanceSpeculation(move: PendingMove | undefined, det: RoomDetection): void {
+    const spec = this.speculation
+    if (!spec) return
+    spec.steps.push({ dir: move?.dir ?? null, det })
+
+    const survivors: Hypothesis[] = []
+    for (const h of spec.hypotheses) {
+      const at = this.model.room(h.path[h.path.length - 1])
+      if (!at) continue
+      if (!move) {
+        // A look rather than a move: this reading has to describe the room it
+        // claims we are standing in.
+        if (this.roomMatches(at, det)) {
+          survivors.push({ path: [...h.path, at.id], corroborations: h.corroborations + 1 })
+        }
+        continue
+      }
+      const exit = this.model.exitOf(at, move.dir)
+      if (!exit || exit.to === null) continue
+      const dest = this.model.room(exit.to)
+      if (!dest || !this.roomMatches(dest, det)) continue
+      survivors.push({ path: [...h.path, dest.id], corroborations: h.corroborations + 1 })
+    }
+    spec.hypotheses = survivors
+
+    if (survivors.length === 1) {
+      this.settleOn(survivors[0])
+      return
+    }
+    if (survivors.length === 0 || spec.steps.length >= SPECULATION_CAP) {
+      this.settleAsNew()
+      return
+    }
+    this.currentRoomId = survivors[0].path[survivors[0].path.length - 1]
+    this.notify()
+  }
+
+  /** One reading left: write the path it describes, backfilling every room it
+   *  walked through on the way. */
+  private settleOn(h: Hypothesis): void {
+    const spec = this.speculation
+    if (!spec) return
+    this.speculation = null
+    let from = this.model.room(spec.anchorRoomId)
+    for (let i = 0; i < spec.steps.length; i++) {
+      const step = spec.steps[i]
+      const room = this.model.room(h.path[i])
+      if (!room) continue
+      if (from && step.dir) this.adoptArrival(from, step.dir, room, step.det)
+      else {
+        this.refreshExits(room, step.det)
+        this.syncName(room, step.det)
+      }
+      from = room
+    }
+    this.currentRoomId = h.path[h.path.length - 1]
+    this.lost = false
+    if (spec.steps.length > 1) {
+      this.host.info(
+        `Mapper: settled on "${this.currentRoom?.name ?? '?'}" — ${spec.steps.length} rooms confirmed, none duplicated.`
+      )
+    }
+    this.notify()
+  }
+
+  /** No reading survived: the player really is somewhere new, so replay the
+   *  held moves as ordinary mapping. */
+  private settleAsNew(): void {
+    const spec = this.speculation
+    if (!spec) return
+    this.speculation = null
+    this.host.info(MSG_DUPE(spec.steps[0].det.name, spec.ambiguity + 1))
+    const anchor = this.model.room(spec.anchorRoomId)
+    if (!anchor) return
+    // Step one IS the ambiguity, pinned to the reading that won: a new room.
+    // Every later step drains back through the ordinary committed path so it
+    // still gets full identification -- which is how the room belonging in a
+    // gap gets created and the twin beyond it gets recognised rather than
+    // duplicated a second time.
+    const first = spec.steps[0]
+    this.currentRoomId = first.dir
+      ? this.createArrival(anchor, first.dir, first.det).id
+      : anchor.id
+    this.replaying = true
+    try {
+      for (const step of spec.steps.slice(1)) {
+        const at = this.model.room(this.currentRoomId)
+        if (!at) break
+        if (step.dir) this.handleMove(at, step.dir, step.det)
+        else {
+          this.refreshExits(at, step.det)
+          this.syncName(at, step.det)
+        }
+      }
+    } finally {
+      this.replaying = false
+    }
+    this.notify()
+  }
+
+  /** Adopt a room already on the map as the arrival, linking how we got here.
+   *  The reverse link is only added when the return path is unclaimed or
+   *  already ours: `s` from A landing in B does NOT imply `n` from B is A. */
+  private adoptArrival(from: MapRoom, dir: Direction, known: MapRoom, det: RoomDetection): void {
+    const back = this.model.exitOf(known, OPPOSITE[dir])
+    const twoWay = back !== undefined && (back.to === null || back.to === from.id)
+    this.model.linkRooms(from.id, dir, known.id, twoWay)
+    this.refreshExits(known, det)
+    this.syncName(known, det)
+  }
+
+  /** Create the room we just walked into and link it from where we came. */
+  private createArrival(from: MapRoom, dir: Direction, det: RoomDetection): MapRoom {
+    const pos = this.model.placeFrom(from, dir)
+    const room = this.model.createRoom({
+      name: det.name,
+      ...pos,
+      zoneId: this.zoneForNewRoom(from)
+    })
+    this.applyDetectedExits(room, det)
+    // Two-way link only if the new room reports the return exit.
+    const hasReturn = det.exits.some((e) => e.dir === OPPOSITE[dir])
+    this.model.linkRooms(from.id, dir, room.id, hasReturn)
+    return room
   }
 
   /** Loose match: same name; exits may differ (doors, hidden exits).

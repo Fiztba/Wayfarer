@@ -351,6 +351,7 @@ export class SessionStore {
         activeZoneId: this.mapModel.activeZoneId,
         currentRoomId: this.tracker.currentRoomId,
         lost: this.tracker.lost,
+        speculative: this.tracker.speculative,
         mode: this.tracker.mode,
         name: this.name
       })

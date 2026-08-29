@@ -362,6 +362,7 @@ export function MapPane({ model, tracker, walkTo, onPopout, onClose }: MapPanePr
           zoneId={zoneId}
           z={z}
           currentRoomId={tracker.currentRoomId}
+          currentIsGuess={tracker.speculative}
           selectedRoomId={selectedId}
           selectedRoomIds={multiSel}
           centerToken={centerToken}

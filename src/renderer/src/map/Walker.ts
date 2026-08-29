@@ -110,6 +110,9 @@ export class Walker {
       this.cancel(false)
       return
     }
+    // A speculative position is a guess; stepping on it would walk the route
+    // against a room we may turn out not to be in.
+    if (this.tracker.speculative) return
     const step = this.steps[this.index]
     const arrived =
       step.toRoomId !== null

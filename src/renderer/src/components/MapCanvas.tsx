@@ -29,6 +29,8 @@ interface Props {
   zoneId: string
   z: number
   currentRoomId: string | null
+  /** The position is a guess the mapper has not settled yet. */
+  currentIsGuess?: boolean
   selectedRoomId: string | null
   /** Additional multi-selection (shift-click / shift-drag marquee). */
   selectedRoomIds?: string[]
@@ -74,7 +76,8 @@ export function MapCanvas(props: Props) {
   const draw = useCallback(() => {
     const canvas = canvasRef.current
     if (!canvas) return
-    const { map, zoneId, z, currentRoomId, selectedRoomId, selectedRoomIds } = propsRef.current
+    const { map, zoneId, z, currentRoomId, currentIsGuess, selectedRoomId, selectedRoomIds } =
+      propsRef.current
     const multiSelected = new Set(selectedRoomIds ?? [])
     const view = viewRef.current
     const dpr = window.devicePixelRatio || 1
@@ -280,11 +283,17 @@ export function MapCanvas(props: Props) {
       ctx.stroke()
 
       if (room.id === currentRoomId) {
-        ctx.strokeStyle = '#61afef'
+        // A dashed ring means the mapper is holding a guess rather than a
+        // settled position -- it may quietly move once the next room or two
+        // rule the alternatives out. Without this, self-correction reads as
+        // the map rewriting itself behind you.
+        ctx.strokeStyle = currentIsGuess ? '#c8a04a' : '#61afef'
         ctx.lineWidth = 2.5
+        if (currentIsGuess) ctx.setLineDash([4, 3])
         ctx.beginPath()
         ctx.roundRect(sx - half - 3, sy - half - 3, half * 2 + 6, half * 2 + 6, 6 * view.scale)
         ctx.stroke()
+        ctx.setLineDash([])
       }
 
       // Up/down/special markers.
