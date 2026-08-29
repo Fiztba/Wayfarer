@@ -11,7 +11,8 @@ import {
   type Direction,
   type MapExit,
   type MapRoom,
-  type MudMap
+  type MudMap,
+  type PopoutBounds
 } from './types.ts'
 
 const SAVE_DEBOUNCE_MS = 1500
@@ -181,6 +182,32 @@ export class MapModel {
   setLastRoom(id: string | null): void {
     if (this.map.lastRoomId === id) return
     this.map.lastRoomId = id
+    this.touch()
+  }
+
+  /** Remember whether the map pane was open, so the next session on this MUD
+   *  starts the way this one was left. */
+  setPaneOpen(open: boolean): void {
+    if (this.map.paneOpen === open) return
+    this.map.paneOpen = open
+    this.touch()
+  }
+
+  /** Remember where the pop-out map window sits, or null once it is closed. */
+  setPopout(bounds: PopoutBounds | null): void {
+    const cur = this.map.popout ?? null
+    if (cur === null && bounds === null) return
+    if (
+      cur &&
+      bounds &&
+      cur.x === bounds.x &&
+      cur.y === bounds.y &&
+      cur.width === bounds.width &&
+      cur.height === bounds.height
+    ) {
+      return
+    }
+    this.map.popout = bounds
     this.touch()
   }
 

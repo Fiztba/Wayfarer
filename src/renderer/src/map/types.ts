@@ -106,6 +106,21 @@ export interface MudMap {
   waypoints: Waypoint[]
   /** Where the player last was — restored as the starting position on reconnect. */
   lastRoomId?: string | null
+  /** Whether the docked map pane was open when this MUD was last played.
+   *  Undefined means never chosen, and the pane falls back to opening when
+   *  there is already a map worth showing. */
+  paneOpen?: boolean
+  /** Where the pop-out map window sat when this MUD was last played, so it
+   *  reopens on the same monitor. Null/undefined means it was not open. */
+  popout?: PopoutBounds | null
+}
+
+/** Screen rectangle of the pop-out map window. */
+export interface PopoutBounds {
+  x: number
+  y: number
+  width: number
+  height: number
 }
 
 export function emptyMap(): MudMap {

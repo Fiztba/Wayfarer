@@ -12,7 +12,7 @@ import {
 import { MapTracker } from '../src/renderer/src/map/MapTracker.ts'
 import { exitOpenCommand, findPath } from '../src/renderer/src/map/Pathfinder.ts'
 import { Walker } from '../src/renderer/src/map/Walker.ts'
-import { emptyMap, stripPromptPrefix } from '../src/renderer/src/map/types.ts'
+import { emptyMap, stripPromptPrefix, type MudMap } from '../src/renderer/src/map/types.ts'
 import {
   cubicPoint,
   cubicTangent,
@@ -946,6 +946,78 @@ check('open cmd: learned noun once known',
   exitOpenCommand({ dir: 'd', to: null, door: true, doorName: 'grate' }), 'open grate down')
 check('open cmd: no door, no command',
   exitOpenCommand({ dir: 'd', to: null, door: false }), undefined)
+
+// ---- the map pane remembers how it was left, per MUD ----
+{
+  const saves: MudMap[] = []
+  // Snapshot: the saver is handed the live map object, so without a copy
+  // these assertions would read current state rather than what was written.
+  const model = new MapModel(emptyMap(), (m) => saves.push(structuredClone(m)))
+  check('pane: never chosen is undefined, not false', model.map.paneOpen, undefined)
+
+  model.setPaneOpen(false)
+  check('pane: closing is recorded', model.map.paneOpen, false)
+  model.flush()
+  check('pane: closing is persisted', saves.at(-1)?.paneOpen, false)
+
+  // Reloading that file restores the choice rather than re-opening the pane.
+  const reloaded = new MapModel(structuredClone(saves.at(-1)!), () => {})
+  check('pane: closed survives a reload', reloaded.map.paneOpen, false)
+  reloaded.setPaneOpen(true)
+  reloaded.flush()
+  check('pane: reopening is recorded', reloaded.map.paneOpen, true)
+
+  // Undefined must stay distinguishable from an explicit false: it is what
+  // makes a first visit fall back to "open if there is a map worth showing".
+  check('pane: a fresh map has made no choice', new MapModel(emptyMap(), () => {}).map.paneOpen,
+    undefined)
+  // Writing the same value twice must not churn the save timer.
+  const quiet: MudMap[] = []
+  const q = new MapModel(emptyMap(), (m) => quiet.push(structuredClone(m)))
+  q.setPaneOpen(true)
+  q.flush()
+  q.setPaneOpen(true)
+  q.flush()
+  check('pane: setting the same value does not re-save', quiet.length, 1)
+}
+
+// ---- the pop-out window remembers its monitor ----
+{
+  const saves: MudMap[] = []
+  // Snapshot: the saver is handed the live map object, so without a copy
+  // these assertions would read current state rather than what was written.
+  const model = new MapModel(emptyMap(), (m) => saves.push(structuredClone(m)))
+  check('popout: not open by default', model.map.popout ?? null, null)
+
+  // A second monitor sitting left of the primary one has negative x.
+  const onSecond = { x: -1720, y: 240, width: 640, height: 560 }
+  model.setPopout(onSecond)
+  model.flush()
+  check('popout: bounds recorded', model.map.popout, onSecond)
+  check('popout: bounds persisted', saves.at(-1)?.popout, onSecond)
+
+  const reloaded = new MapModel(structuredClone(saves.at(-1)!), () => {})
+  check('popout: survives a reload', reloaded.map.popout, onSecond)
+
+  // Moving it writes the new position...
+  const moved = { x: -1400, y: 100, width: 800, height: 600 }
+  reloaded.setPopout(moved)
+  check('popout: following the window', reloaded.map.popout, moved)
+  // ...but re-reporting the same position must not churn the save timer.
+  const quiet: MudMap[] = []
+  const q = new MapModel(emptyMap(), (m) => quiet.push(structuredClone(m)))
+  q.setPopout(moved)
+  q.flush()
+  q.setPopout({ ...moved })
+  q.flush()
+  check('popout: identical bounds do not re-save', quiet.length, 1)
+
+  // Closing it forgets it, so it does not come back next launch.
+  q.setPopout(null)
+  check('popout: closing clears it', q.map.popout, null)
+  q.flush()
+  check('popout: the clear is persisted', quiet.at(-1)!.popout, null)
+}
 
 // ---- link geometry: obstruction, direction fidelity, long spans ----
 {

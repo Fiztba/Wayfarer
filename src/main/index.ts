@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, net, protocol, shell } from 'electron'
+import { app, BrowserWindow, ipcMain, net, protocol, screen, shell } from 'electron'
 import { autoUpdater } from 'electron-updater'
 import path from 'node:path'
 import fs from 'node:fs'
@@ -168,6 +168,13 @@ app.whenReady().then(() => {
   ipcMain.on('log:line', (_e, sessionId: string, text: string) => logs.line(sessionId, text))
   ipcMain.handle('log:openFolder', () => shell.openPath(logs.logsDir))
   app.on('before-quit', () => logs.stopAll())
+  // Closing a pop-out is the user forgetting it; closing because the app is
+  // quitting must NOT be, or a map left open on a second monitor comes back
+  // closed next launch.
+  let quitting = false
+  app.on('before-quit', () => {
+    quitting = true
+  })
 
   // ---- Mapper: storage + pop-out windows with a state mirror --------------
   const maps = new MapStore(app.getPath('userData'))
@@ -176,14 +183,57 @@ app.whenReady().then(() => {
 
   const popouts = new Map<string, Set<BrowserWindow>>()
 
-  ipcMain.handle('map:popout', (_e, sessionId: string, title: string) => {
+  interface PopoutBounds {
+    x: number
+    y: number
+    width: number
+    height: number
+  }
+
+  /** Only reuse remembered bounds if they still land on an attached display —
+   *  a window restored onto a monitor that has since been unplugged is
+   *  invisible and looks like the pop-out simply failed to open. */
+  const boundsOnScreen = (b: PopoutBounds | null | undefined): PopoutBounds | null => {
+    if (!b || !Number.isFinite(b.x) || !Number.isFinite(b.y)) return null
+    if (!(b.width > 120) || !(b.height > 120)) return null
+    const cx = b.x + b.width / 2
+    const cy = b.y + b.height / 2
+    const visible = screen.getAllDisplays().some((d) => {
+      const a = d.workArea
+      return cx >= a.x && cx <= a.x + a.width && cy >= a.y && cy <= a.y + a.height
+    })
+    return visible ? b : null
+  }
+
+  const reportBounds = (sessionId: string, bounds: PopoutBounds | null): void => {
+    mainWindow?.webContents.send('map:popout-bounds', sessionId, bounds)
+  }
+
+  ipcMain.handle('map:popout', (_e, sessionId: string, title: string, saved?: PopoutBounds) => {
+    const restored = boundsOnScreen(saved)
     const win = new BrowserWindow({
-      width: 640,
-      height: 560,
+      ...(restored ?? { width: 640, height: 560 }),
       backgroundColor: '#0d1117',
       autoHideMenuBar: true,
       title: `Map — ${title}`,
       webPreferences: rendererPreferences()
+    })
+    // Record where it opened, then follow it around.
+    reportBounds(sessionId, win.getBounds())
+    let settle: ReturnType<typeof setTimeout> | null = null
+    const remember = (): void => {
+      if (settle) clearTimeout(settle)
+      settle = setTimeout(() => {
+        settle = null
+        if (!win.isDestroyed()) reportBounds(sessionId, win.getBounds())
+      }, 400)
+    }
+    win.on('move', remember)
+    win.on('resize', remember)
+    win.on('close', () => {
+      if (settle) clearTimeout(settle)
+      // Deliberately closed → forget it. Quitting → leave the last bounds.
+      if (!quitting) reportBounds(sessionId, null)
     })
     const hash = `#popout/${sessionId}`
     if (process.env.ELECTRON_RENDERER_URL) {

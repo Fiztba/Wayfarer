@@ -24,6 +24,7 @@ import {
   wordToDirection,
   type Direction,
   type MudMap,
+  type PopoutBounds,
   type ServerRoomInfo
 } from './map/types.ts'
 import type { ScriptDef, SessionEvent } from '../../shared/types'
@@ -220,11 +221,14 @@ export class SessionStore {
     })
     this.mapModel = model
     this.tracker = tracker
-    // A map that already holds rooms means the mapper has been used on this
-    // MUD before, so open the pane without being asked. This only decides the
-    // starting state — closing it stays closed for the rest of the session.
-    if (Object.keys(model.map.rooms).length > 0) {
-      this.showMap = true
+    // Come back the way this MUD was left. With no remembered state -- first
+    // time here, or a map made before the pane state was persisted -- open it
+    // if there is already a map worth showing.
+    this.showMap = model.map.paneOpen ?? Object.keys(model.map.rooms).length > 0
+    // ...and reopen the pop-out on whichever monitor it was left on. Main
+    // ignores bounds that no longer land on an attached display.
+    if (model.map.popout) {
+      void window.mud.map.popout(this.id, this.name, model.map.popout)
     }
     if (tracker.currentRoom) {
       this.addSystemLine(
@@ -239,7 +243,19 @@ export class SessionStore {
   }
 
   toggleMap(): void {
-    this.showMap = !this.showMap
+    this.setMapVisible(!this.showMap)
+  }
+
+  /** Main process reporting where this session's pop-out map window sits, or
+   *  null once the user closes it (quitting does not count as closing). */
+  notePopoutBounds(bounds: PopoutBounds | null): void {
+    this.mapModel?.setPopout(bounds)
+  }
+
+  /** Show or hide the map pane and remember the choice for this MUD. */
+  private setMapVisible(open: boolean): void {
+    this.showMap = open
+    this.mapModel?.setPaneOpen(open)
     this.notify()
   }
 
@@ -389,7 +405,7 @@ export class SessionStore {
     }
     if (verb === 'lost') {
       this.tracker.setCurrentRoom(null)
-      this.showMap = true
+      this.setMapVisible(true)
       this.addSystemLine(
         'Position cleared. Right-click your room on the map → "I am here" (or walk somewhere with a unique name).',
         'system'

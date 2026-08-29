@@ -6,6 +6,7 @@ import { SettingsPanel } from './components/SettingsPanel'
 import { HelpPanel } from './components/HelpPanel'
 import { uiState } from './uiState'
 import type { Encoding } from '../../shared/types'
+import type { PopoutBounds } from './map/types.ts'
 
 interface TabInfo {
   id: string
@@ -56,10 +57,14 @@ export default function App() {
     const offAction = window.mud.map.onAction((id, action) =>
       sessionStores.get(id)?.applyMapAction(action)
     )
+    const offBounds = window.mud.map.onPopoutBounds((id, bounds) =>
+      sessionStores.get(id)?.notePopoutBounds(bounds as PopoutBounds | null)
+    )
     return () => {
       off()
       offHello()
       offAction()
+      offBounds()
     }
   }, [])
 

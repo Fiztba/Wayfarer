@@ -46,7 +46,9 @@ export interface MudApi {
   map: {
     load(key: string): Promise<unknown | null>
     save(key: string, map: unknown): void
-    popout(sessionId: string, title: string): Promise<void>
+    popout(sessionId: string, title: string, bounds?: unknown): Promise<void>
+    /** Where a pop-out sits, so it reopens on the same monitor; null = closed. */
+    onPopoutBounds(cb: (sessionId: string, bounds: unknown | null) => void): () => void
     /** Session side: push state to pop-outs; receive hello/actions. */
     pushState(sessionId: string, state: unknown): void
     onHello(cb: (sessionId: string) => void): () => void
@@ -109,7 +111,14 @@ const api: MudApi = {
   map: {
     load: (key) => ipcRenderer.invoke('map:load', key),
     save: (key, map) => ipcRenderer.send('map:save', key, map),
-    popout: (sessionId, title) => ipcRenderer.invoke('map:popout', sessionId, title),
+    popout: (sessionId, title, bounds) =>
+      ipcRenderer.invoke('map:popout', sessionId, title, bounds),
+    onPopoutBounds: (cb) => {
+      const handler = (_e: IpcRendererEvent, sessionId: string, bounds: unknown | null) =>
+        cb(sessionId, bounds)
+      ipcRenderer.on('map:popout-bounds', handler)
+      return () => ipcRenderer.off('map:popout-bounds', handler)
+    },
     pushState: (sessionId, state) => ipcRenderer.send('map:mirror-state', sessionId, state),
     onHello: (cb) => {
       const handler = (_e: IpcRendererEvent, sessionId: string) => cb(sessionId)
