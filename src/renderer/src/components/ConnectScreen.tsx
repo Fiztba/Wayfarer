@@ -275,7 +275,7 @@ export function ConnectScreen({ onConnect, onOpenHelp }: Props) {
                 </label>
                 <input
                   id="qc-name"
-                  placeholder="e.g. Dawn of Demise"
+                  placeholder="Defaults to the host"
                   value={name}
                   onChange={(e) => setName(e.target.value)}
                 />
@@ -287,7 +287,7 @@ export function ConnectScreen({ onConnect, onOpenHelp }: Props) {
                   </label>
                   <input
                     id="qc-host"
-                    placeholder="e.g. tdod.org"
+                    placeholder="e.g. mud.example.org"
                     value={host}
                     onChange={(e) => setHost(e.target.value)}
                     onKeyDown={onEnterKey}
