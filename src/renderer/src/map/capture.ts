@@ -7,6 +7,7 @@
  * convention), which we record as a door on that exit.
  */
 import {
+  hashText,
   stripPromptPrefix,
   wordToDirection,
   type Direction,
@@ -147,6 +148,7 @@ export class RoomCapture {
     // tags) so the heuristics judge the name a player would actually read.
     let name = ''
     let vnum: string | null = null
+    let titleAt = -1
     for (let i = this.recent.length - 1; i >= 0; i--) {
       const raw = this.recent[i]
       if (looksLikePrompt(raw)) continue
@@ -155,6 +157,7 @@ export class RoomCapture {
       if (looksLikeTitle(candidate.name)) {
         name = candidate.name
         vnum = candidate.vnum
+        titleAt = i
         break
       }
     }
@@ -172,11 +175,29 @@ export class RoomCapture {
         }
       }
     }
+    // The description is the unbroken prose directly under the title. Stopping
+    // at the first blank line is what keeps it stable: objects and mobs are
+    // printed after that blank (or after the exits line), so picking something
+    // up must not change what the room looks like to the mapper.
+    let descHash: string | undefined
+    if (titleAt >= 0) {
+      const body: string[] = []
+      for (let i = titleAt + 1; i < this.recent.length; i++) {
+        const line = stripPromptPrefix(this.recent[i]).trim()
+        if (line.length === 0) break
+        body.push(line)
+      }
+      if (body.length > 0) {
+        const hash = hashText(body.join(' '))
+        if (hash) descHash = hash
+      }
+    }
+
     this.recent = []
     if (!name) return null
     // A vnum on the title line is the server's own room id, and it shares the
     // "vnum:" namespace with the MSDP report so the two agree about identity.
-    return vnum ? { name, exits, serverId: `vnum:${vnum}` } : { name, exits }
+    return vnum ? { name, exits, descHash, serverId: `vnum:${vnum}` } : { name, exits, descHash }
   }
 
   reset(): void {

@@ -274,13 +274,20 @@ export function MapCanvas(props: Props) {
       if (sx < -cell || sy < -cell || sx > w + cell || sy > h + cell) continue
 
       const isSelected = room.id === selectedRoomId || multiSelected.has(room.id)
+      // A room the mapper had to create even though an existing one might have
+      // been the same place. It is drawn dashed until later evidence either
+      // merges it away or rules the rivals out, so a copy is visible rather
+      // than silently sitting in the map looking exactly like real geography.
+      const unsure = (room.rivals?.length ?? 0) > 0
       ctx.fillStyle = room.color || '#1c2128'
-      ctx.strokeStyle = isSelected ? '#ffffff' : '#8b949e'
+      ctx.strokeStyle = isSelected ? '#ffffff' : unsure ? '#c8a04a' : '#8b949e'
       ctx.lineWidth = isSelected ? 2 : 1
+      if (unsure && !isSelected) ctx.setLineDash([3, 2])
       ctx.beginPath()
       ctx.roundRect(sx - half, sy - half, half * 2, half * 2, 4 * view.scale)
       ctx.fill()
       ctx.stroke()
+      ctx.setLineDash([])
 
       if (room.id === currentRoomId) {
         // A dashed ring means the mapper is holding a guess rather than a

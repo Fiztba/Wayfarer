@@ -77,6 +77,18 @@ export interface MapExit {
 
 export interface MapRoom {
   id: string
+  /**
+   * Hashes of descriptions seen in this room. A SET, not one value: weather,
+   * daylight and season give a single room several descriptions, so any match
+   * is identity while a mismatch on its own proves nothing.
+   */
+  descHashes?: string[]
+  /**
+   * Rooms this one might actually be a copy of, recorded when it had to be
+   * created even though rivals existed. Emptied as evidence rules them out,
+   * and the room merges away if one is confirmed.
+   */
+  rivals?: string[]
   /** Authoritative server identity (e.g. "vnum:3001", "gmcp:12345"). */
   serverId?: string
   name: string
@@ -113,6 +125,8 @@ export interface MudMap {
   /** Where the pop-out map window sat when this MUD was last played, so it
    *  reopens on the same monitor. Null/undefined means it was not open. */
   popout?: PopoutBounds | null
+  /** Recent automatic merges, newest last, so they can be undone. */
+  merges?: MergeRecord[]
 }
 
 /** Screen rectangle of the pop-out map window. */
@@ -130,6 +144,8 @@ export function emptyMap(): MudMap {
 export interface RoomDetection {
   name: string
   exits: Array<{ dir: Direction; door: boolean }>
+  /** Hash of the room's description, when one was printed. */
+  descHash?: string
   /** Server room id read off the title line (staff roomflags), when shown. */
   serverId?: string
 }
@@ -152,6 +168,34 @@ export function stripPromptPrefix(line: string): string {
 
 export function normalizeRoomName(name: string): string {
   return stripPromptPrefix(name).trim().toLowerCase()
+}
+
+/**
+ * Stable 32-bit FNV-1a over normalised text, as 8 hex characters. It only has
+ * to be consistent between sessions and collision-shy across one MUD's room
+ * descriptions, so a short digest is plenty and keeps the map file small.
+ */
+export function hashText(text: string): string {
+  const norm = text.toLowerCase().replace(/\s+/g, ' ').trim()
+  if (norm.length === 0) return ''
+  let h = 0x811c9dc5
+  for (let i = 0; i < norm.length; i++) {
+    h ^= norm.charCodeAt(i)
+    h = Math.imul(h, 0x01000193) >>> 0
+  }
+  return h.toString(16).padStart(8, '0')
+}
+
+/** A room absorbed by an automatic merge, kept so it can be put back. */
+export interface MergeRecord {
+  keptId: string
+  /** The absorbed room verbatim. */
+  dropped: MapRoom
+  /** The keeper's exits before it absorbed anything. */
+  keptExits: MapExit[]
+  /** Exits elsewhere that were redirected onto the keeper. */
+  inbound: Array<{ roomId: string; dir: Direction | null; command?: string }>
+  lastRoomId?: string | null
 }
 
 export function fingerprintOf(name: string, dirs: Direction[]): string {

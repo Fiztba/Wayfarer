@@ -56,8 +56,9 @@ interface Hypothesis {
 interface Speculation {
   /** Last room we were certain of. */
   anchorRoomId: string
-  /** How many rooms explained the first step, for the message if it creates. */
-  ambiguity: number
+  /** Rooms that also explained the first step, carried onto the room it
+   *  creates if none of them turn out to be right. */
+  rivals: string[]
   /** Observations since the anchor, replayed on commit. */
   steps: Array<{ dir: Direction | null; det: RoomDetection }>
   hypotheses: Hypothesis[]
@@ -70,6 +71,14 @@ interface Speculation {
  * bound exists so a pathological map cannot buffer without limit.
  */
 const SPECULATION_CAP = 30
+
+/**
+ * Evidence needed before a room is merged away automatically. Scored so that
+ * two independent signals are always required: a shared description is worth
+ * 2, and so is each exit both rooms agree leads to the same place. One signal
+ * alone never merges -- a bad merge is far harder to spot than a duplicate.
+ */
+const MERGE_CONFIDENCE = 3
 
 /** Said when a room is created that an existing one could also have been. */
 const MSG_DUPE = (name: string, count: number): string =>
@@ -96,6 +105,8 @@ export class MapTracker implements TrackerControl {
   /** True while draining a settled speculation back through the normal path,
    *  so replayed steps commit instead of opening a fresh speculation. */
   private replaying = false
+  /** Guards against reconciliation re-entering itself through notify(). */
+  private reconciling = false
 
   private model: MapModel
   private host: TrackerHost
@@ -119,6 +130,16 @@ export class MapTracker implements TrackerControl {
   }
 
   private notify(): void {
+    // Doubt is only worth revisiting once the position is settled; mid-guess
+    // the evidence is not written down yet anyway.
+    if (!this.reconciling && !this.speculation && this.mode === 'map') {
+      this.reconciling = true
+      try {
+        this.reconcile()
+      } finally {
+        this.reconciling = false
+      }
+    }
     // Only ever persist a settled position. Restoring a bet on the next
     // session would hand it the confidence it never earned.
     if (!this.speculation) this.model.setLastRoom(this.currentRoomId)
@@ -346,7 +367,7 @@ export class MapTracker implements TrackerControl {
     const exit = this.model.exitOf(current, dir)
     if (exit?.to) {
       const dest = this.model.room(exit.to)
-      if (dest && this.roomMatches(dest, det)) {
+      if (dest && this.couldBe(dest, det)) {
         this.currentRoomId = dest.id
         this.refreshExits(dest, det)
         this.syncName(dest, det)
@@ -356,7 +377,7 @@ export class MapTracker implements TrackerControl {
       // The link may be a wrong guess (reverse links are heuristic, and MUD
       // geometry is often asymmetric). On solid evidence, correct the exit
       // and follow the player instead of going lost.
-      const fixes = this.model.findByFingerprint(det.name, dirs)
+      const fixes = this.candidatesFor(det)
       const fixed = this.pickArrival(fixes, current, dir)
       if (fixed) {
         this.model.linkRooms(current.id, dir, fixed.id, false)
@@ -383,7 +404,7 @@ export class MapTracker implements TrackerControl {
     // is identification, not creation -- the rule onServerRoom already
     // states. Follow mode used to go lost here without even looking, on
     // rooms it knew perfectly well.
-    const candidates = this.model.findByFingerprint(det.name, dirs)
+    const candidates = this.candidatesFor(det)
     const known = this.pickArrival(candidates, current, dir)
     if (known) {
       if (this.mode === 'map') {
@@ -413,11 +434,14 @@ export class MapTracker implements TrackerControl {
       return
     }
     if (others.length > 0) {
-      this.host.info(
-        MSG_DUPE(det.name, others.length + 1)
-      )
+      this.host.info(MSG_DUPE(det.name, others.length + 1))
     }
-    this.currentRoomId = this.createArrival(current, dir, det).id
+    const made = this.createArrival(current, dir, det)
+    // Carry the doubt with the room instead of forgetting it. If one of these
+    // turns out to be the room we are really in, the reconciler merges it away
+    // without ever asking.
+    if (others.length > 0) this.model.setRivals(made.id, others.map((o) => o.id))
+    this.currentRoomId = made.id
     this.notify()
     return
   }
@@ -434,7 +458,7 @@ export class MapTracker implements TrackerControl {
 
     if (this.lost) {
       // While lost we only re-anchor on an unambiguous fingerprint.
-      const matches = this.model.findByFingerprint(det.name, dirs)
+      const matches = this.candidatesFor(det)
       if (matches.length === 1) {
         this.currentRoomId = matches[0].id
         this.lost = false
@@ -457,7 +481,7 @@ export class MapTracker implements TrackerControl {
         this.notify()
       } else {
         // Teleport/recall/death: try unambiguous snap, else flag.
-        const matches = this.model.findByFingerprint(det.name, dirs)
+        const matches = this.candidatesFor(det)
         if (matches.length === 1) {
           this.currentRoomId = matches[0].id
           this.notify()
@@ -469,7 +493,7 @@ export class MapTracker implements TrackerControl {
     }
 
     // No current room at all (fresh session).
-    const matches = this.model.findByFingerprint(det.name, dirs)
+    const matches = this.candidatesFor(det)
     if (matches.length === 1) {
       this.currentRoomId = matches[0].id
       this.notify()
@@ -560,6 +584,74 @@ export class MapTracker implements TrackerControl {
     return null
   }
 
+  // ---- reconciliation -----------------------------------------------------
+
+  /**
+   * Revisit rooms that had to be created while a rival might have been the
+   * real one, now that more of the map is known.
+   *
+   * This is the half that matters while exploring. Holding a move back only
+   * helps when the evidence arrives BEFORE anything is written, which needs
+   * the walk to re-enter mapped ground. Evidence that turns up two rooms later
+   * -- an exit that lands where a rival's own exit already goes, a description
+   * seen again -- arrives too late for that, and is exactly what this consumes.
+   */
+  private reconcile(): void {
+    for (const room of this.model.provisionalRooms()) {
+      const alive: MapRoom[] = []
+      let best: MapRoom | null = null
+      let bestScore = 0
+      for (const id of room.rivals ?? []) {
+        const rival = this.model.room(id)
+        if (!rival) continue
+        const score = this.sameRoomScore(room, rival)
+        if (score === null) continue // ruled out for good
+        alive.push(rival)
+        if (score > bestScore) {
+          bestScore = score
+          best = rival
+        }
+      }
+      this.model.setRivals(
+        room.id,
+        alive.map((r) => r.id)
+      )
+      if (alive.length !== 1 || !best || bestScore < MERGE_CONFIDENCE) continue
+      const name = best.name
+      const standingHere = this.currentRoomId === room.id
+      // The older room survives: it carries the links and history.
+      this.model.mergeRooms(best.id, room.id)
+      if (standingHere) this.currentRoomId = best.id
+      this.host.info(
+        `Mapper: "${name}" turned out to be a room already on the map — merged the copy away. #unmerge puts it back.`
+      )
+    }
+  }
+
+  /**
+   * How much says these two are the same room, or null once something says
+   * they cannot be. Descriptions rule out outright, because two rooms that
+   * genuinely look different are genuinely different; exits agreeing about
+   * where they lead is corroboration, exits disagreeing is a contradiction.
+   */
+  private sameRoomScore(a: MapRoom, b: MapRoom): number | null {
+    const ah = a.descHashes ?? []
+    const bh = b.descHashes ?? []
+    let score = 0
+    if (ah.length > 0 && bh.length > 0) {
+      if (!ah.some((h) => bh.includes(h))) return null
+      score += 2
+    }
+    for (const ea of a.exits) {
+      if (!ea.dir || !ea.to) continue
+      const eb = b.exits.find((e) => e.dir === ea.dir)
+      if (!eb || !eb.to) continue
+      if (eb.to === ea.to) score += 2
+      else if (ea.to !== b.id && eb.to !== a.id) return null
+    }
+    return score
+  }
+
   // ---- speculation --------------------------------------------------------
 
   /** Start holding moves back because more than one room explains this one. */
@@ -571,7 +663,7 @@ export class MapTracker implements TrackerControl {
   ): void {
     this.speculation = {
       anchorRoomId: anchor.id,
-      ambiguity: candidates.length,
+      rivals: candidates.map((c) => c.id),
       steps: [{ dir, det }],
       hypotheses: candidates.map((c) => ({ path: [c.id], corroborations: 0 }))
     }
@@ -626,7 +718,7 @@ export class MapTracker implements TrackerControl {
       if (!move) {
         // A look rather than a move: this reading has to describe the room it
         // claims we are standing in.
-        if (this.roomMatches(at, det)) {
+        if (this.couldBe(at, det)) {
           survivors.push({ path: [...h.path, at.id], corroborations: h.corroborations + 1 })
         }
         continue
@@ -634,7 +726,7 @@ export class MapTracker implements TrackerControl {
       const exit = this.model.exitOf(at, move.dir)
       if (!exit || exit.to === null) continue
       const dest = this.model.room(exit.to)
-      if (!dest || !this.roomMatches(dest, det)) continue
+      if (!dest || !this.couldBe(dest, det)) continue
       survivors.push({ path: [...h.path, dest.id], corroborations: h.corroborations + 1 })
     }
     spec.hypotheses = survivors
@@ -685,7 +777,7 @@ export class MapTracker implements TrackerControl {
     const spec = this.speculation
     if (!spec) return
     this.speculation = null
-    this.host.info(MSG_DUPE(spec.steps[0].det.name, spec.ambiguity + 1))
+    this.host.info(MSG_DUPE(spec.steps[0].det.name, spec.rivals.length + 1))
     const anchor = this.model.room(spec.anchorRoomId)
     if (!anchor) return
     // Step one IS the ambiguity, pinned to the reading that won: a new room.
@@ -694,9 +786,13 @@ export class MapTracker implements TrackerControl {
     // gap gets created and the twin beyond it gets recognised rather than
     // duplicated a second time.
     const first = spec.steps[0]
-    this.currentRoomId = first.dir
-      ? this.createArrival(anchor, first.dir, first.det).id
-      : anchor.id
+    if (first.dir) {
+      const made = this.createArrival(anchor, first.dir, first.det)
+      this.model.setRivals(made.id, spec.rivals)
+      this.currentRoomId = made.id
+    } else {
+      this.currentRoomId = anchor.id
+    }
     this.replaying = true
     try {
       for (const step of spec.steps.slice(1)) {
@@ -734,10 +830,38 @@ export class MapTracker implements TrackerControl {
       zoneId: this.zoneForNewRoom(from)
     })
     this.applyDetectedExits(room, det)
+    this.model.addDescHash(room.id, det.descHash)
     // Two-way link only if the new room reports the return exit.
     const hasReturn = det.exits.some((e) => e.dir === OPPOSITE[dir])
     this.model.linkRooms(from.id, dir, room.id, hasReturn)
     return room
+  }
+
+  /**
+   * Could this room be the one just described?
+   *
+   * The name must match, and any descriptions already recorded for the room
+   * must include the one in front of us. Name alone is far too weak exactly
+   * where it gets leaned on hardest: a MUD with three rooms called "A Long
+   * Water-filled Tunnel" satisfies a name test with any of them, which is how
+   * a reading survived that should have died and a north exit was written to
+   * the room drawn SOUTH. A room with no descriptions recorded yet cannot be
+   * ruled out this way, so this stays permissive until evidence exists.
+   */
+  /** Rooms that could be the one described, with any whose recorded
+   *  description contradicts it removed. Every identity decision goes through
+   *  here, so a room that demonstrably looks different is never a candidate --
+   *  not even when a back-link vouches for it. */
+  private candidatesFor(det: RoomDetection): MapRoom[] {
+    const dirs = det.exits.map((e) => e.dir)
+    return this.model.findByFingerprint(det.name, dirs).filter((r) => this.couldBe(r, det))
+  }
+
+  private couldBe(room: MapRoom, det: RoomDetection): boolean {
+    if (!this.roomMatches(room, det)) return false
+    const known = room.descHashes ?? []
+    if (det.descHash && known.length > 0) return known.includes(det.descHash)
+    return true
   }
 
   /** Loose match: same name; exits may differ (doors, hidden exits).
@@ -760,9 +884,12 @@ export class MapTracker implements TrackerControl {
     }
   }
 
-  /** Add newly visible exits/doors to a known room without removing any. */
+  /** Add newly visible exits/doors to a known room without removing any, and
+   *  record what it looked like -- the only evidence that tells two rooms with
+   *  the same name and exits apart while exploring. */
   private refreshExits(room: MapRoom, det: RoomDetection): void {
     this.applyDetectedExits(room, det)
+    this.model.addDescHash(room.id, det.descHash)
   }
 
   private expirePending(): void {

@@ -404,6 +404,18 @@ export class SessionStore {
       this.addSystemLine('Map still loading — try again in a moment.', 'error')
       return true
     }
+    if (verb === 'unmerge') {
+      // The escape hatch that lets merging happen automatically at all: a bad
+      // merge is much harder to notice than a duplicate, so one is always
+      // reversible.
+      const restored = this.mapModel.undoLastMerge()
+      if (restored) {
+        this.addSystemLine(`Put "${restored.name}" back as a separate room.`, 'system')
+      } else {
+        this.addSystemLine('No merge to undo.', 'error')
+      }
+      return true
+    }
     if (verb === 'lost') {
       this.tracker.setCurrentRoom(null)
       this.setMapVisible(true)

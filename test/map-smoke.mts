@@ -12,7 +12,12 @@ import {
 import { MapTracker } from '../src/renderer/src/map/MapTracker.ts'
 import { exitOpenCommand, findPath } from '../src/renderer/src/map/Pathfinder.ts'
 import { Walker } from '../src/renderer/src/map/Walker.ts'
-import { emptyMap, stripPromptPrefix, type MudMap } from '../src/renderer/src/map/types.ts'
+import {
+  emptyMap,
+  hashText,
+  stripPromptPrefix,
+  type MudMap
+} from '../src/renderer/src/map/types.ts'
 import {
   cubicPoint,
   cubicTangent,
@@ -1133,6 +1138,179 @@ check('open cmd: no door, no command',
     wall[0].id)
   check('parapet: not lost', tracker.lost, false)
   void tower
+}
+
+// ---- description hashing ----
+{
+  const cap = new RoomCapture()
+  cap.feedLine('An Outstretched Tunnel')
+  cap.feedLine('The Tunnel is much larger here, and because of that, the smell of')
+  cap.feedLine('the sewer is much stronger here.')
+  const a = cap.feedLine('Exits: north east south west')
+  check('desc: a description is hashed', typeof a?.descHash, 'string')
+
+  // The same room seen again hashes the same, however the lines are wrapped.
+  const cap2 = new RoomCapture()
+  cap2.feedLine('An Outstretched Tunnel')
+  cap2.feedLine('The Tunnel is much larger here, and because of that,  the smell')
+  cap2.feedLine('of the sewer is much stronger here.')
+  const b = cap2.feedLine('Exits: north east south west')
+  check('desc: rewrapping does not change it', b?.descHash, a?.descHash)
+
+  // Objects and mobs sit after a blank line, so picking one up cannot change
+  // what the room looks like to the mapper.
+  const cap3 = new RoomCapture()
+  cap3.feedLine('An Outstretched Tunnel')
+  cap3.feedLine('The Tunnel is much larger here, and because of that, the smell of')
+  cap3.feedLine('the sewer is much stronger here.')
+  cap3.feedLine('')
+  cap3.feedLine('A rusty lantern lies here.')
+  const c = cap3.feedLine('Exits: north east south west')
+  check('desc: objects do not perturb it', c?.descHash, a?.descHash)
+
+  // A different room hashes differently.
+  const cap4 = new RoomCapture()
+  cap4.feedLine('A Slimey Tunnel')
+  cap4.feedLine('Globs of slime pour down from the ceiling.')
+  const d = cap4.feedLine('Exits: west down')
+  check('desc: a different room differs', d?.descHash !== a?.descHash, true)
+
+  // A room with no description at all simply has none.
+  const cap5 = new RoomCapture()
+  cap5.feedLine('A Bare Room')
+  const e = cap5.feedLine('Exits: north')
+  check('desc: none printed, none recorded', e?.descHash, undefined)
+}
+
+// ---- exploration: a duplicate is created, then reconciled away ----
+// The case v0.4.11 could not reach. Nothing is mapped ahead, so holding the
+// move cannot help -- every reading dies on the next step and a copy IS made.
+// The evidence that it was a copy only turns up two rooms later.
+{
+  const { model, tracker, infos } = makeWorld()
+  const DESC = {
+    tunnel: 'The Tunnel is much larger here, and the smell of the sewer is stronger.',
+    corner: 'A dark corner where the tunnels meet. Something scuttles out of sight.',
+    slime: 'Globs of slime pour down from the ceiling and pool on the floor.',
+    squeeze: 'The walls press in close here and the air is thin.'
+  }
+  const see = (name: string, desc: string, exits: string): void => {
+    tracker.onLine(name)
+    tracker.onLine(desc)
+    tracker.onLine(exits)
+  }
+
+  // Already mapped, from a previous visit that came in from the north only.
+  const corner = model.createRoom({
+    name: 'A Dark Corner', x: 5, y: 4, z: 0, descHashes: [hashText(DESC.corner)],
+    exits: [{ dir: 's', to: null, door: false }]
+  })
+  const known = model.createRoom({
+    name: 'An Outstretched Tunnel', x: 5, y: 5, z: 0, descHashes: [hashText(DESC.tunnel)],
+    exits: [
+      { dir: 'n', to: null, door: false },
+      { dir: 'e', to: null, door: false },
+      { dir: 's', to: null, door: false },
+      { dir: 'w', to: null, door: false }
+    ]
+  })
+  model.linkRooms(corner.id, 's', known.id, true)
+  const start = model.createRoom({
+    name: 'A Tight Squeeze', x: 0, y: 0, z: 0,
+    exits: [{ dir: 'e', to: null, door: false }]
+  })
+  const before = Object.keys(model.map.rooms).length
+  tracker.setCurrentRoom(start.id)
+
+  // East into a room whose name is already taken: held, nothing written.
+  tracker.onCommand('e')
+  see('An Outstretched Tunnel', DESC.tunnel, 'Exits: north east south west')
+  check('explore: held on arrival', Object.keys(model.map.rooms).length, before)
+
+  // East again into genuinely new ground. The known tunnel's east exit has
+  // never been walked, so that reading dies and a copy has to be created.
+  tracker.onCommand('e')
+  see('A Slimey Tunnel', DESC.slime, 'Exits: west down')
+  check('explore: a copy was created', Object.keys(model.map.rooms).length, before + 2)
+  check('explore: warned about it', infos.some((t) => t.includes('identical name/exits')), true)
+  const copy = model.room(model.exitOf(model.room(start.id)!, 'e')?.to ?? '')!
+  check('explore: the copy remembers its rival', copy.rivals, [known.id])
+
+  // Back west, then north -- which is how the previous visit reached it.
+  tracker.onCommand('w')
+  see('An Outstretched Tunnel', DESC.tunnel, 'Exits: north east south west')
+  tracker.onCommand('n')
+  see('A Dark Corner', DESC.corner, 'Exits: south')
+  // Still unsure: one dark corner could be any dark corner.
+  tracker.onCommand('s')
+  see('An Outstretched Tunnel', DESC.tunnel, 'Exits: north east south west')
+
+  // That settles it. Both rooms now agree their north leads to the same dark
+  // corner, and they look identical -- two independent signals, so the copy is
+  // merged away without anyone being asked.
+  check('explore: the copy is gone', model.room(copy.id), null)
+  check('explore: back to the original count', Object.keys(model.map.rooms).length, before + 1)
+  check('explore: standing in the real room', tracker.currentRoomId, known.id)
+  check('explore: told what happened',
+    infos.some((t) => t.includes('already on the map')), true)
+  check('explore: the way in was kept', model.exitOf(model.room(start.id)!, 'e')?.to, known.id)
+
+  // ...and it can be put back, because an automatic merge must be reversible.
+  const restored = model.undoLastMerge()
+  check('explore: undo restores the copy', restored?.id, copy.id)
+  check('explore: undo restores the count', Object.keys(model.map.rooms).length, before + 2)
+  check('explore: undo restores the way in', model.exitOf(model.room(start.id)!, 'e')?.to, copy.id)
+}
+
+// ---- a direction cannot be reciprocal between two rooms ----
+// Straight from a corrupted live map: room A's north exit was wired to the
+// room drawn SOUTH of it, and since the mapper trusts its own links, every
+// later walk north followed it back. The tell is that north from B already
+// led to A, so north from A cannot also lead to B.
+{
+  const model = new MapModel(emptyMap(), () => {})
+  const north = model.createRoom({ name: 'A Long Water-filled Tunnel', x: 0, y: -1, z: 0 })
+  const south = model.createRoom({ name: 'A Long Water-filled Tunnel', x: 0, y: 0, z: 0 })
+  model.linkRooms(south.id, 'n', north.id, false)
+  check('mutual: the true link is written', model.exitOf(model.room(south.id)!, 'n')?.to, north.id)
+
+  model.linkRooms(north.id, 'n', south.id, false)
+  check('mutual: the contradiction is refused',
+    model.exitOf(model.room(north.id)!, 'n')?.to ?? null, null)
+  // The honest link the other way is still allowed.
+  model.linkRooms(north.id, 's', south.id, false)
+  check('mutual: the opposite direction is fine',
+    model.exitOf(model.room(north.id)!, 's')?.to, south.id)
+  // And a room may still lead to itself, which some MUDs really do.
+  model.linkRooms(north.id, 'e', north.id, false)
+  check('mutual: a self-loop is untouched', model.exitOf(model.room(north.id)!, 'e')?.to, north.id)
+}
+
+// ---- a stored link is not trusted past the room's description ----
+{
+  const { model, tracker } = makeWorld()
+  const DESC_B = 'The walls are all of a different blue colour and a shallow pool lies here.'
+  const DESC_NEW = 'The walls here are bare rock and the water has drained away entirely.'
+  const here = model.createRoom({
+    name: 'A Long Water-filled Tunnel', x: 0, y: 0, z: 0,
+    exits: [{ dir: 'n', to: null, door: false }]
+  })
+  const linked = model.createRoom({
+    name: 'A Long Water-filled Tunnel', x: 0, y: -1, z: 0,
+    descHashes: [hashText(DESC_B)],
+    exits: [{ dir: 's', to: null, door: false }]
+  })
+  model.linkRooms(here.id, 'n', linked.id, true)
+  tracker.setCurrentRoom(here.id)
+
+  // Walk north and see a room of the same name whose description is NOT the
+  // one recorded for the room the link points at. Same name, same exits --
+  // only the description says this is somewhere else.
+  tracker.onCommand('n')
+  tracker.onLine('A Long Water-filled Tunnel')
+  tracker.onLine(DESC_NEW)
+  tracker.onLine('Exits: south')
+  check('desc-guard: did not adopt the linked room', tracker.currentRoomId !== linked.id, true)
 }
 
 // ---- link geometry: obstruction, direction fidelity, long spans ----

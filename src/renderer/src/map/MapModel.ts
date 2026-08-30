@@ -11,11 +11,17 @@ import {
   type Direction,
   type MapExit,
   type MapRoom,
+  type MergeRecord,
   type MudMap,
   type PopoutBounds
 } from './types.ts'
 
 const SAVE_DEBOUNCE_MS = 1500
+/** How many descriptions to remember per room. Weather and daylight give one
+ *  room a handful; beyond that we are hoarding, not identifying. */
+const MAX_DESC_HASHES = 6
+/** How many automatic merges stay undoable. */
+const MERGE_HISTORY = 20
 
 function uuid(): string {
   return typeof crypto !== 'undefined' && crypto.randomUUID
@@ -150,6 +156,8 @@ export class MapModel {
       z: partial.z ?? 0,
       color: partial.color,
       notes: partial.notes,
+      descHashes: partial.descHashes,
+      rivals: partial.rivals,
       exits: partial.exits ?? []
     }
     this.map.rooms[room.id] = room
@@ -183,6 +191,65 @@ export class MapModel {
     if (this.map.lastRoomId === id) return
     this.map.lastRoomId = id
     this.touch()
+  }
+
+  /**
+   * Record what a room looked like. Kept as a set: one room has several
+   * descriptions across weather and daylight, so a match is identity while a
+   * single mismatch proves nothing on its own.
+   */
+  addDescHash(roomId: string, hash: string | undefined): void {
+    if (!hash) return
+    const room = this.map.rooms[roomId]
+    if (!room) return
+    const seen = room.descHashes ?? []
+    if (seen.includes(hash)) return
+    room.descHashes = [...seen, hash].slice(-MAX_DESC_HASHES)
+    this.touch()
+  }
+
+  /** Rooms this one might be a copy of; empty clears the doubt. */
+  setRivals(roomId: string, rivals: string[]): void {
+    const room = this.map.rooms[roomId]
+    if (!room) return
+    const next = rivals.filter((id) => id !== roomId && this.map.rooms[id])
+    const cur = room.rivals ?? []
+    if (cur.length === next.length && next.every((id) => cur.includes(id))) return
+    if (next.length === 0) delete room.rivals
+    else room.rivals = next
+    this.touch()
+  }
+
+  /** Rooms still carrying doubt about which room they really are. */
+  provisionalRooms(): MapRoom[] {
+    return Object.values(this.map.rooms).filter((r) => (r.rivals?.length ?? 0) > 0)
+  }
+
+  /**
+   * Put back the most recent merge. Merging is destructive and a bad one is
+   * far harder to notice than a duplicate, so nothing may merge automatically
+   * without this being possible.
+   */
+  undoLastMerge(): MapRoom | null {
+    const merges = this.map.merges
+    if (!merges || merges.length === 0) return null
+    const rec = merges[merges.length - 1]
+    const keep = this.map.rooms[rec.keptId]
+    if (!keep) return null
+    const restored = structuredClone(rec.dropped)
+    this.map.rooms[restored.id] = restored
+    keep.exits = structuredClone(rec.keptExits)
+    for (const back of rec.inbound) {
+      const room = this.map.rooms[back.roomId]
+      const exit = room?.exits.find((e) =>
+        back.dir ? e.dir === back.dir : e.command === back.command
+      )
+      if (exit && exit.to === rec.keptId) exit.to = restored.id
+    }
+    if (rec.lastRoomId !== undefined) this.map.lastRoomId = rec.lastRoomId
+    this.map.merges = merges.slice(0, -1)
+    this.touch()
+    return restored
   }
 
   /** Remember whether the map pane was open, so the next session on this MUD
@@ -227,9 +294,19 @@ export class MapModel {
     const keep = this.map.rooms[keepId]
     const drop = this.map.rooms[dropId]
     if (!keep || !drop || keepId === dropId) return
+    const record: MergeRecord = {
+      keptId: keepId,
+      dropped: structuredClone(drop),
+      keptExits: structuredClone(keep.exits),
+      inbound: [],
+      lastRoomId: this.map.lastRoomId ?? null
+    }
     for (const room of Object.values(this.map.rooms)) {
       for (const exit of room.exits) {
-        if (exit.to === dropId) exit.to = keepId
+        if (exit.to === dropId) {
+          record.inbound.push({ roomId: room.id, dir: exit.dir, command: exit.command })
+          exit.to = keepId
+        }
       }
     }
     for (const exit of drop.exits) {
@@ -244,7 +321,21 @@ export class MapModel {
       if (w.roomId === dropId) w.roomId = keepId
     }
     if (this.map.lastRoomId === dropId) this.map.lastRoomId = keepId
+    // Descriptions are evidence; the survivor keeps everything either saw.
+    const hashes = [...(keep.descHashes ?? [])]
+    for (const h of drop.descHashes ?? []) if (!hashes.includes(h)) hashes.push(h)
+    if (hashes.length > 0) keep.descHashes = hashes.slice(-MAX_DESC_HASHES)
+    // The doubt is settled for everyone who pointed at either room.
+    for (const room of Object.values(this.map.rooms)) {
+      if (room.rivals?.includes(dropId)) {
+        const left = room.rivals.filter((id) => id !== dropId && id !== room.id)
+        if (left.length === 0) delete room.rivals
+        else room.rivals = left
+      }
+    }
+    delete keep.rivals
     delete this.map.rooms[dropId]
+    this.map.merges = [...(this.map.merges ?? []), record].slice(-MERGE_HISTORY)
     this.touch()
   }
 
@@ -265,8 +356,24 @@ export class MapModel {
     return exit
   }
 
-  /** Link from→to via dir; adds the reverse link when addReverse. */
+  /**
+   * Two rooms cannot both lie in the same direction from one another: if north
+   * from B is A, then north from A cannot be B. Real MUD geometry effectively
+   * never does this, and accepting it once is unrecoverable -- the mapper then
+   * trusts the link forever. On a live map this wired a north exit to the room
+   * drawn to the SOUTH, and every subsequent walk north followed it back.
+   */
+  private wouldContradictDirection(fromId: string, dir: Direction, toId: string): boolean {
+    if (fromId === toId) return false
+    const dest = this.map.rooms[toId]
+    if (!dest) return false
+    return dest.exits.some((e) => e.dir === dir && e.to === fromId)
+  }
+
+  /** Link from→to via dir; adds the reverse link when addReverse.
+   *  Refuses a link that would make the same direction reciprocal. */
   linkRooms(fromId: string, dir: Direction, toId: string, addReverse: boolean): void {
+    if (this.wouldContradictDirection(fromId, dir, toId)) return
     const exit = this.ensureExit(fromId, dir)
     exit.to = toId
     if (addReverse) {
