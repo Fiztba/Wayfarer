@@ -159,6 +159,14 @@ export interface ServerRoomInfo {
   areaName?: string
   /** dir → destination serverId (when the protocol provides it). */
   exits?: Partial<Record<Direction, string | null>>
+  /** Directions the server reports as closed or locked. */
+  doors?: Direction[]
+  /** The room's description, for protocols that send it. Hashed like a
+   *  description read off the screen, so both routes agree about identity. */
+  description?: string
+  /** The server's own coordinates. Worth far more than anything placement can
+   *  work out, because they are the layout the MUD itself believes in. */
+  coords?: { x: number; y: number; z: number }
 }
 
 /**

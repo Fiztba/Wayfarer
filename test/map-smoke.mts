@@ -16,6 +16,7 @@ import {
 } from '../src/renderer/src/map/RemoteMap.ts'
 import { MapTracker } from '../src/renderer/src/map/MapTracker.ts'
 import { exitOpenCommand, findPath } from '../src/renderer/src/map/Pathfinder.ts'
+import { gmcpRoomInfo } from '../src/renderer/src/map/protocol.ts'
 import { Walker } from '../src/renderer/src/map/Walker.ts'
 import {
   emptyMap,
@@ -1511,6 +1512,82 @@ check('open cmd: no door, no command',
   check('stuck: does not seed over an existing map',
     Object.keys(model.map.rooms).length, before)
   check('stuck: still lost, still waiting', tracker.lost, true)
+}
+
+// ---- GMCP room info, in the shapes MUDs actually send ----
+// AwakeMUD CE tells the client everything -- vnum, name, exits with their
+// destinations and door states, coordinates, description -- and every message
+// was thrown away because the id was read from "num"/"number"/"id" and that
+// MUD calls it "vnum". The heuristics work that followed was treating a
+// symptom of this.
+{
+  const awake = {
+    vnum: 12345,
+    name: 'Archetypal Chargen - Mage / Shaman Start Room',
+    flags: ['peaceful'],
+    exits: [
+      { direction: 'north', to: 12346, state: 'OPEN' },
+      { direction: 'south', to: 12347, state: 'CLOSED' },
+      { direction: 'down', to: 12348, state: 'LOCKED' }
+    ],
+    coords: { x: 3, y: -4, z: 0 },
+    description: 'Welcome to Awake CE. This room stands on the event horizon.'
+  }
+  const info = gmcpRoomInfo('Room.Info', awake)!
+  check('gmcp: vnum is identity', info.serverId, 'gmcp:12345')
+  check('gmcp: name read', info.name, 'Archetypal Chargen - Mage / Shaman Start Room')
+  check('gmcp: exits arrive with their destinations',
+    [info.exits?.n, info.exits?.s, info.exits?.d],
+    ['gmcp:12346', 'gmcp:12347', 'gmcp:12348'])
+  check('gmcp: closed and locked are doors', info.doors?.sort(), ['d', 's'])
+  check('gmcp: open exits are not doors', info.doors?.includes('n'), false)
+  check('gmcp: coordinates come through', info.coords, { x: 3, y: -4, z: 0 })
+  check('gmcp: description comes through', typeof info.description, 'string')
+
+  // Room.Exits is the same MUD's other package, with its own field names.
+  const exitsPkg = gmcpRoomInfo('Room.Exits', {
+    room_vnum: 999,
+    room_name: 'The Iron Bridge',
+    exits: [{ direction: 'west', to: 998, state: 'OPEN' }]
+  })!
+  check('gmcp: Room.Exits is understood too', exitsPkg.serverId, 'gmcp:999')
+  check('gmcp: its room name too', exitsPkg.name, 'The Iron Bridge')
+
+  // The object-keyed shape other MUDs use still works.
+  const keyed = gmcpRoomInfo('room.info', {
+    num: 7, name: 'Temple Square', zone: 'Midgaard', exits: { north: 8, east: null }
+  })!
+  check('gmcp: object-shaped exits still work',
+    [keyed.exits?.n, keyed.exits?.e], ['gmcp:8', null])
+  check('gmcp: area from zone', keyed.areaName, 'Midgaard')
+
+  check('gmcp: another package is ignored', gmcpRoomInfo('Char.Vitals', { vnum: 1 }), null)
+  check('gmcp: no id is no identity', gmcpRoomInfo('Room.Info', { name: 'Nowhere' }), null)
+}
+
+// ---- the server's own coordinates are used, except when they are nothing ----
+{
+  const { model, tracker } = makeWorld()
+  tracker.onServerRoom({
+    serverId: 'gmcp:1', name: 'Start', coords: { x: 3, y: -4, z: 2 },
+    description: 'A quiet room.', doors: ['s'],
+    exits: { n: 'gmcp:2', s: 'gmcp:3' }
+  })
+  const start = tracker.currentRoom!
+  check('coords: placed where the server says', [start.x, start.y, start.z], [3, -4, 2])
+  check('coords: the door was recorded', model.exitOf(start, 's')?.door, true)
+  check('coords: the open exit was not', model.exitOf(start, 'n')?.door, false)
+  check('coords: description hashed from the protocol',
+    (start.descHashes?.length ?? 0) > 0, true)
+
+  // A MUD with no coordinates for a room reports zeroes. Taking those at face
+  // value would pile the whole world onto one square, so they are ignored and
+  // placement works it out instead.
+  tracker.onCommand('n')
+  tracker.onServerRoom({ serverId: 'gmcp:2', name: 'Next', coords: { x: 0, y: 0, z: 0 } })
+  const next = tracker.currentRoom!
+  check('coords: all-zero is not taken literally', [next.x, next.y], [3, -5])
+  check('coords: and it is a different room', next.id !== start.id, true)
 }
 
 // ---- link geometry: obstruction, direction fidelity, long spans ----

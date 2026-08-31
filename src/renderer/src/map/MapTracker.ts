@@ -15,6 +15,7 @@ import type { MapModel } from './MapModel.ts'
 import { RoomCapture, closedDoorName, isMoveFailure, isClosedDoorFailure } from './capture.ts'
 import {
   DIR_DELTA,
+  hashText,
   normalizeRoomName,
   OPPOSITE,
   wordToDirection,
@@ -291,6 +292,7 @@ export class MapTracker implements TrackerControl {
       if (info.name && existing.name !== info.name) {
         this.model.updateRoom(existing.id, { name: info.name })
       }
+      this.applyServerDetail(existing.id, info)
       this.notify()
       return
     }
@@ -334,14 +336,29 @@ export class MapTracker implements TrackerControl {
     // Genuinely new room, authoritative id. Server area names are
     // authoritative for zones; otherwise inherit from the room we came from.
     const zoneId = info.areaName ? this.model.createZone(info.areaName) : this.zoneForNewRoom(from)
-    const pos =
-      from && move ? this.model.placeFrom(from, move.dir) : { x: 0, y: 0, z: 0 }
+    // The server's own coordinates beat anything placement can infer -- they
+    // are the layout the MUD believes in. Rooms sitting at the origin are
+    // skipped: a MUD that has no coordinates for a room reports zeroes, and
+    // taking those at face value piles the whole world on one square.
+    const given = info.coords
+    const usable =
+      given &&
+      Number.isFinite(given.x) &&
+      Number.isFinite(given.y) &&
+      Number.isFinite(given.z) &&
+      !(given.x === 0 && given.y === 0 && given.z === 0)
+    const pos = usable
+      ? { x: given.x, y: given.y, z: given.z }
+      : from && move
+        ? this.model.placeFrom(from, move.dir)
+        : { x: 0, y: 0, z: 0 }
     const room = this.model.createRoom({
       name: info.name ?? 'Unknown room',
       serverId: info.serverId,
       zoneId,
       ...pos
     })
+    this.applyServerDetail(room.id, info)
     if (info.exits) {
       for (const [dirWord, destSid] of Object.entries(info.exits)) {
         const dir = wordToDirection(dirWord)
@@ -357,6 +374,12 @@ export class MapTracker implements TrackerControl {
     this.currentRoomId = room.id
     this.lost = false
     this.notify()
+  }
+
+  /** Doors and description reported alongside a room's identity. */
+  private applyServerDetail(roomId: string, info: ServerRoomInfo): void {
+    for (const dir of info.doors ?? []) this.model.setDoor(roomId, dir, true)
+    if (info.description) this.model.addDescHash(roomId, hashText(info.description))
   }
 
   // ---- text-based dead reckoning ------------------------------------------

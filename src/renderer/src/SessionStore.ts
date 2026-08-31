@@ -17,6 +17,7 @@ import { LoginGuesser } from './LoginGuesser'
 import { MapModel } from './map/MapModel.ts'
 import { MapTracker } from './map/MapTracker.ts'
 import { MODEL_ACTION_METHODS } from './map/RemoteMap.ts'
+import { gmcpRoomInfo } from './map/protocol.ts'
 import { Walker } from './map/Walker.ts'
 import { exitOpenCommand, findPath, type WalkStep } from './map/Pathfinder.ts'
 import {
@@ -680,25 +681,8 @@ export class SessionStore {
 
   /** GMCP Room.Info → authoritative tracker input. */
   private handleGmcpForMap(pkg: string, data: unknown): void {
-    if (!/^room\.info$/i.test(pkg) || typeof data !== 'object' || data === null) return
-    const d = data as Record<string, unknown>
-    const num = d.num ?? d.number ?? d.id
-    if (num === undefined || num === null) return
-    const exits: ServerRoomInfo['exits'] = {}
-    if (typeof d.exits === 'object' && d.exits !== null) {
-      for (const [k, v] of Object.entries(d.exits as Record<string, unknown>)) {
-        const dir = wordToDirection(k)
-        if (dir) exits[dir] = v === null || v === undefined ? null : `gmcp:${v}`
-      }
-    }
-    const areaName =
-      typeof d.area === 'string' ? d.area : typeof d.zone === 'string' ? d.zone : undefined
-    this.tracker?.onServerRoom({
-      serverId: `gmcp:${num}`,
-      name: typeof d.name === 'string' ? d.name : undefined,
-      areaName,
-      exits
-    })
+    const info = gmcpRoomInfo(pkg, data)
+    if (info) this.tracker?.onServerRoom(info)
   }
 
   /**
