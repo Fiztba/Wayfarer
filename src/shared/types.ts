@@ -107,6 +107,11 @@ export interface ScriptDef {
 }
 
 export interface SettingsOptions {
+  /**
+   * Check for and install updates. Off keeps you on the version you have --
+   * for anyone who has settled on a build and wants it left alone.
+   */
+  autoUpdate: boolean
   /** Start logging automatically when a session connects. */
   autoLog: boolean
   /** Clear the input line after sending (default: keep it selected). */
@@ -185,6 +190,7 @@ export function defaultSettings(): SettingsSet {
     gauges: [],
     variables: {},
     options: {
+      autoUpdate: true,
       autoLog: false,
       clearInputOnSend: false,
       showTimestamps: false,

@@ -14,6 +14,9 @@ import type { ConnectOptions, Profile, SettingsSet } from '../shared/types'
 let mainWindow: BrowserWindow | null = null
 /** Version of a downloaded update waiting to install, once one exists. */
 let updateReady: string | null = null
+/** How long to wait at startup for the update server to answer before giving
+ *  up and launching. A slow or captive network must never hold the app shut. */
+const STARTUP_CHECK_MS = 5000
 /** Where the updater writes; null until the packaged updater starts up. */
 let updaterLogPath: string | null = null
 
@@ -91,7 +94,7 @@ function createWindow(): void {
   }
 }
 
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
   const soundsDir = path.join(app.getPath('userData'), 'sounds')
   fs.mkdirSync(soundsDir, { recursive: true })
   protocol.handle('msp-sound', (request) => {
@@ -277,18 +280,18 @@ app.whenReady().then(() => {
     mainWindow?.webContents.send('map:mirror-action', sessionId, action)
   })
 
-  createWindow()
-
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow()
   })
 
   // ---- Auto-update: newest GitHub Release -------------------------------
-  // Poll on launch and every 4 hours after, since a client can stay up for
-  // days. Downloads happen in the background and install on quit, so a live
-  // session is never interrupted; failures (offline, rate-limit) just wait
-  // for the next poll.
-  if (app.isPackaged) {
+  // An update found at startup is installed BEFORE anything is shown, so the
+  // window you end up looking at is already the new version and no second
+  // launch is needed. While the app is running, a later find still downloads
+  // in the background and installs on quit, so a live session is never
+  // interrupted; failures (offline, rate-limit) just wait for the next poll.
+  const updatesWanted = settings.get(null).options.autoUpdate !== false
+  if (app.isPackaged && updatesWanted) {
     // console.log is invisible in a packaged build, which is how a silent
     // failure stayed silent. Everything the updater says goes to a file the
     // user can actually open (⚙ Settings → General → Open updater log).
@@ -315,9 +318,111 @@ app.whenReady().then(() => {
       mainWindow?.webContents.send('app:update-ready', info.version)
     })
 
-    const check = () => autoUpdater.checkForUpdatesAndNotify().catch(() => {})
-    check()
-    setInterval(check, 4 * 60 * 60 * 1000)
+    // Driven by hand rather than checkForUpdatesAndNotify, so the download can
+    // be held until we know whether this is the startup pass.
+    autoUpdater.autoDownload = false
+
+    /** A small window, shown only once a download actually starts. Nothing is
+     *  displayed for the common case of "already current", so a normal launch
+     *  is not slowed by a progress bar nobody needed to see. Closing it skips
+     *  the wait and starts the version already installed. */
+    const showProgress = (version: string): BrowserWindow => {
+      const win = new BrowserWindow({
+        width: 380,
+        height: 150,
+        resizable: false,
+        minimizable: false,
+        maximizable: false,
+        backgroundColor: '#0d1117',
+        title: 'Wayfarer',
+        autoHideMenuBar: true
+      })
+      const body = `<!doctype html><meta charset="utf-8"><body style="margin:0;font:13px system-ui,sans-serif;color:#c8ccd4;background:#0d1117;display:flex;flex-direction:column;justify-content:center;padding:0 22px"><div style="font-size:15px;margin-bottom:10px">Updating to ${version}</div><div id="s">Starting the download…</div><div style="margin-top:12px;height:6px;background:#1c2128;border-radius:3px;overflow:hidden"><div id="b" style="height:100%;width:0;background:#61afef"></div></div><div style="margin-top:12px;color:#8b949e">Close this window to start Wayfarer without updating.</div></body>`
+      void win.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent(body))
+      return win
+    }
+
+    /**
+     * Resolves true when an update is being installed, in which case the
+     * caller must not open a window -- the app is about to restart into the
+     * new version. Everything else resolves false and launches as normal:
+     * offline, rate-limited, already current, or simply too slow to be worth
+     * making someone wait for.
+     */
+    const updateBeforeLaunch = (): Promise<boolean> =>
+      new Promise<boolean>((resolve) => {
+        let settled = false
+        const finish = (installing: boolean): void => {
+          if (settled) return
+          settled = true
+          resolve(installing)
+        }
+        const patience = setTimeout(() => {
+          log('[startup] no answer in time — launching')
+          finish(false)
+        }, STARTUP_CHECK_MS)
+
+        autoUpdater.once('update-not-available', () => {
+          clearTimeout(patience)
+          finish(false)
+        })
+        autoUpdater.once('error', () => {
+          clearTimeout(patience)
+          finish(false)
+        })
+        autoUpdater.once('update-available', (info) => {
+          clearTimeout(patience)
+          log('[startup] installing', info.version, 'before launch')
+          const win = showProgress(info.version)
+          let skipped = false
+          win.on('closed', () => {
+            skipped = true
+            log('[startup] skipped by the user')
+            finish(false)
+          })
+          autoUpdater.on('download-progress', (p) => {
+            if (win.isDestroyed()) return
+            const pct = Math.round(p.percent)
+            void win.webContents.executeJavaScript(
+              `{const s=document.getElementById('s'),b=document.getElementById('b');` +
+                `if(s)s.textContent='Downloading… ${pct}%';if(b)b.style.width='${pct}%';}`
+            )
+          })
+          autoUpdater.once('update-downloaded', () => {
+            if (skipped) return
+            if (!win.isDestroyed()) win.destroy()
+            autoUpdater.quitAndInstall(true, true)
+            finish(true)
+          })
+          autoUpdater.downloadUpdate().catch((err) => {
+            log('[startup] download failed', String(err))
+            if (!win.isDestroyed()) win.destroy()
+            finish(false)
+          })
+        })
+        autoUpdater.checkForUpdates().catch((err) => {
+          clearTimeout(patience)
+          log('[startup] check failed', String(err))
+          finish(false)
+        })
+      })
+
+    const installing = await updateBeforeLaunch()
+    if (installing) return // the app is restarting into the new version
+    createWindow()
+
+    // From here on an update is a background matter: download it and let it
+    // install on quit rather than interrupting a session in progress.
+    autoUpdater.autoDownload = true
+    setInterval(() => {
+      autoUpdater.checkForUpdatesAndNotify().catch(() => {})
+    }, 4 * 60 * 60 * 1000)
+  } else {
+    if (app.isPackaged) {
+      // Say so once, so a build that never updates is never a mystery.
+      updaterLogPath = path.join(app.getPath('userData'), 'updater.log')
+    }
+    createWindow()
   }
 })
 

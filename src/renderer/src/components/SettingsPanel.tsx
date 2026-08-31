@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react'
+import { MapperTab } from './MapperTab'
 import { settingsManager } from '../SettingsManager'
 import { sessionStores, type SessionStore } from '../SessionStore'
 import { keyEventSignature } from '../automation/AutomationEngine'
@@ -21,6 +22,7 @@ type Tab =
   | 'scripts'
   | 'gauges'
   | 'variables'
+  | 'mapper'
   | 'logging'
   | 'general'
 
@@ -32,6 +34,7 @@ const TABS: Array<{ id: Tab; label: string }> = [
   { id: 'scripts', label: 'Scripts' },
   { id: 'gauges', label: 'Gauges' },
   { id: 'variables', label: 'Variables' },
+  { id: 'mapper', label: 'Mapper' },
   { id: 'logging', label: 'Logging' },
   { id: 'general', label: 'General' }
 ]
@@ -129,6 +132,7 @@ export function SettingsPanel({ store, onClose }: Props) {
           {tab === 'scripts' && <ScriptsTab set={set} save={save} store={store} />}
           {tab === 'gauges' && <GaugesTab set={set} save={save} />}
           {tab === 'variables' && <VariablesTab set={set} save={save} />}
+          {tab === 'mapper' && <MapperTab set={set} save={save} />}
           {tab === 'logging' && <LoggingTab set={set} save={save} store={store} />}
           {tab === 'general' && <GeneralTab />}
         </div>
@@ -820,10 +824,23 @@ function GeneralTab() {
             Open updater log
           </button>
           <div className="field-hint">
-            Updates are checked on launch and every 4 hours, download in the background, and
-            install when you quit. The log is only written by installed builds.
+            An update found at startup installs before the window opens, so what you get is
+            already the new version. One found later downloads in the background and installs
+            when you quit. The log is only written by installed builds.
           </div>
         </div>
+        <label className="logging-option">
+          <input
+            type="checkbox"
+            checked={global.options.autoUpdate !== false}
+            onChange={(e) => setOption({ autoUpdate: e.target.checked })}
+          />{' '}
+          Keep Wayfarer up to date
+          <span className="field-hint">
+            {' '}
+            (off = stay on this version; nothing is checked or downloaded)
+          </span>
+        </label>
         <label className="logging-option">
           <input
             type="checkbox"
