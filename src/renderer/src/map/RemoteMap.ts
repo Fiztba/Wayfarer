@@ -28,6 +28,7 @@ export const MODEL_ACTION_METHODS = new Set([
   'moveRoom',
   'deleteRoom',
   'mergeRooms',
+  'addExit',
   'linkRooms',
   'setDoor',
   'setExitAt',
@@ -159,6 +160,7 @@ export class RemoteTracker {
   lost = false
   mode: TrackerMode = 'map'
   speculative = false
+  serverDriven = false
 
   private model: MapModel
   private send: (action: MapAction) => void
@@ -187,11 +189,13 @@ export class RemoteTracker {
     lost: boolean
     mode: TrackerMode
     speculative?: boolean
+    serverDriven?: boolean
   }): void {
     this.currentRoomId = state.currentRoomId
     this.lost = state.lost
     this.mode = state.mode
     this.speculative = state.speculative ?? false
+    this.serverDriven = state.serverDriven ?? false
     this.notify()
   }
 
@@ -216,6 +220,8 @@ export interface TrackerControl {
   mode: TrackerMode
   /** currentRoomId is a bet, not a settled position: the map draws it as one. */
   readonly speculative: boolean
+  /** Rooms are being identified by the MUD itself, not read off the screen. */
+  readonly serverDriven: boolean
   readonly currentRoom: MapRoom | null
   subscribe(fn: () => void): () => void
   setMode(mode: TrackerMode): void

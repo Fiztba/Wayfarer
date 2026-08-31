@@ -10,7 +10,7 @@ import { MapCanvas, type MapContextInfo } from './MapCanvas'
 import { ClampedMenu } from './ClampedMenu'
 import type { MapModel } from '../map/MapModel'
 import type { TrackerControl } from '../map/RemoteMap'
-import { DIR_FULL, type Direction, type MapExit } from '../map/types'
+import { DIRECTIONS, DIR_FULL, type Direction, type MapExit, type MapRoom } from '../map/types'
 
 export interface MapPaneProps {
   model: MapModel
@@ -574,8 +574,48 @@ export function MapPane({ model, tracker, walkTo, onPopout, onClose }: MapPanePr
         {model.roomsInZone(zoneId).length} rooms in{' '}
         {model.map.zones.find((zn) => zn.id === zoneId)?.name ?? 'this zone'} ·{' '}
         {Object.keys(model.map.rooms).length} mapped across {model.map.zones.length}{' '}
-        {model.map.zones.length === 1 ? 'zone' : 'zones'}
+        {model.map.zones.length === 1 ? 'zone' : 'zones'} ·{' '}
+        {/* Which of the two very different mappers is actually running. Until
+            this was shown, the only way to tell was to infer it from how the
+            map turned out. */}
+        <span
+          title={
+            tracker.serverDriven
+              ? 'The MUD is naming its own rooms, so identity is exact.'
+              : 'Rooms are being read off the screen, so identity is worked out from what they look like.'
+          }
+        >
+          {tracker.serverDriven ? 'from the MUD' : 'read from the screen'}
+        </span>
       </div>
+    </div>
+  )
+}
+
+/** Give a room an exit it does not have yet. A room made by hand starts with
+ *  none, so without this there was nothing in the panel to edit or link and no
+ *  way to draw a connection at all. */
+function AddExit({ model, room }: { model: MapModel; room: MapRoom }) {
+  const missing = DIRECTIONS.filter((d) => !room.exits.some((e) => e.dir === d))
+  const [dir, setDir] = useState<Direction>(missing[0] ?? 'n')
+  if (missing.length === 0) return null
+  const chosen = missing.includes(dir) ? dir : missing[0]
+  return (
+    <div className="map-exit-row">
+      <select value={chosen} onChange={(e) => setDir(e.target.value as Direction)}>
+        {missing.map((d) => (
+          <option key={d} value={d}>
+            {DIR_FULL[d]}
+          </option>
+        ))}
+      </select>
+      <button
+        className="map-btn"
+        title="Add this exit, unexplored — then link it to a room"
+        onClick={() => model.addExit(room.id, chosen)}
+      >
+        Add exit
+      </button>
     </div>
   )
 }
@@ -610,6 +650,7 @@ function ExitsEditor({
         </button>
       </div>
       {room.exits.length === 0 && <p className="field-hint">No exits recorded.</p>}
+      <AddExit model={model} room={room} />
       {room.exits.map((exit, i) => (
         <div key={i} className="map-exit-row">
           <span className="map-exit-dir">

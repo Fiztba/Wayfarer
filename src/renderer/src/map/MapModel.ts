@@ -370,6 +370,12 @@ export class MapModel {
     return dest.exits.some((e) => e.dir === dir && e.to === fromId)
   }
 
+  /** Add an unexplored exit by hand. A room created by hand has none at all,
+   *  which left nothing in the exits panel to edit or link. */
+  addExit(roomId: string, dir: Direction): void {
+    this.ensureExit(roomId, dir)
+  }
+
   /** Link from→to via dir; adds the reverse link when addReverse.
    *  Refuses a link that would make the same direction reciprocal. */
   linkRooms(fromId: string, dir: Direction, toId: string, addReverse: boolean): void {

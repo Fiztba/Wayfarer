@@ -109,6 +109,7 @@ export class SessionStore {
   serverEchoes = false // true → mask input (passwords)
   mccp = false
   gmcp = false
+  msdp = false
   mxp = false
   msp = false
   lastMssp: Record<string, string> | null = null
@@ -356,6 +357,7 @@ export class SessionStore {
         currentRoomId: this.tracker.currentRoomId,
         lost: this.tracker.lost,
         speculative: this.tracker.speculative,
+        serverDriven: this.tracker.serverDriven,
         mode: this.tracker.mode,
         name: this.name
       })
@@ -593,6 +595,9 @@ export class SessionStore {
         this.mccp = event.enabled
         this.notify()
         break
+      case 'msdpEnabled':
+        this.msdp = true
+        break
       case 'gmcpEnabled':
         this.gmcp = true
         this.notify()
@@ -754,6 +759,7 @@ export class SessionStore {
     this.serverEchoes = false
     this.mccp = false
     this.gmcp = false
+    this.msdp = false
     this.mxp = false
     this.msp = false
     // Fresh protocol state: the new connection renegotiates everything.

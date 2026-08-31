@@ -106,6 +106,13 @@ export class MapTracker implements TrackerControl {
 
   /** Set while more than one room explains where we are (see Speculation). */
   speculation: Speculation | null = null
+  /**
+   * True once the MUD has identified a room over a protocol rather than the
+   * mapper working it out from the screen. Worth surfacing: the two produce
+   * very different maps, and until now there was no way to tell which one was
+   * running short of inferring it from the results.
+   */
+  serverDriven = false
   /** True while draining a settled speculation back through the normal path,
    *  so replayed steps commit instead of opening a fresh speculation. */
   private replaying = false
@@ -274,6 +281,7 @@ export class MapTracker implements TrackerControl {
     // moot. Only reachable on MUDs that report room ids, which are exactly the
     // MUDs that never had to guess in the first place.
     this.abandonSpeculation()
+    this.serverDriven = true
     this.expirePending()
     const existing = this.model.findByServerId(info.serverId)
     const move = this.pending.shift()

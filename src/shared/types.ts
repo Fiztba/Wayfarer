@@ -228,5 +228,6 @@ export type SessionEvent =
   | { type: 'msdp'; data: Record<string, unknown> }
   | { type: 'compression'; enabled: boolean }
   | { type: 'gmcpEnabled' }
+  | { type: 'msdpEnabled' }
   | { type: 'mxpEnabled' }
   | { type: 'mspEnabled' }

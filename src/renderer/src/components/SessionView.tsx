@@ -483,13 +483,14 @@ export function SessionView({
     bits.push(`${store.host}:${store.port}`)
     if (store.mccp) bits.push('MCCP2')
     if (store.gmcp) bits.push('GMCP')
+    if (store.msdp) bits.push('MSDP')
     if (store.mxp) bits.push('MXP')
     if (store.msp) bits.push('MSP')
     if (store.serverEchoes) bits.push('🔒 masked')
     if (store.logging) bits.push('📝 logging')
     bits.push(`v${window.mud.version}`)
     return bits
-  }, [store.status, store.host, store.port, store.mccp, store.gmcp, store.mxp, store.msp, store.serverEchoes, store.logging, store.version])
+  }, [store.status, store.host, store.port, store.mccp, store.gmcp, store.msdp, store.mxp, store.msp, store.serverEchoes, store.logging, store.version])
 
   return (
     <div className="session" style={{ display: active ? 'flex' : 'none' }}>

@@ -94,6 +94,9 @@ export class SessionManager {
       ]) {
         telnet.sendMsdp('REPORT', variable)
       }
+      // Tell the renderer as well, or a MUD that negotiates MSDP looks
+      // identical to one that does not.
+      emit({ type: 'msdpEnabled' })
     })
     telnet.on('compression', (enabled) => emit({ type: 'compression', enabled }))
     telnet.on('gmcpEnabled', () => {

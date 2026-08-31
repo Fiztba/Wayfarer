@@ -16,6 +16,7 @@ interface MirrorState {
   currentRoomId: string | null
   lost: boolean
   speculative?: boolean
+  serverDriven?: boolean
   mode: TrackerMode
   name: string
 }
