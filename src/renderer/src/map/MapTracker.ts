@@ -830,7 +830,6 @@ export class MapTracker implements TrackerControl {
       zoneId: this.zoneForNewRoom(from)
     })
     this.applyDetectedExits(room, det)
-    this.model.addDescHash(room.id, det.descHash)
     // Two-way link only if the new room reports the return exit.
     const hasReturn = det.exits.some((e) => e.dir === OPPOSITE[dir])
     this.model.linkRooms(from.id, dir, room.id, hasReturn)
@@ -878,9 +877,15 @@ export class MapTracker implements TrackerControl {
   }
 
   private applyDetectedExits(room: MapRoom, det: RoomDetection): void {
+    // Every path that applies a detection to a room comes through here, the
+    // very first room of a fresh map included.
+    this.model.addDescHash(room.id, det.descHash)
     for (const e of det.exits) {
       const exit = this.model.ensureExit(room.id, e.dir)
       if (e.door) exit.door = true
+      // Some MUDs name the room an exit leads to before it is walked. Worth
+      // keeping: it shows in the exits panel, and it is a check on arrival.
+      if (e.destName) exit.destName = e.destName
     }
   }
 
@@ -889,7 +894,6 @@ export class MapTracker implements TrackerControl {
    *  the same name and exits apart while exploring. */
   private refreshExits(room: MapRoom, det: RoomDetection): void {
     this.applyDetectedExits(room, det)
-    this.model.addDescHash(room.id, det.descHash)
   }
 
   private expirePending(): void {

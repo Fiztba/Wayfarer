@@ -24,6 +24,37 @@ const EXIT_LINE_PATTERNS: RegExp[] = [
 export interface ExitToken {
   dir: Direction
   door: boolean
+  /** Named by MUDs that list each exit with its destination. */
+  destName?: string
+}
+
+/**
+ * A bare exits header with nothing after it, which introduces one line per
+ * exit rather than a single list. AwakeMUD CE and kin print:
+ *
+ *   Obvious exits:
+ *   North - Archetypal Chargen - Mage / Shaman Start Room
+ *   South - The Path of the Magician
+ *
+ * Distinguished from the single-line form purely by having no content after
+ * the colon, so the two can never both match.
+ */
+const EXIT_HEADER = /^\s*(?:Obvious\s+)?Exits?:\s*$/i
+
+/**
+ * One line of a listed-exits block: a direction, a separator, and the name of
+ * the room it leads to. Requiring the first word to be a real direction is
+ * what keeps ordinary prose out.
+ */
+const EXIT_LIST_LINE = /^\s*\(?([A-Za-z]+)\)?\s+[-\u2013:]\s+(.*\S)\s*$/
+
+export function parseExitListLine(line: string): ExitToken | null {
+  const m = EXIT_LIST_LINE.exec(line)
+  if (!m) return null
+  const dir = wordToDirection(m[1])
+  if (!dir) return null
+  const door = /^\s*\(/.test(line)
+  return { dir, door, destName: m[2].trim() }
 }
 
 /** Parse an exits line; null if the line is not an exits line. */
@@ -78,6 +109,9 @@ function looksLikePrompt(line: string): boolean {
 
 const ROOM_VNUM_PREFIX = /^\[\s*(\d+)\s*\]\s*/
 const TRAILING_TAG = /\s*\[[^\][]*\]\s*$/u
+/** A trailing room-flag in parentheses, e.g. "... Start Room (Peaceful)".
+ *  Bounded and word-only so a room genuinely named "(Somewhere)" survives. */
+const TRAILING_FLAG = /\s*\((?:[A-Za-z]+(?:[ /-][A-Za-z]+)*)\)\s*$/
 const WHOLLY_BRACKETED = /^\[\s*([^\][]*?)\s*\]$/
 
 /**
@@ -103,7 +137,7 @@ export function cleanTitleLine(line: string): { name: string; vnum: string | nul
   // Strip trailing tags one at a time, but never to nothing: some MUDs wrap
   // the whole title in brackets, and that bracket pair is the title's own.
   for (;;) {
-    const next = t.replace(TRAILING_TAG, '')
+    const next = t.replace(TRAILING_TAG, '').replace(TRAILING_FLAG, '')
     if (next === t) break
     if (next.trim().length === 0) {
       const whole = WHOLLY_BRACKETED.exec(t)
@@ -133,16 +167,44 @@ function looksLikeTitle(line: string): boolean {
  */
 export class RoomCapture {
   private recent: string[] = []
-  private static MAX_RECENT = 12
+  /** How far back to look for the title. Has to clear the longest description
+   *  a MUD prints in one go -- an introductory room can run past twenty lines,
+   *  and at twelve the title had already fallen out of the window, so the room
+   *  got named after a sentence of prose instead. */
+  private static MAX_RECENT = 40
+  /** Non-null while inside a listed-exits block (see EXIT_HEADER). */
+  private listing: ExitToken[] | null = null
 
   /** Returns a detection if this line completed one. */
   feedLine(plain: string): RoomDetection | null {
+    // A listed-exits block runs until a line that is not an exit -- normally
+    // the blank line before the prompt. Its lines never enter `recent`, so
+    // they can never be mistaken for a room title.
+    if (this.listing !== null) {
+      const one = parseExitListLine(plain)
+      if (one) {
+        if (!this.listing.some((e) => e.dir === one.dir)) this.listing.push(one)
+        return null
+      }
+      const collected = this.listing
+      this.listing = null
+      return this.complete(collected)
+    }
+    if (EXIT_HEADER.test(plain)) {
+      this.listing = []
+      return null
+    }
     const exits = parseExitsLine(plain)
     if (exits === null) {
       this.recent.push(plain)
       if (this.recent.length > RoomCapture.MAX_RECENT) this.recent.shift()
       return null
     }
+    return this.complete(exits)
+  }
+
+  /** Build the detection for an exits set that has just been recognised. */
+  private complete(exits: ExitToken[]): RoomDetection | null {
     // Scan back past description prose for the nearest title-shaped line.
     // Each candidate is undecorated first (glued prompt, staff vnum/flag
     // tags) so the heuristics judge the name a player would actually read.
@@ -202,6 +264,7 @@ export class RoomCapture {
 
   reset(): void {
     this.recent = []
+    this.listing = null
   }
 }
 

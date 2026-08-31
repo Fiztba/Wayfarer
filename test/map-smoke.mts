@@ -2,7 +2,12 @@
  * Headless tests for the mapper core: capture, model, tracker, pathfinder.
  * Run with: node --experimental-strip-types test/map-smoke.mts
  */
-import { closedDoorName, parseExitsLine, RoomCapture } from '../src/renderer/src/map/capture.ts'
+import {
+  closedDoorName,
+  parseExitListLine,
+  parseExitsLine,
+  RoomCapture
+} from '../src/renderer/src/map/capture.ts'
 import { MapModel } from '../src/renderer/src/map/MapModel.ts'
 import {
   MODEL_ACTION_METHODS,
@@ -1311,6 +1316,88 @@ check('open cmd: no door, no command',
   tracker.onLine(DESC_NEW)
   tracker.onLine('Exits: south')
   check('desc-guard: did not adopt the linked room', tracker.currentRoomId !== linked.id, true)
+}
+
+// ---- AwakeMUD CE: exits listed one per line, each naming its room ----
+// This codebase prints a bare "Obvious exits:" header and then a line per
+// exit. Nothing matched, so no room was ever detected and the map stayed
+// empty on a MUD that was otherwise working fine.
+{
+  check('awake: bare header is not a single-line exits list',
+    parseExitsLine('Obvious exits:'), null)
+  check('awake: an exit line names its destination',
+    parseExitListLine('South - Interacting in the Shadowrun Universe'),
+    { dir: 's', door: false, destName: 'Interacting in the Shadowrun Universe' })
+  check('awake: a destination may itself contain dashes',
+    parseExitListLine('North - Archetypal Chargen - Mage / Shaman Start Room')?.destName,
+    'Archetypal Chargen - Mage / Shaman Start Room')
+  check('awake: prose is not an exit line',
+    parseExitListLine('Welcome - to the machine'), null)
+  check('awake: a parenthesised direction is a door',
+    parseExitListLine('(North) - A Sealed Vault')?.door, true)
+}
+
+{
+  const { model, tracker } = makeWorld()
+  // Verbatim from the session, including the twenty-line description that
+  // used to push the title out of the scan-back window.
+  const lines = [
+    'Archetypal Chargen - Mage / Shaman Start Room (Peaceful)',
+    '   Welcome to Awake CE. This room stands on the event horizon of a great rift,',
+    'the rift connecting our world to that which lies beyond. You stand now at the',
+    'sole entrance to this realm. As you explore these hallowed halls, you will',
+    'discover everything you need to know to survive in the cruel, cold world the',
+    'Earth has become in what is our present - midway through the 21st century.',
+    'Mind you, here you will only be taught the theory of what you must do. Living',
+    'long enough to learn how to apply it is completely up to you. Welcome, and',
+    'good luck.',
+    '   If you are using a screenreader, you should type TOGGLE SCREENREADER now.',
+    'First things first: You will want to know how to interact with your new world.',
+    'To look around at your surroundings, just type LOOK (or L for short). This',
+    'will give you the description of the area you are in and show any objects,',
+    'people, and/or monsters in the same area. You can also look more closely at',
+    'things.',
+    '   The HELPFILES will also help you a great deal. Type HELP <command> to',
+    'gain help on a specific command or concept if you are having trouble.',
+    '   Type SOUTH or S to continue on your journey.',
+    'Obvious exits:',
+    'South - Interacting in the Shadowrun Universe',
+    ''
+  ]
+  for (const line of lines) tracker.onLine(line)
+
+  check('awake: the room was detected at all', Object.keys(model.map.rooms).length, 1)
+  const room = tracker.currentRoom!
+  check('awake: named from the title, not the prose',
+    room.name, 'Archetypal Chargen - Mage / Shaman Start Room')
+  check('awake: the (Peaceful) flag is not part of the name',
+    room.name.includes('Peaceful'), false)
+  check('awake: the exit was recorded', room.exits.map((e) => e.dir), ['s'])
+  check('awake: and it knows where it leads',
+    room.exits[0].destName, 'Interacting in the Shadowrun Universe')
+  check('awake: the description was hashed', (room.descHashes?.length ?? 0) > 0, true)
+
+  // Walking south maps the second room and links the two.
+  tracker.onCommand('s')
+  for (const line of [
+    'Interacting in the Shadowrun Universe (Peaceful)',
+    '   The Shadowrun universe is set in the year 2064. International',
+    'mega-corporations have gained control of the systems of power.',
+    'Obvious exits:',
+    'North - Archetypal Chargen - Mage / Shaman Start Room',
+    'South - The Path of the Magician',
+    ''
+  ]) {
+    tracker.onLine(line)
+  }
+  check('awake: the second room was mapped', Object.keys(model.map.rooms).length, 2)
+  check('awake: linked from the first', model.exitOf(model.room(room.id)!, 's')?.to,
+    tracker.currentRoomId)
+  check('awake: both its exits were read',
+    tracker.currentRoom!.exits.map((e) => e.dir).sort(), ['n', 's'])
+  check('awake: an unwalked exit still names its room',
+    tracker.currentRoom!.exits.find((e) => e.dir === 's')?.destName, 'The Path of the Magician')
+  check('awake: not lost', tracker.lost, false)
 }
 
 // ---- link geometry: obstruction, direction fidelity, long spans ----

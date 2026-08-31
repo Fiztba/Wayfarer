@@ -73,6 +73,9 @@ export interface MapExit {
   door: boolean
   /** What to `open` (defaults to "door"). */
   doorName?: string
+  /** Where the MUD says this exit leads, when it says so before we walk it.
+   *  Some codebases list exits as "North - The Path of the Magician". */
+  destName?: string
 }
 
 export interface MapRoom {
@@ -143,7 +146,7 @@ export function emptyMap(): MudMap {
 
 export interface RoomDetection {
   name: string
-  exits: Array<{ dir: Direction; door: boolean }>
+  exits: Array<{ dir: Direction; door: boolean; destName?: string }>
   /** Hash of the room's description, when one was printed. */
   descHash?: string
   /** Server room id read off the title line (staff roomflags), when shown. */
