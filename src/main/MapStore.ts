@@ -6,7 +6,7 @@
  */
 import fs from 'node:fs'
 import path from 'node:path'
-import { atomicWrite, backupFile, safeFileKey } from './storage'
+import { atomicWrite, backupFile, resolveKeyedFile, safeFileKey } from './storage'
 
 const BACKUPS_PER_MAP = 10
 const BACKUP_MIN_INTERVAL_MS = 60 * 60 * 1000
@@ -16,7 +16,12 @@ export class MapStore {
   private backupDir: string
   private lastBackup = new Map<string, number>()
 
-  constructor(baseDir: string) {
+  /** Resolves a map key to the profile's name, so files are readable on disk.
+   *  Quick-connect keys have no profile and keep their host_port name. */
+  private labelFor: (key: string) => string | undefined
+
+  constructor(baseDir: string, labelFor?: (key: string) => string | undefined) {
+    this.labelFor = labelFor ?? (() => undefined)
     this.dir = path.join(baseDir, 'maps')
     this.backupDir = path.join(baseDir, 'backups', 'maps')
     fs.mkdirSync(this.dir, { recursive: true })
@@ -43,6 +48,6 @@ export class MapStore {
   }
 
   private fileFor(key: string): string {
-    return path.join(this.dir, safeFileKey(key) + '.json')
+    return resolveKeyedFile(this.dir, key, this.labelFor(key))
   }
 }

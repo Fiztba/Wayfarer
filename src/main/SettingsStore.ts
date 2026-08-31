@@ -8,7 +8,7 @@
  */
 import fs from 'node:fs'
 import path from 'node:path'
-import { atomicWrite, backupFile, safeFileKey } from './storage'
+import { atomicWrite, backupFile, resolveKeyedFile, safeFileKey } from './storage'
 import { defaultSettings, type SettingsSet } from '../shared/types'
 
 const BACKUPS_PER_SCOPE = 25
@@ -17,7 +17,11 @@ export class SettingsStore {
   private dir: string
   private backupDir: string
 
-  constructor(baseDir: string) {
+  /** Resolves a profile id to its name, so files are readable on disk. */
+  private labelFor: (id: string) => string | undefined
+
+  constructor(baseDir: string, labelFor?: (id: string) => string | undefined) {
+    this.labelFor = labelFor ?? (() => undefined)
     this.dir = path.join(baseDir, 'settings')
     this.backupDir = path.join(baseDir, 'backups', 'settings')
     fs.mkdirSync(this.dir, { recursive: true })
@@ -49,7 +53,8 @@ export class SettingsStore {
   }
 
   private fileFor(profileId: string | null): string {
-    return path.join(this.dir, this.keyFor(profileId) + '.json')
+    if (!profileId) return path.join(this.dir, 'global.json')
+    return resolveKeyedFile(this.dir, profileId, this.labelFor(profileId))
   }
 
   /** Fill in any missing fields so old files survive schema additions. */

@@ -11,7 +11,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import crypto from 'node:crypto'
-import { atomicWrite, backupFile, safeFileKey } from './storage'
+import { atomicWrite, backupFile, resolveKeyedFile, safeFileKey } from './storage'
 import type { Profile } from '../shared/types'
 
 const BACKUPS_PER_PROFILE = 25
@@ -71,7 +71,8 @@ export class ProfileStore {
       createdAt: existing?.createdAt ?? now,
       updatedAt: now
     }
-    const target = this.fileFor(id)
+    // Named here, so renaming a profile renames its file too.
+    const target = this.fileFor(id, profile.name)
     if (fs.existsSync(target)) this.backup(id, target)
     atomicWrite(target, JSON.stringify(profile, null, 2))
     return profile
@@ -96,9 +97,10 @@ export class ProfileStore {
     }
   }
 
-  private fileFor(id: string): string {
-    // ids are UUIDs we generate; sanitize anyway.
-    return path.join(this.dir, safeFileKey(id) + '.json')
+  /** The profile's file. Passing the name makes it readable on disk; without
+   *  one, whatever file already holds this id is used unchanged. */
+  private fileFor(id: string, label?: string): string {
+    return resolveKeyedFile(this.dir, id, label)
   }
 
   private backup(id: string, sourceFile: string): void {

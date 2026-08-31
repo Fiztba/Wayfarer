@@ -104,6 +104,17 @@ app.whenReady().then(() => {
   })
 
   profiles = new ProfileStore(app.getPath('userData'))
+  // Profile names label the map and settings files. Cached briefly: maps save
+  // on a debounce while walking, and re-reading every profile each time would
+  // mean a directory scan a second.
+  let nameCache: { at: number; names: Map<string, string> } | null = null
+  const profileName = (id: string): string | undefined => {
+    const now = Date.now()
+    if (!nameCache || now - nameCache.at > 5000) {
+      nameCache = { at: now, names: new Map(profiles.list().map((p) => [p.id, p.name])) }
+    }
+    return nameCache.names.get(id)
+  }
   const directory = new MudDirectory(app.getPath('userData'))
 
   // A window that mounts after 'update-downloaded' fired would never hear the
@@ -156,7 +167,7 @@ app.whenReady().then(() => {
   ipcMain.handle('directory:list', () => directory.list())
   ipcMain.handle('directory:refresh', () => directory.list(true))
 
-  const settings = new SettingsStore(app.getPath('userData'))
+  const settings = new SettingsStore(app.getPath('userData'), profileName)
   ipcMain.handle('settings:get', (_e, profileId: string | null) => settings.get(profileId))
   ipcMain.handle('settings:save', (_e, profileId: string | null, set: SettingsSet) =>
     settings.save(profileId, set)
@@ -177,7 +188,7 @@ app.whenReady().then(() => {
   })
 
   // ---- Mapper: storage + pop-out windows with a state mirror --------------
-  const maps = new MapStore(app.getPath('userData'))
+  const maps = new MapStore(app.getPath('userData'), profileName)
   ipcMain.handle('map:load', (_e, key: string) => maps.load(key))
   ipcMain.on('map:save', (_e, key: string, map: unknown) => maps.save(key, map))
 
