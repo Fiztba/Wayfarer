@@ -10,6 +10,7 @@
  * and STOPS creating/linking rooms until the player re-syncs (clicks
  * "I am here" or walks somewhere recognizable). It never guesses into the map.
  */
+import type { CaptureRule } from '../../../shared/types'
 import type { MapModel } from './MapModel.ts'
 import { RoomCapture, closedDoorName, isMoveFailure, isClosedDoorFailure } from './capture.ts'
 import {
@@ -88,6 +89,8 @@ const PENDING_CAP = 30
 const PENDING_TTL_MS = 15_000
 
 export interface TrackerHost {
+  /** This MUD's capture rule, read fresh so edits take effect immediately. */
+  captureRule?(): CaptureRule | undefined
   /** Informational output to the session (system-style line). */
   info(text: string): void
   /** A movement command failed; closedDoor = blocked by a shut door, and
@@ -233,6 +236,7 @@ export class MapTracker implements TrackerControl {
   /** Every completed output line passes through here. */
   onLine(plain: string): void {
     if (this.mode === 'off') return
+    this.capture.useRule(this.host.captureRule?.())
     this.expirePending()
 
     if (isMoveFailure(plain)) {
@@ -464,6 +468,14 @@ export class MapTracker implements TrackerControl {
         this.lost = false
         this.host.info(`Mapper re-synced at "${matches[0].name}".`)
         this.notify()
+        return
+      }
+      // An empty map has no room to re-anchor onto, so being lost on one is a
+      // dead end -- nothing would ever be mapped again, and the advice to
+      // right-click your room is impossible when there are none. Start here.
+      if (matches.length === 0 && this.mode === 'map' && this.isMapEmpty()) {
+        this.lost = false
+        this.seedFirstRoom(det)
       }
       return
     }
@@ -497,21 +509,30 @@ export class MapTracker implements TrackerControl {
     if (matches.length === 1) {
       this.currentRoomId = matches[0].id
       this.notify()
-    } else if (matches.length === 0 && this.mode === 'map' && Object.keys(this.map.rooms).length === 0) {
-      // Seed the very first room of a fresh map.
-      const room = this.model.createRoom({
-        name: det.name,
-        x: 0,
-        y: 0,
-        z: 0,
-        zoneId: this.zoneForNewRoom(null)
-      })
-      this.applyDetectedExits(room, det)
-      this.currentRoomId = room.id
-      this.host.info(`Mapping started at "${det.name}".`)
-      this.notify()
+    } else if (matches.length === 0 && this.mode === 'map' && this.isMapEmpty()) {
+      this.seedFirstRoom(det)
     }
     // Ambiguous or non-empty map: stay unanchored quietly until certain.
+  }
+
+  private isMapEmpty(): boolean {
+    return Object.keys(this.map.rooms).length === 0
+  }
+
+  /** Begin a map here. Used both on a fresh map and to recover from being lost
+   *  on one that has been emptied. */
+  private seedFirstRoom(det: RoomDetection): void {
+    const room = this.model.createRoom({
+      name: det.name,
+      x: 0,
+      y: 0,
+      z: 0,
+      zoneId: this.zoneForNewRoom(null)
+    })
+    this.applyDetectedExits(room, det)
+    this.currentRoomId = room.id
+    this.host.info(`Mapping started at "${det.name}".`)
+    this.notify()
   }
 
   private get map() {

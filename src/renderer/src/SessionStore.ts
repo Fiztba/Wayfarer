@@ -211,6 +211,9 @@ export class SessionStore {
     const model = await modelPromise
     const tracker = new MapTracker(model, {
       info: (text) => this.addSystemLine(text, 'system'),
+      // Profile set first, then global: a MUD-specific rule wins, and a
+      // global one can still act as a default across worlds.
+      captureRule: () => settingsManager.getSets(this.profileId).find((x) => x.capture)?.capture,
       onMoveFailed: (dir, closedDoor, doorName) =>
         this.handleMoveFailed(dir, closedDoor, doorName)
     })

@@ -1400,6 +1400,119 @@ check('open cmd: no door, no command',
   check('awake: not lost', tracker.lost, false)
 }
 
+// ---- a MUD nobody has written a built-in for ----
+// The point of the rule: someone whose MUD prints rooms in a shape none of the
+// built-ins know can describe it themselves, share it, and have it work --
+// without editing this file and rebuilding the client.
+{
+  // Invented format: a boxed title, exits behind a bullet, chatter interleaved.
+  const rule = {
+    title: '^==\\s*(.+?)\\s*==$',
+    exitsLine: '^\\s*>>\\s*ways out:\\s*(.+?)\\s*$',
+    ignore: ['^\\[chat\\]']
+  }
+  const cap = new RoomCapture(rule)
+  cap.feedLine('== The Glass Terrace ==')
+  cap.feedLine('Sunlight falls through a roof of coloured panes.')
+  cap.feedLine('[chat] Someone: anyone selling a lantern?')
+  const det = cap.feedLine('>> ways out: north, east, down')
+  check('rule: the title came from the rule', det?.name, 'The Glass Terrace')
+  check('rule: the exits came from the rule',
+    det?.exits.map((e) => e.dir), ['n', 'e', 'd'])
+  check('rule: the description was still hashed', typeof det?.descHash, 'string')
+
+  // Chatter must not become the description, or one person talking would
+  // change what the room looks like.
+  const quiet = new RoomCapture(rule)
+  quiet.feedLine('== The Glass Terrace ==')
+  quiet.feedLine('Sunlight falls through a roof of coloured panes.')
+  const det2 = quiet.feedLine('>> ways out: north, east, down')
+  check('rule: ignored lines do not alter identity', det2?.descHash, det?.descHash)
+}
+
+// ---- a rule for a listed-exits MUD, written by hand ----
+{
+  const cap = new RoomCapture({
+    exitsHeader: '^\\s*Ways out:\\s*$',
+    exitsItem: '^\\s*([A-Za-z]+)\\s*=>\\s*(.+?)\\s*$'
+  })
+  cap.feedLine('The Iron Bridge')
+  cap.feedLine('A span of riveted iron crosses the chasm.')
+  cap.feedLine('Ways out:')
+  cap.feedLine('  North => The Far Bank')
+  cap.feedLine('  South => The Near Bank')
+  const det = cap.feedLine('')
+  check('rule: header and item patterns drive the block',
+    det?.exits.map((e) => e.dir).sort(), ['n', 's'])
+  check('rule: destinations are read from the rule too',
+    det?.exits.find((e) => e.dir === 'n')?.destName, 'The Far Bank')
+  check('rule: the title is still found by scanning back', det?.name, 'The Iron Bridge')
+}
+
+// ---- the built-ins keep working alongside, and can be switched off ----
+{
+  const withBoth = new RoomCapture({ exitsLine: '^\\s*>>\\s*(.+?)\\s*$' })
+  withBoth.feedLine('Temple Square')
+  check('rule: built-ins still apply by default',
+    withBoth.feedLine('[ Exits: n e ]')?.exits.map((e) => e.dir), ['n', 'e'])
+
+  const only = new RoomCapture({ exitsLine: '^\\s*>>\\s*(.+?)\\s*$', builtins: false })
+  only.feedLine('Temple Square')
+  check('rule: built-ins can be turned off', only.feedLine('[ Exits: n e ]'), null)
+}
+
+// ---- a broken pattern is a typo, not an outage ----
+{
+  const cap = new RoomCapture({ title: '^(unclosed', exitsLine: '^\\s*Exits:\\s*(.+)$' })
+  check('rule: the bad field is reported', cap.badPatterns, ['title'])
+  cap.feedLine('Temple Square')
+  const det = cap.feedLine('Exits: north east')
+  check('rule: the rest of the rule still works',
+    det?.exits.map((e) => e.dir), ['n', 'e'])
+  check('rule: and the title falls back to the heuristic', det?.name, 'Temple Square')
+}
+
+// ---- lost on an empty map is a dead end, and must not be ----
+// Reported live: two hand-made rooms anchored the tracker, the real room did
+// not match either, so it went lost -- and deleting them left it lost with
+// nothing to re-anchor onto. The banner tells you to right-click your room on
+// the map, which is impossible when there are none, so nothing ever mapped.
+{
+  const { model, tracker, seeRoom, infos } = makeWorld()
+  const stray = model.createRoom({ name: 'New room', x: 0, y: 0, z: 0 })
+  tracker.setCurrentRoom(stray.id)
+
+  // A real room arrives that matches nothing: lost, correctly.
+  seeRoom('Archetypal Chargen - Mage / Shaman Start Room', 'Exits: south')
+  check('stuck: went lost as before', tracker.lost, true)
+
+  // The hand-made room is deleted, leaving nothing to re-anchor onto.
+  model.deleteRoom(stray.id)
+  check('stuck: the map is empty', Object.keys(model.map.rooms).length, 0)
+
+  seeRoom('Archetypal Chargen - Mage / Shaman Start Room', 'Exits: south')
+  check('stuck: starts mapping again', Object.keys(model.map.rooms).length, 1)
+  check('stuck: no longer lost', tracker.lost, false)
+  check('stuck: standing in it', tracker.currentRoom?.name,
+    'Archetypal Chargen - Mage / Shaman Start Room')
+  check('stuck: said so', infos.some((t) => t.startsWith('Mapping started')), true)
+}
+
+// ---- but a map with rooms in it still waits to be told where we are ----
+{
+  const { model, tracker, seeRoom } = makeWorld()
+  const a = model.createRoom({ name: 'Temple Square', x: 0, y: 0, z: 0 })
+  model.createRoom({ name: 'Temple Square', x: 5, y: 5, z: 0 })
+  tracker.setCurrentRoom(a.id)
+  seeRoom('Somewhere Else Entirely', 'Exits: north')
+  check('stuck: lost with rooms present', tracker.lost, true)
+  const before = Object.keys(model.map.rooms).length
+  seeRoom('Another Unknown Place', 'Exits: south')
+  check('stuck: does not seed over an existing map',
+    Object.keys(model.map.rooms).length, before)
+  check('stuck: still lost, still waiting', tracker.lost, true)
+}
+
 // ---- link geometry: obstruction, direction fidelity, long spans ----
 {
   const occ = (cells: Array<[number, number]>) => {

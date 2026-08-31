@@ -63,6 +63,7 @@ export class SettingsStore {
     if (typeof raw !== 'object' || raw === null) return base
     const o = raw as Partial<SettingsSet>
     return {
+      capture: o.capture,
       triggers: Array.isArray(o.triggers) ? o.triggers : base.triggers,
       aliases: Array.isArray(o.aliases) ? o.aliases : base.aliases,
       macros: Array.isArray(o.macros) ? o.macros : base.macros,

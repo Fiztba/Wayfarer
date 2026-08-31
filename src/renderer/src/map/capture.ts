@@ -6,6 +6,7 @@
  * A direction token wrapped in parentheses marks a closed door (ROM/Merc
  * convention), which we record as a door on that exit.
  */
+import type { CaptureRule } from '../../../shared/types'
 import {
   hashText,
   stripPromptPrefix,
@@ -48,45 +49,108 @@ const EXIT_HEADER = /^\s*(?:Obvious\s+)?Exits?:\s*$/i
  */
 const EXIT_LIST_LINE = /^\s*\(?([A-Za-z]+)\)?\s+[-\u2013:]\s+(.*\S)\s*$/
 
-export function parseExitListLine(line: string): ExitToken | null {
-  const m = EXIT_LIST_LINE.exec(line)
+export function parseExitListLine(line: string, rule?: CompiledRule): ExitToken | null {
+  const pattern = rule?.exitsItem ?? (rule && !rule.builtins ? null : EXIT_LIST_LINE)
+  if (!pattern) return null
+  const m = pattern.exec(line)
   if (!m) return null
   const dir = wordToDirection(m[1])
   if (!dir) return null
   const door = /^\s*\(/.test(line)
-  return { dir, door, destName: m[2].trim() }
+  const dest = (m[2] ?? '').trim()
+  return dest ? { dir, door, destName: dest } : { dir, door }
+}
+
+/**
+ * Compile a rule's patterns once, discarding any that do not compile.
+ *
+ * A bad regex is a typo in someone's shared config, not a reason to take the
+ * mapper down: the offending field is dropped and the rest still applies.
+ */
+export interface CompiledRule {
+  builtins: boolean
+  exitsLine?: RegExp
+  exitsHeader?: RegExp
+  exitsItem?: RegExp
+  title?: RegExp
+  titleStrip: RegExp[]
+  ignore: RegExp[]
+  /** Fields that failed to compile, for the settings UI to show. */
+  bad: string[]
+}
+
+export function compileRule(rule?: CaptureRule): CompiledRule {
+  const bad: string[] = []
+  const one = (src: string | undefined, field: string): RegExp | undefined => {
+    if (!src) return undefined
+    try {
+      return new RegExp(src, 'i')
+    } catch {
+      bad.push(field)
+      return undefined
+    }
+  }
+  const many = (list: string[] | undefined, field: string): RegExp[] => {
+    const out: RegExp[] = []
+    for (const src of list ?? []) {
+      const r = one(src, field)
+      if (r) out.push(r)
+    }
+    return out
+  }
+  return {
+    builtins: rule?.builtins !== false,
+    exitsLine: one(rule?.exitsLine, 'exitsLine'),
+    exitsHeader: one(rule?.exitsHeader, 'exitsHeader'),
+    exitsItem: one(rule?.exitsItem, 'exitsItem'),
+    title: one(rule?.title, 'title'),
+    titleStrip: many(rule?.titleStrip, 'titleStrip'),
+    ignore: many(rule?.ignore, 'ignore'),
+    bad
+  }
+}
+
+/** Turn the captured text of a single-line exits list into exits. */
+function tokensFromList(body: string): ExitToken[] | null {
+  const trimmed = body.trim()
+  if (trimmed.length === 0) return []
+  const tokens = trimmed.split(/[,\s]+/).filter(Boolean)
+  const exits: ExitToken[] = []
+  let sawDirection = false
+  for (const raw of tokens) {
+    let token = raw
+    let door = false
+    if (/^\(.*\)$/.test(token) || /^\[.*\]$/.test(token)) {
+      door = true
+      token = token.slice(1, -1)
+    }
+    token = token.replace(/[^a-zA-Z]/g, '')
+    if (token.length === 0) continue
+    if (/^(none|and|or)$/i.test(token)) continue
+    const dir = wordToDirection(token)
+    if (dir) {
+      sawDirection = true
+      if (!exits.some((e) => e.dir === dir)) exits.push({ dir, door })
+    }
+  }
+  // A line that matched but held no recognisable direction (and was not an
+  // explicit "none") is probably prose like "Exits: blocked by rubble".
+  if (!sawDirection && !/^\s*none\s*\.?$/i.test(trimmed)) return null
+  return exits
 }
 
 /** Parse an exits line; null if the line is not an exits line. */
-export function parseExitsLine(line: string): ExitToken[] | null {
+export function parseExitsLine(line: string, rule?: CompiledRule): ExitToken[] | null {
+  if (rule?.exitsLine) {
+    const m = rule.exitsLine.exec(line)
+    if (m) return tokensFromList(m[1] ?? '')
+  }
+  if (rule && !rule.builtins) return null
   for (const pattern of EXIT_LINE_PATTERNS) {
     const m = pattern.exec(line)
     if (!m) continue
-    const body = m[1].trim()
-    if (body.length === 0) return [] // "Exits: none" style
-    const tokens = body.split(/[,\s]+/).filter(Boolean)
-    const exits: ExitToken[] = []
-    let sawDirection = false
-    for (const raw of tokens) {
-      let token = raw
-      let door = false
-      if (/^\(.*\)$/.test(token) || /^\[.*\]$/.test(token)) {
-        door = true
-        token = token.slice(1, -1)
-      }
-      token = token.replace(/[^a-zA-Z]/g, '')
-      if (token.length === 0) continue
-      if (/^(none|and|or)$/i.test(token)) continue
-      const dir = wordToDirection(token)
-      if (dir) {
-        sawDirection = true
-        if (!exits.some((e) => e.dir === dir)) exits.push({ dir, door })
-      }
-    }
-    // A line that matched but contained no recognizable direction (and wasn't
-    // an explicit "none") is probably prose like "Exits: blocked by rubble".
-    if (!sawDirection && !/^\s*none\s*\.?$/i.test(body)) return null
-    return exits
+    const exits = tokensFromList(m[1] ?? '')
+    if (exits) return exits
   }
   return null
 }
@@ -126,7 +190,10 @@ const WHOLLY_BRACKETED = /^\[\s*([^\][]*?)\s*\]$/
  * see; judged raw, the line above is rejected as "too long, too many words"
  * and the mapper falls through to naming the room after description prose.
  */
-export function cleanTitleLine(line: string): { name: string; vnum: string | null } {
+export function cleanTitleLine(
+  line: string,
+  extraStrips: RegExp[] = []
+): { name: string; vnum: string | null } {
   let t = stripPromptPrefix(line).trim()
   let vnum: string | null = null
   const numbered = ROOM_VNUM_PREFIX.exec(t)
@@ -137,7 +204,8 @@ export function cleanTitleLine(line: string): { name: string; vnum: string | nul
   // Strip trailing tags one at a time, but never to nothing: some MUDs wrap
   // the whole title in brackets, and that bracket pair is the title's own.
   for (;;) {
-    const next = t.replace(TRAILING_TAG, '').replace(TRAILING_FLAG, '')
+    let next = t.replace(TRAILING_TAG, '').replace(TRAILING_FLAG, '')
+    for (const strip of extraStrips) next = next.replace(strip, '')
     if (next === t) break
     if (next.trim().length === 0) {
       const whole = WHOLLY_BRACKETED.exec(t)
@@ -174,14 +242,35 @@ export class RoomCapture {
   private static MAX_RECENT = 40
   /** Non-null while inside a listed-exits block (see EXIT_HEADER). */
   private listing: ExitToken[] | null = null
+  private rule: CompiledRule = compileRule(undefined)
+  private ruleSource: CaptureRule | undefined = undefined
+
+  constructor(rule?: CaptureRule) {
+    this.useRule(rule)
+  }
+
+  /** Adopt a capture rule, recompiling only when it actually changed. */
+  useRule(rule: CaptureRule | undefined): void {
+    if (rule === this.ruleSource) return
+    this.ruleSource = rule
+    this.rule = compileRule(rule)
+  }
+
+  /** Fields of the current rule that failed to compile. */
+  get badPatterns(): string[] {
+    return this.rule.bad
+  }
 
   /** Returns a detection if this line completed one. */
   feedLine(plain: string): RoomDetection | null {
+    // Lines the rule says are never part of a room -- channel chatter, status
+    // bars, anything that would otherwise be mistaken for a title.
+    if (this.rule.ignore.some((r) => r.test(plain))) return null
     // A listed-exits block runs until a line that is not an exit -- normally
     // the blank line before the prompt. Its lines never enter `recent`, so
     // they can never be mistaken for a room title.
     if (this.listing !== null) {
-      const one = parseExitListLine(plain)
+      const one = parseExitListLine(plain, this.rule)
       if (one) {
         if (!this.listing.some((e) => e.dir === one.dir)) this.listing.push(one)
         return null
@@ -190,11 +279,12 @@ export class RoomCapture {
       this.listing = null
       return this.complete(collected)
     }
-    if (EXIT_HEADER.test(plain)) {
+    const header = this.rule.exitsHeader ?? (this.rule.builtins ? EXIT_HEADER : null)
+    if (header && header.test(plain)) {
       this.listing = []
       return null
     }
-    const exits = parseExitsLine(plain)
+    const exits = parseExitsLine(plain, this.rule)
     if (exits === null) {
       this.recent.push(plain)
       if (this.recent.length > RoomCapture.MAX_RECENT) this.recent.shift()
@@ -214,7 +304,19 @@ export class RoomCapture {
     for (let i = this.recent.length - 1; i >= 0; i--) {
       const raw = this.recent[i]
       if (looksLikePrompt(raw)) continue
-      const candidate = cleanTitleLine(raw)
+      // An explicit title pattern replaces the heuristics outright: whoever
+      // wrote it knows their MUD better than a guess about prose shape does.
+      if (this.rule.title) {
+        const m = this.rule.title.exec(raw)
+        if (!m) continue
+        const explicit = cleanTitleLine(m[1] ?? m[0], this.rule.titleStrip)
+        if (explicit.name.length === 0) continue
+        name = explicit.name
+        vnum = explicit.vnum
+        titleAt = i
+        break
+      }
+      const candidate = cleanTitleLine(raw, this.rule.titleStrip)
       if (candidate.name.length === 0) continue
       if (looksLikeTitle(candidate.name)) {
         name = candidate.name
@@ -229,7 +331,7 @@ export class RoomCapture {
       for (let i = this.recent.length - 1; i >= 0; i--) {
         const raw = this.recent[i]
         if (looksLikePrompt(raw)) continue
-        const candidate = cleanTitleLine(raw)
+        const candidate = cleanTitleLine(raw, this.rule.titleStrip)
         if (candidate.name.length > 0) {
           name = candidate.name.slice(0, 70)
           vnum = candidate.vnum

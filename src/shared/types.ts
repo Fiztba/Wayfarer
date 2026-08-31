@@ -128,6 +128,40 @@ export interface SettingsOptions {
   pasteLineDelayMs: number
 }
 
+/**
+ * How to recognise a room in one MUD's output.
+ *
+ * The built-in shapes cover the common codebases and should keep growing, but
+ * they can never cover everything, and "modify the source and recompile" is not
+ * an answer for most people playing a MUD. A rule lives beside triggers and
+ * aliases so it travels the same way they do: one person works out their MUD's
+ * format, posts it, everyone else pastes it in.
+ *
+ * Every field is a regular expression as a string. Anything supplied is tried
+ * BEFORE the built-ins, so adding a rule can only ever help -- unless builtins
+ * is turned off, which is for the rare MUD whose output a built-in actively
+ * misreads.
+ */
+export interface CaptureRule {
+  /** Also try the built-in formats. Default true; turn off only when one of
+   *  them actively misfires on this MUD. */
+  builtins?: boolean
+  /** Exits all on one line. Group 1 is the list of directions. */
+  exitsLine?: string
+  /** Or: a header that opens a block of one line per exit. */
+  exitsHeader?: string
+  /** A line inside that block. Group 1 is the direction, group 2 (optional)
+   *  is the name of the room it leads to. */
+  exitsItem?: string
+  /** The room title. Group 1 is the name. Omitted, the title is found by
+   *  scanning back from the exits past description prose. */
+  title?: string
+  /** Decorations to strip off a title -- room flags, per-viewer tags. */
+  titleStrip?: string[]
+  /** Lines never treated as a title or as description. */
+  ignore?: string[]
+}
+
 export interface SettingsSet {
   triggers: TriggerDef[]
   aliases: AliasDef[]
@@ -137,6 +171,8 @@ export interface SettingsSet {
   gauges: GaugeDef[]
   variables: Record<string, string>
   options: SettingsOptions
+  /** How this MUD's rooms are recognised; absent means the built-ins alone. */
+  capture?: CaptureRule
 }
 
 export function defaultSettings(): SettingsSet {
