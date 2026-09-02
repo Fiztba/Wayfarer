@@ -1590,6 +1590,159 @@ check('open cmd: no door, no command',
   check('coords: and it is a different room', next.id !== start.id, true)
 }
 
+// ---- server ids: queued moves survive one arrival, and the text that follows a Room.Info is not a second move ----
+{
+  const { model, tracker, seeRoom } = makeWorld()
+  tracker.onServerRoom({ serverId: 'gmcp:1', name: 'Start' })
+  const start = tracker.currentRoom!
+  // Speedwalk: three moves are in flight before the first arrival lands.
+  tracker.onCommand('n')
+  tracker.onCommand('n')
+  tracker.onCommand('n')
+  const names = ['One', 'Two', 'Three']
+  names.forEach((name, i) => {
+    tracker.onServerRoom({ serverId: `gmcp:${i + 2}`, name })
+    // The room text arrives too, on a MUD that reports ids. It describes the
+    // room just settled; it must not be taken for another step.
+    seeRoom(name, '[ Exits: n s ]')
+  })
+  check('queue: three rooms, no twins', Object.keys(model.map.rooms).length, 4)
+  const one = model.findByServerId('gmcp:2')!
+  const two = model.findByServerId('gmcp:3')!
+  const three = model.findByServerId('gmcp:4')!
+  check('queue: start → one', model.exitOf(start, 'n')?.to, one.id)
+  check('queue: one → two', model.exitOf(one, 'n')?.to, two.id)
+  check('queue: two → three', model.exitOf(two, 'n')?.to, three.id)
+  check('queue: standing at the end', tracker.currentRoomId, three.id)
+  check('queue: text exits landed on the settled room', model.exitOf(three, 's') !== undefined, true)
+
+  // A stale move plus a Room.Info for the room we are already in is a look,
+  // not a step: the room must not be linked to itself.
+  tracker.onCommand('e')
+  tracker.onServerRoom({ serverId: 'gmcp:4', name: 'Three' })
+  check('look: no self-link', model.exitOf(three, 'e')?.to ?? null, null)
+  check('look: still there', tracker.currentRoomId, three.id)
+  // ...and the stale move was consumed, so the next real step is clean.
+  tracker.onCommand('n')
+  tracker.onServerRoom({ serverId: 'gmcp:5', name: 'Four' })
+  check('look: next step links from the right room',
+    model.exitOf(model.room(three.id)!, 'n')?.to, model.findByServerId('gmcp:5')!.id)
+}
+
+// ---- server ids: the prose may arrive BEFORE its id, and must wait for it rather than step ----
+{
+  const { model, tracker, seeRoom } = makeWorld()
+  tracker.onServerRoom({ serverId: 'gmcp:1', name: 'Start' })
+  const start = tracker.currentRoom!
+  tracker.onCommand('n')
+  tracker.onCommand('n')
+  // Text first, id second, for each room in turn: the order a MUD produces
+  // when it prints the room and then sends GMCP in the same packet.
+  seeRoom('One', '[ Exits: n s e ]')
+  tracker.onServerRoom({ serverId: 'gmcp:2', name: 'One' })
+  seeRoom('Two', '[ Exits: s w ]')
+  tracker.onServerRoom({ serverId: 'gmcp:3', name: 'Two' })
+  check('text-first: two rooms, no twins', Object.keys(model.map.rooms).length, 3)
+  const one = model.findByServerId('gmcp:2')!
+  const two = model.findByServerId('gmcp:3')!
+  check('text-first: start → one', model.exitOf(start, 'n')?.to, one.id)
+  check('text-first: one → two', model.exitOf(one, 'n')?.to, two.id)
+  check('text-first: standing at the end', tracker.currentRoomId, two.id)
+  check('text-first: one has its own exits', model.exitOf(one, 'e') !== undefined, true)
+  check("text-first: one did not take two's exits", model.exitOf(one, 'w'), undefined)
+  check('text-first: two has its own exits', model.exitOf(two, 'w') !== undefined, true)
+}
+
+// ---- a mapped exit whose room looks different today is a room to learn, not a contradiction ----
+{
+  const { model, tracker, seeRoom } = makeWorld()
+  const a = model.createRoom({ name: 'Plaza', x: 0, y: 0, z: 0, exits: [] })
+  const b = model.createRoom({ name: 'Fountain', x: 0, y: -1, z: 0, descHashes: [hashText('It is day.')] })
+  model.linkRooms(a.id, 'n', b.id, true)
+  tracker.setCurrentRoom(a.id)
+  tracker.onCommand('n')
+  tracker.onLine('Fountain')
+  tracker.onLine('It is night.')
+  tracker.onLine('[ Exits: s ]')
+  check('learn: not lost', tracker.lost, false)
+  check('learn: arrived', tracker.currentRoomId, b.id)
+  check('learn: both descriptions kept',
+    model.room(b.id)?.descHashes, [hashText('It is day.'), hashText('It is night.')])
+
+  // Once the name is shared, the description is the only thing that tells
+  // the rooms apart, so an unfamiliar one is a contradiction again.
+  const c = model.createRoom({ name: 'Fountain', x: 0, y: -2, z: 0, descHashes: [hashText('Owned.')] })
+  tracker.setCurrentRoom(a.id)
+  tracker.onCommand('n')
+  tracker.onLine('Fountain')
+  tracker.onLine('Owned.')
+  tracker.onLine('[ Exits: s ]')
+  check('learn: not while the name repeats',
+    model.room(b.id)?.descHashes?.includes(hashText('Owned.')), false)
+  check('learn: the twin is not at the mapped exit, so we go lost', tracker.lost, true)
+  void c
+  void seeRoom
+}
+
+// ---- merging neighbours leaves no self-loop on the keeper ----
+{
+  const model = new MapModel(emptyMap(), () => {})
+  const a = model.createRoom({ name: 'A', x: 0, y: 0, z: 0 })
+  const b = model.createRoom({ name: 'B', x: 0, y: -1, z: 0 })
+  model.linkRooms(a.id, 'n', b.id, true)
+  model.mergeRooms(a.id, b.id)
+  const keep = model.room(a.id)!
+  check('merge: no exit points at the keeper itself', keep.exits.every((e) => e.to !== a.id), true)
+  check('merge: undo restores the pair', model.undoLastMerge()?.id, b.id)
+  check('merge: undo restores the link', model.exitOf(model.room(a.id)!, 'n')?.to, b.id)
+}
+
+// ---- deleting or merging away the room the player stands in ----
+{
+  const { model, tracker, infos } = makeWorld()
+  const a = model.createRoom({ name: 'A', x: 0, y: 0, z: 0 })
+  const b = model.createRoom({ name: 'B', x: 1, y: 0, z: 0 })
+  tracker.setCurrentRoom(b.id)
+  model.mergeRooms(a.id, b.id)
+  check('gone: follows a merge to the keeper', tracker.currentRoomId, a.id)
+  check('gone: not lost after a merge', tracker.lost, false)
+  model.deleteRoom(a.id)
+  check('gone: lost once the room is deleted', tracker.lost, true)
+  check('gone: no dangling id', tracker.currentRoomId, null)
+  check('gone: nothing dangling persisted', model.map.lastRoomId, null)
+  check('gone: said why', infos.some((t) => t.includes('removed')), true)
+}
+
+// ---- a malformed map file is replaced rather than thrown on ----
+{
+  for (const raw of [{}, [], { rooms: [] }, 'nonsense', 42]) {
+    const model = new MapModel(raw as unknown as MudMap, () => {})
+    check(`normalize: ${JSON.stringify(raw)} yields a usable map`,
+      typeof model.map.rooms === 'object' && Array.isArray(model.map.zones), true)
+    check(`normalize: ${JSON.stringify(raw)} is flagged`, model.loadWarning !== null, true)
+  }
+  const clean = new MapModel(null, () => {})
+  check('normalize: no file is not a warning', clean.loadWarning, null)
+  const partial = new MapModel({ version: 1, rooms: {} } as unknown as MudMap, () => {})
+  check('normalize: missing lists are filled in', Array.isArray(partial.map.waypoints), true)
+  check('normalize: filled-in lists are not a warning', partial.loadWarning, null)
+  check('normalize: missing exits is a stub, not a throw',
+    new MapModel(emptyMap(), () => {}).ensureExit('nope', 'n'), null)
+}
+
+// ---- reset drops what was in flight without forgetting where we are ----
+{
+  const { model, tracker } = makeWorld()
+  const a = model.createRoom({ name: 'A', x: 0, y: 0, z: 0 })
+  tracker.setCurrentRoom(a.id)
+  tracker.onCommand('n')
+  tracker.reset()
+  tracker.onLine('A')
+  tracker.onLine('[ Exits: n ]')
+  check('reset: the queued move is gone', Object.keys(model.map.rooms).length, 1)
+  check('reset: position kept', tracker.currentRoomId, a.id)
+}
+
 // ---- link geometry: obstruction, direction fidelity, long spans ----
 {
   const occ = (cells: Array<[number, number]>) => {

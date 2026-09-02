@@ -65,6 +65,34 @@ const FIELDS: Array<{
   }
 ]
 
+/**
+ * Whether something pasted in is a rule at all. A stray object would be saved
+ * as one and then quietly fail to compile, with the mapper appearing to have
+ * simply stopped working. Only the fields we know are kept; anything else in
+ * the paste is dropped rather than carried along into the settings file.
+ */
+function asCaptureRule(value: unknown): CaptureRule | null {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return null
+  const v = value as Record<string, unknown>
+  const rule: CaptureRule = {}
+  for (const key of ['title', 'exitsLine', 'exitsHeader', 'exitsItem'] as const) {
+    if (v[key] === undefined) continue
+    if (typeof v[key] !== 'string') return null
+    if (v[key]) rule[key] = v[key]
+  }
+  for (const key of ['ignore', 'titleStrip'] as const) {
+    if (v[key] === undefined) continue
+    const list = v[key]
+    if (!Array.isArray(list) || !list.every((s) => typeof s === 'string')) return null
+    if (list.length > 0) rule[key] = list
+  }
+  if (v.builtins !== undefined) {
+    if (typeof v.builtins !== 'boolean') return null
+    rule.builtins = v.builtins
+  }
+  return rule
+}
+
 /** Run a pasted room through the capture exactly as a live session would. */
 function tryRule(text: string, rule: CaptureRule): { det: RoomDetection | null; bad: string[] } {
   const capture = new RoomCapture(rule)
@@ -83,14 +111,30 @@ export function MapperTab({ set, save }: Props) {
   const rule = set.capture ?? {}
   const [sample, setSample] = useState('')
   const [shareError, setShareError] = useState('')
+  // The ignore box is edited as text and stored as a list. Deriving the text
+  // from the list on every keystroke throws away the blank line Enter just
+  // made, so a second pattern could never be started. The text lives here and
+  // is only re-read from the rule when something other than typing changed it.
+  const ignoreStored = (rule.ignore ?? []).join('\n')
+  const [ignoreDraft, setIgnoreDraft] = useState({ text: ignoreStored, from: ignoreStored })
+  const ignoreText = ignoreDraft.from === ignoreStored ? ignoreDraft.text : ignoreStored
 
   const result = useMemo(() => tryRule(sample, rule), [sample, rule])
+  /** Save a whole rule, a preset or a paste: what was there before is gone. */
+  const replace = (next: CaptureRule): void => {
+    void save({ ...set, capture: Object.keys(next).length > 0 ? { ...next } : undefined })
+  }
   const update = (patch: Partial<CaptureRule>): void => {
     const next: CaptureRule = { ...rule, ...patch }
     for (const k of Object.keys(next) as Array<keyof CaptureRule>) {
       if (next[k] === '' || next[k] === undefined) delete next[k]
     }
-    void save({ ...set, capture: Object.keys(next).length > 0 ? next : undefined })
+    replace(next)
+  }
+  const editIgnore = (text: string): void => {
+    const patterns = text.split('\n').filter((l) => l.trim().length > 0)
+    setIgnoreDraft({ text, from: patterns.join('\n') })
+    update({ ignore: patterns.length > 0 ? patterns : undefined })
   }
 
   const copyRule = async (): Promise<void> => {
@@ -103,9 +147,9 @@ export function MapperTab({ set, save }: Props) {
   }
   const pasteRule = async (): Promise<void> => {
     try {
-      const parsed = JSON.parse(await navigator.clipboard.readText())
-      if (typeof parsed !== 'object' || parsed === null) throw new Error('not a rule')
-      void save({ ...set, capture: parsed as CaptureRule })
+      const parsed = asCaptureRule(JSON.parse(await navigator.clipboard.readText()))
+      if (!parsed) throw new Error('not a rule')
+      replace(parsed)
       setShareError('')
     } catch {
       setShareError('That does not look like a mapper rule.')
@@ -180,7 +224,7 @@ export function MapperTab({ set, save }: Props) {
             defaultValue=""
             onChange={(e) => {
               const preset = PRESETS[Number(e.target.value)]
-              if (preset) update({ ...preset.rule })
+              if (preset) replace(preset.rule)
               e.target.value = ''
             }}
           >
@@ -220,10 +264,8 @@ export function MapperTab({ set, save }: Props) {
             rows={3}
             spellCheck={false}
             placeholder={'^\\[chat\\]\n^\\(OOC\\)'}
-            value={(rule.ignore ?? []).join('\n')}
-            onChange={(e) =>
-              update({ ignore: e.target.value.split('\n').filter((l) => l.trim().length > 0) })
-            }
+            value={ignoreText}
+            onChange={(e) => editIgnore(e.target.value)}
           />
           <span className="field-hint">
             Channel chatter and status bars, so they are never mistaken for part of a room.

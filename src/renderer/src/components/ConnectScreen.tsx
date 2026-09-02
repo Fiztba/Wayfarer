@@ -10,7 +10,7 @@ interface Props {
     encoding: Encoding
     name: string
     profileId?: string
-  }): void
+  }): Promise<void>
   onOpenHelp(): void
 }
 
@@ -39,6 +39,36 @@ export function ConnectScreen({ onConnect, onOpenHelp }: Props) {
 
   const [loadError, setLoadError] = useState(false)
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null)
+
+  // One connection attempt at a time: a double-click on a card used to open
+  // two sessions, and a rejected connect (bad host, refused port) vanished
+  // into an unhandled promise with nothing on screen.
+  const [connecting, setConnecting] = useState(false)
+  const [connectError, setConnectError] = useState<string | null>(null)
+  const connectingRef = useRef(false)
+  // Takes a thunk so that the form's "save the profile first" step runs
+  // inside the guard too — otherwise a double Enter saved two profiles
+  // before either connect began.
+  const attemptConnect = useCallback(
+    async (build: () => Promise<Parameters<Props['onConnect']>[0]>) => {
+      if (connectingRef.current) return
+      connectingRef.current = true
+      setConnecting(true)
+      setConnectError(null)
+      try {
+        await onConnect(await build())
+      } catch (err) {
+        // Electron wraps IPC rejections as "Error invoking remote method
+        // 'connect': Error: …"; the tail is the part worth reading.
+        const msg = err instanceof Error ? err.message : String(err)
+        setConnectError(msg.replace(/^Error invoking remote method '\w+': (Error: )?/, ''))
+      } finally {
+        connectingRef.current = false
+        setConnecting(false)
+      }
+    },
+    [onConnect]
+  )
 
   // Robust load: catches synchronous throws AND rejections (a bare
   // .then().catch() misses a sync throw, which silently left the list empty).
@@ -89,20 +119,22 @@ export function ConnectScreen({ onConnect, onOpenHelp }: Props) {
 
   const connectFromForm = useCallback(async () => {
     if (!formValid) return
-    let profileId: string | undefined
-    if (saveProfile || editingId) {
-      const saved = await saveCurrent()
-      profileId = saved?.id
-    }
-    onConnect({
-      host: host.trim(),
-      port: Number(port),
-      tls,
-      encoding,
-      name: name.trim() || host.trim(),
-      profileId
+    await attemptConnect(async () => {
+      let profileId: string | undefined
+      if (saveProfile || editingId) {
+        const saved = await saveCurrent()
+        profileId = saved?.id
+      }
+      return {
+        host: host.trim(),
+        port: Number(port),
+        tls,
+        encoding,
+        name: name.trim() || host.trim(),
+        profileId
+      }
     })
-  }, [formValid, saveProfile, editingId, saveCurrent, onConnect, host, port, tls, encoding, name])
+  }, [formValid, saveProfile, editingId, saveCurrent, attemptConnect, host, port, tls, encoding, name])
 
   const saveOnly = useCallback(async () => {
     const saved = await saveCurrent()
@@ -181,15 +213,17 @@ export function ConnectScreen({ onConnect, onOpenHelp }: Props) {
                     <div
                       key={p.id}
                       className={`profile-card ${p.id === editingId ? 'profile-editing' : ''}`}
+                      aria-disabled={connecting}
+                      style={connecting ? { opacity: 0.6, pointerEvents: 'none' } : undefined}
                       onClick={() =>
-                        onConnect({
+                        void attemptConnect(async () => ({
                           host: p.host,
                           port: p.port,
                           tls: p.tls,
                           encoding: p.encoding,
                           name: p.name,
                           profileId: p.id
-                        })
+                        }))
                       }
                     >
                       <div className="profile-name">{p.name}</div>
@@ -334,10 +368,19 @@ export function ConnectScreen({ onConnect, onOpenHelp }: Props) {
                     Save Changes
                   </button>
                 )}
-                <button className="connect-btn" disabled={!formValid} onClick={connectFromForm}>
-                  {editingId ? 'Save & Connect' : 'Connect'}
+                <button
+                  className="connect-btn"
+                  disabled={!formValid || connecting}
+                  onClick={connectFromForm}
+                >
+                  {connecting ? 'Connecting…' : editingId ? 'Save & Connect' : 'Connect'}
                 </button>
               </div>
+              {connectError && (
+                <p className="profiles-error" role="alert">
+                  Couldn’t connect: {connectError}
+                </p>
+              )}
             </div>
           </div>
 

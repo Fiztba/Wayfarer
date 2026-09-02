@@ -16,6 +16,7 @@ import { MapPane } from './MapPane'
 import { OutputLine, OutputSpan, formatTime, type LinkHandler } from './OutputLine'
 import { GaugeBar } from './GaugeBar'
 import { CapturePane } from './CapturePane'
+import { ClampedMenu } from './ClampedMenu'
 
 /** How many lines are in the DOM while pinned to the bottom. */
 const BASE_WINDOW = 1500
@@ -58,12 +59,15 @@ export function SessionView({
   store,
   active,
   onOpenSettings,
-  onOpenHelp
+  onOpenHelp,
+  focusTick = 0
 }: {
   store: SessionStore
   active: boolean
   onOpenSettings(): void
   onOpenHelp(): void
+  /** Bumped by App when a modal closes, so the command line takes focus back. */
+  focusTick?: number
 }) {
   useSyncExternalStore(store.subscribe, store.getVersion)
   const pendingUpdate = useSyncExternalStore(updateState.subscribe, updateState.get)
@@ -89,6 +93,9 @@ export function SessionView({
   const [mapWidth, setMapWidth] = useState(() =>
     Number(localStorage.getItem('wayfarer-map-width')) || 340
   )
+  // Mirrors mapWidth for the drag listeners, which are bound once per drag
+  // and would otherwise see only the width from the render they closed over.
+  const mapWidthRef = useRef(mapWidth)
   const mapDrag = useRef<{ startX: number; startW: number } | null>(null)
 
   // ---- Ctrl+F search over the full scrollback ----
@@ -96,7 +103,10 @@ export function SessionView({
   const [query, setQuery] = useState('')
   const [matches, setMatches] = useState<number[]>([]) // line ids, oldest→newest
   const [matchIdx, setMatchIdx] = useState(0)
-  const [jumpTargetId, setJumpTargetId] = useState<number | null>(null)
+  // The nonce lets a repeat jump to the same line (Enter on the only hit
+  // after scrolling away) re-run the scroll; keyed on the id alone it would
+  // be a no-op.
+  const [jumpTarget, setJumpTarget] = useState<{ id: number; nonce: number } | null>(null)
   const searchInputRef = useRef<HTMLInputElement>(null)
 
   const runSearch = useCallback(
@@ -141,19 +151,19 @@ export function SessionView({
         windowStartRef.current = lines[startIdx].id
         setWindowStartId(lines[startIdx].id)
       }
-      setJumpTargetId(lineId)
+      setJumpTarget((prev) => ({ id: lineId, nonce: (prev?.nonce ?? 0) + 1 }))
     },
     [store]
   )
 
   useLayoutEffect(() => {
-    if (jumpTargetId === null) return
-    const el = scrollRef.current?.querySelector(`[data-lid="${jumpTargetId}"]`)
+    if (jumpTarget === null) return
+    const el = scrollRef.current?.querySelector(`[data-lid="${jumpTarget.id}"]`)
     if (el) {
       el.scrollIntoView({ block: 'center' })
-      setJumpTargetId(null)
+      setJumpTarget(null)
     }
-  }, [jumpTargetId, windowStartId])
+  }, [jumpTarget, windowStartId])
 
   /** delta -1 = older match, +1 = newer match (wraps). */
   const navigateSearch = useCallback(
@@ -259,17 +269,20 @@ export function SessionView({
   const onDividerDown = useCallback(
     (e: React.MouseEvent) => {
       e.preventDefault()
-      mapDrag.current = { startX: e.clientX, startW: mapWidth }
+      mapDrag.current = { startX: e.clientX, startW: mapWidthRef.current }
       const move = (ev: MouseEvent) => {
         if (!mapDrag.current) return
         const w = Math.min(
           800,
           Math.max(200, mapDrag.current.startW + (mapDrag.current.startX - ev.clientX))
         )
+        mapWidthRef.current = w
         setMapWidth(w)
       }
       const up = () => {
-        if (mapDrag.current) localStorage.setItem('wayfarer-map-width', String(mapWidth))
+        if (mapDrag.current) {
+          localStorage.setItem('wayfarer-map-width', String(mapWidthRef.current))
+        }
         mapDrag.current = null
         window.removeEventListener('mousemove', move)
         window.removeEventListener('mouseup', up)
@@ -277,7 +290,7 @@ export function SessionView({
       window.addEventListener('mousemove', move)
       window.addEventListener('mouseup', up)
     },
-    [mapWidth]
+    []
   )
 
   // Grow the input to fit a pasted block (up to MAX_INPUT_HEIGHT, then it
@@ -297,7 +310,9 @@ export function SessionView({
   useLayoutEffect(() => {
     const el = scrollRef.current
     if (!el) return
-    if (expandRef.current) {
+    // (windowStale: the anchor delta belongs to a window that no longer
+    // exists; the reset effect below discards it.)
+    if (expandRef.current && !windowStale) {
       el.scrollTop += el.scrollHeight - expandRef.current.prevHeight
       expandRef.current = null
     } else if (pinnedRef.current) {
@@ -349,14 +364,28 @@ export function SessionView({
   }, [])
 
   const allLines = store.lines
+  // A frozen window whose start line has since been trimmed from the buffer
+  // can't be honoured: the search lands on index 0 and the "window" would be
+  // the whole buffer. Fall back to the pinned window for this render and drop
+  // the freeze below, so the DOM stays bounded however far the reader was.
+  const windowStartIdx = windowStartId === null ? -1 : indexOfLineId(allLines, windowStartId)
+  const windowStale = windowStartId !== null && allLines[windowStartIdx]?.id !== windowStartId
   let renderedLines = allLines
-  if (windowStartId === null) {
+  if (windowStartId === null || windowStale) {
     if (allLines.length > BASE_WINDOW) renderedLines = allLines.slice(-BASE_WINDOW)
-  } else {
-    const idx = indexOfLineId(allLines, windowStartId)
-    if (idx > 0) renderedLines = allLines.slice(idx)
+  } else if (windowStartIdx > 0) {
+    renderedLines = allLines.slice(windowStartIdx)
   }
   const hiddenAbove = allLines.length - renderedLines.length
+
+  useLayoutEffect(() => {
+    if (!windowStale) return
+    windowStartRef.current = null
+    setWindowStartId(null)
+    // A pending "keep the view anchored" height delta belongs to the window
+    // that just vanished; applying it would scroll to nowhere.
+    expandRef.current = null
+  }, [windowStale])
 
   // Report terminal size (NAWS) on mount and resize.
   useEffect(() => {
@@ -394,10 +423,11 @@ export function SessionView({
   }, [store.serverEchoes])
 
   // Focus input when this tab becomes active — and again when a password
-  // prompt swaps the textarea for a masked <input>, which is a remount.
+  // prompt swaps the textarea for a masked <input>, which is a remount, or
+  // when a modal closes and gives the keyboard back.
   useEffect(() => {
     if (active) inputRef.current?.focus()
-  }, [active, store.serverEchoes])
+  }, [active, store.serverEchoes, focusTick])
 
   // Keyboard macros fire regardless of focus while this session is active.
   useEffect(() => {
@@ -437,6 +467,10 @@ export function SessionView({
 
   const onKeyDown = useCallback(
     (e: React.KeyboardEvent<InputEl>) => {
+      // Mid-composition keystrokes (CJK IMEs, dead keys) arrive as Enter/arrows
+      // too; acting on them would send or replace a half-composed word. Older
+      // Chromium reports these only as keyCode 229.
+      if (e.nativeEvent.isComposing || e.keyCode === 229) return
       const el = e.currentTarget
       if (e.key === 'Enter') {
         // Shift+Enter / Ctrl+Enter break a line instead of sending, so a block
@@ -530,9 +564,10 @@ export function SessionView({
             )}
           </div>
           {linkMenu && (
-            <div
+            <ClampedMenu
+              x={linkMenu.x}
+              y={linkMenu.y}
               className="mxp-menu"
-              style={{ left: linkMenu.x, top: linkMenu.y }}
               onClick={(e) => e.stopPropagation()}
             >
               {linkMenu.items.map((item, i) => (
@@ -547,7 +582,7 @@ export function SessionView({
                   {item.label}
                 </div>
               ))}
-            </div>
+            </ClampedMenu>
           )}
           {searchOpen && (
             <div className="search-bar">
@@ -586,7 +621,7 @@ export function SessionView({
               ▼ Jump to bottom
             </button>
           )}
-          {store.showCaptures && <CapturePane store={store} />}
+          {store.showCaptures && <CapturePane store={store} onLink={handleMxpLink} />}
         </div>
         {store.showMap && (
           <>

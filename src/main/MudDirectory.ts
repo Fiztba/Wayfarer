@@ -14,6 +14,7 @@
  */
 import fs from 'node:fs'
 import path from 'node:path'
+import { atomicWrite } from './storage'
 import type { DirectoryResult } from '../shared/types'
 import type { DirectoryMud, DirectorySnapshot } from '../shared/directory'
 
@@ -73,10 +74,14 @@ export class MudDirectory {
       }
 
       const cache: CacheFile = { fetchedAt: new Date().toISOString(), snapshot }
-      const tmp = this.cacheFile + '.tmp'
-      fs.writeFileSync(tmp, JSON.stringify(cache))
-      fs.renameSync(tmp, this.cacheFile)
+      // The snapshot is good regardless of whether the disk takes it; a write
+      // failure must not turn a live fetch into a "stale cache" answer.
       this.memory = cache
+      try {
+        atomicWrite(this.cacheFile, JSON.stringify(cache))
+      } catch (err) {
+        console.warn(`[directory] could not cache snapshot: ${String(err)}`)
+      }
 
       return {
         entries: snapshot.muds,

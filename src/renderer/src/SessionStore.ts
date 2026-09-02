@@ -42,6 +42,9 @@ export interface Line {
 const MAX_HISTORY = 200
 /** Ask before sending a paste larger than this — a mis-paste can be huge. */
 const PASTE_CONFIRM_LINES = 200
+/** Ceiling on an unterminated line before it is forced closed. */
+const MAX_OPEN_SPANS = 256
+const MAX_OPEN_CHARS = 8192
 
 function scrollbackCap(): number {
   const raw = settingsManager.globalOptions.scrollbackLines
@@ -210,7 +213,19 @@ export class SessionStore {
       })()
       mapModelRegistry.set(this.mapKey, modelPromise)
     }
-    const model = await modelPromise
+    let model: MapModel
+    try {
+      model = await modelPromise
+    } catch (err) {
+      // A failed load must not be cached: drop it so the next session on this
+      // world retries instead of inheriting a rejected promise forever.
+      mapModelRegistry.delete(this.mapKey)
+      this.addSystemLine(`Mapper: could not load the map (${String(err)}).`, 'error')
+      return
+    }
+    if (model.loadWarning) {
+      this.addSystemLine(`Mapper: ${model.loadWarning}`, 'error')
+    }
     const tracker = new MapTracker(model, {
       info: (text) => this.addSystemLine(text, 'system'),
       // Profile set first, then global: a MUD-specific rule wins, and a
@@ -242,8 +257,9 @@ export class SessionStore {
       )
     }
     const push = () => this.pushMirrorState()
-    model.subscribe(push)
-    tracker.subscribe(push)
+    // The model outlives this session (it is shared via mapModelRegistry), so
+    // its subscription must be undone in dispose() or the tab keeps pushing.
+    this.mapUnsubs = [model.subscribe(push), tracker.subscribe(push)]
     this.notify()
   }
 
@@ -345,6 +361,7 @@ export class SessionStore {
   // ---- mirror to pop-out windows ------------------------------------------
 
   private mirrorTimer: ReturnType<typeof setTimeout> | null = null
+  private mapUnsubs: (() => void)[] = []
 
   private pushMirrorState(): void {
     if (this.mirrorTimer) return
@@ -502,17 +519,28 @@ export class SessionStore {
   /** Batch variable writes so prompt-driven updates don't hammer the disk. */
   private queueVariablePersist(name: string, value: string): void {
     this.pendingVars.set(name, value)
-    this.varPersistTimer ??= setTimeout(() => {
-      this.varPersistTimer = null
-      const batch = Object.fromEntries(this.pendingVars)
-      this.pendingVars.clear()
-      const scope = this.profileId
-      const set = settingsManager.getScope(scope)
-      void settingsManager.save(scope, {
-        ...set,
-        variables: { ...set.variables, ...batch }
-      })
-    }, 3000)
+    this.varPersistTimer ??= setTimeout(() => this.flushVariables(), 3000)
+  }
+
+  /** Write the batched variables into the scope's settings file. */
+  private flushVariables(): void {
+    this.varPersistTimer = null
+    if (this.pendingVars.size === 0) return
+    const scope = this.profileId
+    if (!settingsManager.isLoaded(scope)) {
+      // Saving now would write defaults over the profile's real settings
+      // file. The values already live in the engine, so hold them and try
+      // again once the scope has come in.
+      this.varPersistTimer = setTimeout(() => this.flushVariables(), 3000)
+      return
+    }
+    const batch = Object.fromEntries(this.pendingVars)
+    this.pendingVars.clear()
+    const set = settingsManager.getScope(scope)
+    void settingsManager.save(scope, {
+      ...set,
+      variables: { ...set.variables, ...batch }
+    })
   }
 
   /** Run one script immediately (used by the settings panel's Run button). */
@@ -559,7 +587,9 @@ export class SessionStore {
         this.status = 'disconnected'
         this.engine.stopTimers()
         this.engine.cancelPacedRepeats()
+        this.cancelBlock()
         this.walker?.cancel(false)
+        this.tracker?.reset()
         this.sounds.stopAll()
         this.closeOpenLine()
         this.charNameFromGmcp = false
@@ -756,6 +786,7 @@ export class SessionStore {
       return
     }
     this.status = 'connecting'
+    this.cancelBlock()
     this.serverEchoes = false
     this.mccp = false
     this.gmcp = false
@@ -931,9 +962,20 @@ export class SessionStore {
         this.completeLine()
       } else {
         this.openSpans.push(token.span)
+        // A line that never ends (a broken server, or a huge unterminated
+        // dump) would otherwise grow without bound; break it here.
+        if (this.openSpans.length > MAX_OPEN_SPANS || this.openLineLength() > MAX_OPEN_CHARS) {
+          this.completeLine()
+        }
       }
     }
     this.notify()
+  }
+
+  private openLineLength(): number {
+    let n = 0
+    for (const s of this.openSpans) n += s.text.length
+    return n
   }
 
   private completeLine(): void {
@@ -1063,7 +1105,13 @@ export class SessionStore {
     this.engine.stopTimers()
     this.engine.cancelPacedRepeats()
     if (this.blockTimer !== null) clearTimeout(this.blockTimer)
+    if (this.mirrorTimer !== null) clearTimeout(this.mirrorTimer)
+    if (this.msdpRoomFlush !== null) clearTimeout(this.msdpRoomFlush)
+    if (this.varPersistTimer !== null) clearTimeout(this.varPersistTimer)
+    if (settingsManager.isLoaded(this.profileId)) this.flushVariables()
     this.walker?.cancel(false)
+    for (const unsub of this.mapUnsubs) unsub()
+    this.mapUnsubs = []
     this.sounds.stopAll()
     this.mapModel?.flush()
     this.scripts.dispose()
@@ -1076,3 +1124,12 @@ export const sessionStores = new Map<string, SessionStore>()
 
 /** One shared MapModel per map key (kept across reconnects and tab closes). */
 const mapModelRegistry = new Map<string, Promise<MapModel>>()
+
+// Map saves are debounced; a quit mid-walk would otherwise lose whatever the
+// last debounce window still held. Only settled models can flush -- one still
+// loading has nothing to save.
+if (typeof window !== 'undefined') {
+  window.addEventListener('beforeunload', () => {
+    for (const store of sessionStores.values()) store.mapModel?.flush()
+  })
+}

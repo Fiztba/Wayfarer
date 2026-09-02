@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react'
+import React, { useEffect, useMemo, useState } from 'react'
 import { HELP_TOPICS, type HelpTopic } from '../help'
 
 function topicText(topic: HelpTopic): string {
@@ -23,9 +23,18 @@ export function HelpPanel({ onClose }: { onClose(): void }) {
 
   const active = matches.find((t) => t.id === activeId) ?? matches[0]
 
+  // Escape closes the modal from anywhere inside it.
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose()
+    }
+    window.addEventListener('keydown', handler)
+    return () => window.removeEventListener('keydown', handler)
+  }, [onClose])
+
   return (
     <div className="panel-overlay" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
-      <div className="panel">
+      <div className="panel" role="dialog" aria-modal="true" aria-label="Help">
         <div className="panel-header">
           <span className="panel-title">Help</span>
           <span className="help-hint-header">tip: type #help in any session</span>

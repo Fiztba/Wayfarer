@@ -35,6 +35,8 @@ export interface ScriptContext {
   highlight?: (color: string) => void
 }
 
+const LUA_RETRY_MS = 30_000
+
 type CompiledScript = (
   client: Record<string, unknown>,
   matches: string[],
@@ -99,7 +101,10 @@ export class ScriptRuntime {
       getVar: (n: unknown) => this.host.getVar(String(n)),
       setVar: (n: unknown, v: unknown) => this.host.setVar(String(n), String(v)),
       beep: (times: unknown = 1) => this.host.beep(Number(times) || 1),
-      session: this.host.session(),
+      // A function, not a snapshot: the docs promise session(), Lua gets a
+      // function, and a script kept alive by client.after() should see the
+      // connection state as it is now, not as it was when the script started.
+      session: () => this.host.session(),
       globals: this.globalsObj,
       gag: ctx.gag ?? noop,
       highlight: ctx.highlight ?? noop,
@@ -119,12 +124,49 @@ export class ScriptRuntime {
 
   // ---- Lua ----------------------------------------------------------------
 
+  /** After a failed start, don't try the factory again before this time. */
+  private luaRetryAfter = 0
+  private luaColdNoteShown = false
+  private luaDropNotedFor = -1
+
   private runLua(code: string, ctx: ScriptContext): void {
+    // Warm VM and nothing in flight: run right now. This is what lets a Lua
+    // trigger's gag()/highlight() land — processLine reads the directive as
+    // soon as it returns, so an awaited run would always be too late. The
+    // queue is only for cold start and for keeping order behind a script
+    // that is still running (its globals would be clobbered otherwise).
+    if (this.lua && !this.flushing && this.luaQueue.length === 0 && !this.disposed) {
+      this.setLuaContext(this.lua, ctx)
+      try {
+        this.lua.doStringSync(code)
+      } catch (e) {
+        this.host.echoError(`Lua error: ${e instanceof Error ? e.message : e}`)
+      }
+      return
+    }
+    if (!this.lua && (ctx.gag || ctx.highlight) && !this.luaColdNoteShown && Date.now() >= this.luaRetryAfter) {
+      this.luaColdNoteShown = true
+      this.host.echo('Lua VM is starting; gag()/highlight() from this trigger take effect once it is up.')
+    }
     this.luaQueue.push({ code, ctx })
     void this.flushLua()
   }
 
+  /**
+   * Context is exposed as globals per invocation. Arrays become 1-based Lua
+   * tables, so matches[1] = whole match, matches[2] = first capture — the
+   * same convention Mudlet uses.
+   */
+  private setLuaContext(engine: LuaEngine, ctx: ScriptContext): void {
+    const noop = () => {}
+    engine.global.set('matches', ctx.matches ?? [])
+    engine.global.set('line', ctx.line ?? '')
+    engine.global.set('gag', ctx.gag ?? noop)
+    engine.global.set('highlight', ctx.highlight ?? noop)
+  }
+
   private async ensureLua(): Promise<LuaEngine | null> {
+    if (!this.luaInit && Date.now() < this.luaRetryAfter) return null
     this.luaInit ??= (async () => {
       try {
         const factory = new LuaFactory(this.luaWasmUrl)
@@ -142,7 +184,15 @@ export class ScriptRuntime {
         this.lua = engine
         return engine
       } catch (e) {
-        this.host.echoError(`Lua engine failed to start: ${e instanceof Error ? e.message : e}`)
+        // Forget the attempt so a later run retries (a wasm fetch can fail
+        // transiently), but not more than once per window — a trigger firing
+        // on every line must not hammer the factory or the output pane.
+        this.luaInit = null
+        this.luaRetryAfter = Date.now() + LUA_RETRY_MS
+        this.luaDropNotedFor = this.luaRetryAfter // this line already says it
+        this.host.echoError(
+          `Lua engine failed to start: ${e instanceof Error ? e.message : e} — Lua scripts are skipped; retrying in ${LUA_RETRY_MS / 1000}s.`
+        )
         return null
       }
     })()
@@ -157,15 +207,17 @@ export class ScriptRuntime {
       const engine = await this.ensureLua()
       while (this.luaQueue.length > 0) {
         const { code, ctx } = this.luaQueue.shift()!
-        if (!engine || this.disposed) continue
-        const noop = () => {}
-        // Context is exposed as globals per invocation. Arrays become 1-based
-        // Lua tables, so matches[1] = whole match, matches[2] = first capture —
-        // the same convention Mudlet uses.
-        engine.global.set('matches', ctx.matches ?? [])
-        engine.global.set('line', ctx.line ?? '')
-        engine.global.set('gag', ctx.gag ?? noop)
-        engine.global.set('highlight', ctx.highlight ?? noop)
+        if (this.disposed) continue
+        if (!engine) {
+          // VM is down: say so once per retry window rather than per script,
+          // and rather than never.
+          if (this.luaDropNotedFor !== this.luaRetryAfter) {
+            this.luaDropNotedFor = this.luaRetryAfter
+            this.host.echoError('Lua engine is not running; Lua script skipped.')
+          }
+          continue
+        }
+        this.setLuaContext(engine, ctx)
         try {
           await engine.doString(code)
         } catch (e) {

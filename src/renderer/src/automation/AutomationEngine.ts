@@ -59,10 +59,39 @@ const DIRECTIONS = ['ne', 'nw', 'se', 'sw', 'n', 's', 'e', 'w', 'u', 'd'] as con
  * with \x00 for '@@' — different sentinel so the two never collide.)
  */
 const SEMI = '\x01'
+/**
+ * Sentinels for the other characters the pipeline treats as syntax, used only
+ * for text that arrived from the server (trigger captures). '{' and '}' would
+ * bend the splitter's depth tracking, and a leading '#' would turn a capture
+ * into a #repeat or #var. Same trick as SEMI: parked as control characters
+ * and restored on the wire.
+ */
+const LBRACE = '\x02'
+const RBRACE = '\x03'
+const HASH = '\x04'
 
-/** Restore escaped semicolons; call once, immediately before transmitting. */
+/** Restore escaped syntax characters; call once, immediately before transmitting. */
 export function unescapeSemicolons(text: string): string {
-  return text.replaceAll(SEMI, ';')
+  return text
+    .replaceAll(SEMI, ';')
+    .replaceAll(LBRACE, '{')
+    .replaceAll(RBRACE, '}')
+    .replaceAll(HASH, '#')
+}
+
+/**
+ * Make a trigger capture inert. Captures come from the MUD, so an attacker who
+ * can make the server print "hi;give all gold bob" must not be able to make
+ * "reply %1 %2" send a second command. '@' becomes '@@', which substituteVars
+ * collapses back to a literal '@' at emit time.
+ */
+function sanitizeCapture(text: string): string {
+  return text
+    .replaceAll(';', SEMI)
+    .replaceAll('@', '@@')
+    .replaceAll('{', LBRACE)
+    .replaceAll('}', RBRACE)
+    .replaceAll('#', HASH)
 }
 
 /**
@@ -194,24 +223,52 @@ export class AutomationEngine {
    * the host so a busy prompt can't hammer the disk.
    */
   private runtimeVars: Record<string, string> = {}
+  /** Overlay names that were also sent to persistence (settings own them). */
+  private persistedVarNames = new Set<string>()
 
-  /** Merged variables: global < profile < runtime overlay. */
-  get variables(): Record<string, string> {
+  /** Variables from settings alone: global < profile. */
+  private settingsVars(): Record<string, string> {
     const sets = this.getSets()
     const merged: Record<string, string> = {}
     for (let i = sets.length - 1; i >= 0; i--) Object.assign(merged, sets[i].variables)
-    Object.assign(merged, this.runtimeVars)
     return merged
+  }
+
+  /** Merged variables: global < profile < runtime overlay. */
+  get variables(): Record<string, string> {
+    return Object.assign(this.settingsVars(), this.runtimeVars)
   }
 
   /** Set a variable; persist=false keeps it session-only (live vitals). */
   setVar(name: string, value: string, persist = true): void {
     const clean = name.replace(/\W/g, '')
     if (!clean) return
+    if (persist) this.persistedVarNames.add(clean)
     if (this.runtimeVars[clean] === value) return
     this.runtimeVars[clean] = value
     if (persist) this.host.persistVariable(clean, value)
     this.host.onVariablesChanged()
+  }
+
+  /**
+   * Settings were just saved: stop the overlay from shadowing them. Persisted
+   * entries are dropped outright — the settings file is their source of truth,
+   * and keeping the overlay would hide an edit the user made in the panel.
+   * (If the host's debounced batch hasn't landed yet the value reverts for a
+   * few seconds; the batch then writes it back.) Session-only entries stay
+   * unless they already agree with settings, in which case they are redundant.
+   */
+  private reconcileVars(): void {
+    const persisted = this.settingsVars()
+    let changed = false
+    for (const name of Object.keys(this.runtimeVars)) {
+      if (this.persistedVarNames.has(name) || persisted[name] === this.runtimeVars[name]) {
+        delete this.runtimeVars[name]
+        changed = true
+      }
+    }
+    this.persistedVarNames.clear()
+    if (changed) this.host.onVariablesChanged()
   }
 
   // ---- input pipeline -----------------------------------------------------
@@ -222,6 +279,7 @@ export class AutomationEngine {
   private resetBurst(): void {
     this.burstBudget = MAX_BURST
     this.burstWarned = false
+    this.depthWarned = false
   }
 
   private emit(command: string): void {
@@ -242,8 +300,19 @@ export class AutomationEngine {
     this.runCommandString(raw, 0)
   }
 
+  private depthWarned = false
+
   private runCommandString(text: string, depth: number): void {
     if (depth > MAX_ALIAS_DEPTH) {
+      // Sending the text raw is the safe fallback, but a silent one leaves the
+      // user wondering why their alias "sometimes doesn't expand". Warn once
+      // per burst so "#100 loopalias" doesn't say it a hundred times.
+      if (!this.depthWarned) {
+        this.depthWarned = true
+        this.host.echoError(
+          `Alias expansion stopped at depth ${MAX_ALIAS_DEPTH} (alias calling itself?); sent as-is: ${unescapeSemicolons(text)}`
+        )
+      }
       this.emit(text)
       return
     }
@@ -270,7 +339,9 @@ export class AutomationEngine {
     if (/^#var\b/i.test(trimmed)) {
       const m = /^#var\s+(\w+)\s*([\s\S]*)$/i.exec(trimmed)
       if (m) {
-        this.setVar(m[1], substituteVars(m[2].trim(), this.variables))
+        // Restore any sentinels first: variables are only substituted inside
+        // emit(), after splitting, so a stored ';' can never split anything.
+        this.setVar(m[1], substituteVars(unescapeSemicolons(m[2].trim()), this.variables))
       } else {
         this.host.echoError('Usage: #var <name> <value>')
       }
@@ -322,9 +393,11 @@ export class AutomationEngine {
         const args = argString.length > 0 ? argString.split(/\s+/) : []
         const lang = alias.language ?? 'commands'
         if (lang !== 'commands') {
+          // Scripts get plain text: sentinels only mean something to this
+          // pipeline, and the script may well echo or compare the arguments.
           this.host.runScript(lang, alias.commands, {
-            matches: [argString, ...args],
-            line: trimmed
+            matches: [argString, ...args].map(unescapeSemicolons),
+            line: unescapeSemicolons(trimmed)
           })
           return
         }
@@ -368,8 +441,11 @@ export class AutomationEngine {
               }
             })
           } else {
-            const commands = substituteArgs(trigger.commands, captures.slice(1), captures[0])
-            this.host.echoTrigger(commands)
+            // Non-participating regex groups are undefined; leave them so
+            // substituteArgs still renders them as ''.
+            const safe = captures.map((c) => (c === undefined ? c : sanitizeCapture(c)))
+            const commands = substituteArgs(trigger.commands, safe.slice(1), safe[0])
+            this.host.echoTrigger(unescapeSemicolons(commands))
             this.runCommandString(commands, 1)
           }
         }
@@ -414,7 +490,6 @@ export class AutomationEngine {
     let remaining = count
     let handle: ReturnType<typeof setInterval> | null = null
     const tick = () => {
-      this.resetBurst()
       this.runCommandString(body, depth + 1)
       remaining--
       if (remaining <= 0 && handle !== null) {
@@ -423,9 +498,16 @@ export class AutomationEngine {
         this.host.echoTrigger('paced repeat finished')
       }
     }
-    tick() // first iteration fires immediately
+    // The first iteration runs synchronously inside whatever burst started
+    // it, so it must spend that burst's budget: refilling here would let
+    // "#10000 {#2@10ms x;#10000 y}" restart the runaway guard every lap.
+    // Later ticks are their own events and get a fresh budget.
+    tick()
     if (remaining <= 0) return
-    handle = setInterval(tick, delayMs)
+    handle = setInterval(() => {
+      this.resetBurst()
+      tick()
+    }, delayMs)
     this.pacedHandles.add(handle)
   }
 
@@ -491,6 +573,7 @@ export class AutomationEngine {
   refreshTimers(): void {
     if (this.timersRunning) this.startTimers()
     this.clearRegexCache()
+    this.reconcileVars()
   }
 }
 

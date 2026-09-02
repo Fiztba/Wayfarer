@@ -17,6 +17,11 @@ import {
 } from './types.ts'
 
 const SAVE_DEBOUNCE_MS = 1500
+/** A walk that never pauses would otherwise never be saved at all: the
+ *  debounce keeps being pushed back by the next room. Past this age a save
+ *  goes out regardless, so a crash mid-exploration costs seconds, not the
+ *  session. */
+const SAVE_MAX_WAIT_MS = 10_000
 /** How many descriptions to remember per room. Weather and daylight give one
  *  room a handful; beyond that we are hoarding, not identifying. */
 const MAX_DESC_HASHES = 6
@@ -29,9 +34,37 @@ function uuid(): string {
     : Math.random().toString(36).slice(2) + Date.now().toString(36)
 }
 
+function isRecord(v: unknown): v is Record<string, unknown> {
+  return typeof v === 'object' && v !== null && !Array.isArray(v)
+}
+
+/**
+ * Whatever came off disk, made safe to work on. The file is written by us but
+ * lives where anything can edit it; a hand-mangled one must not take the whole
+ * mapper down at construction, with no map at all and no way to say why. A map
+ * whose rooms are recognisable keeps them and grows any list it lost; one
+ * whose rooms are not is started over. The first save then backs up the old
+ * file, so nothing is silently gone.
+ */
+function normalizeMap(raw: unknown): { map: MudMap; warning: string | null } {
+  if (raw === null || raw === undefined) return { map: emptyMap(), warning: null }
+  if (!isRecord(raw) || !isRecord(raw.rooms)) {
+    return { map: emptyMap(), warning: 'the map file was not a map; starting a new one' }
+  }
+  const map = raw as unknown as MudMap
+  if (!Array.isArray(map.zones)) map.zones = []
+  if (!Array.isArray(map.waypoints)) map.waypoints = []
+  if (typeof map.lastRoomId !== 'string') map.lastRoomId = null
+  if (map.merges !== undefined && !Array.isArray(map.merges)) delete map.merges
+  return { map, warning: null }
+}
+
 export class MapModel {
   map: MudMap
   activeZoneId: string
+  /** Set when the map given at construction could not be used as it was. The
+   *  owner is expected to show it; the model has no voice of its own. */
+  readonly loadWarning: string | null
   /**
    * Armed by #zone / the zone dropdown: the NEXT room created goes here, after
    * which new rooms inherit the zone of the room they were entered from.
@@ -40,11 +73,17 @@ export class MapModel {
 
   private saver: (map: MudMap) => void
   private saveTimer: ReturnType<typeof setTimeout> | null = null
+  /** When the map last went to the saver, or was loaded. */
+  private savedAt = Date.now()
+  /** Changed since it last went to the saver. */
+  private dirty = false
   private subs = new Set<() => void>()
   version = 0
 
   constructor(initial: MudMap | null, saver: (map: MudMap) => void) {
-    this.map = initial ?? emptyMap()
+    const loaded = normalizeMap(initial)
+    this.map = loaded.map
+    this.loadWarning = loaded.warning
     this.saver = saver
     if (this.map.zones.length === 0) {
       this.map.zones.push({ id: uuid(), name: 'Unsorted' })
@@ -61,20 +100,31 @@ export class MapModel {
 
   protected touch(): void {
     this.version++
+    this.dirty = true
     for (const fn of this.subs) fn()
+    if (Date.now() - this.savedAt >= SAVE_MAX_WAIT_MS) {
+      this.flush()
+      return
+    }
     if (this.saveTimer) clearTimeout(this.saveTimer)
     this.saveTimer = setTimeout(() => {
       this.saveTimer = null
-      this.saver(this.map)
+      this.saveNow()
     }, SAVE_DEBOUNCE_MS)
   }
 
+  private saveNow(): void {
+    this.savedAt = Date.now()
+    this.dirty = false
+    this.saver(this.map)
+  }
+
+  /** Save at once if anything is waiting. The owner calls this when the
+   *  session ends, since the debounce cannot outlive the window. */
   flush(): void {
-    if (this.saveTimer) {
-      clearTimeout(this.saveTimer)
-      this.saveTimer = null
-      this.saver(this.map)
-    }
+    if (this.saveTimer) clearTimeout(this.saveTimer)
+    this.saveTimer = null
+    if (this.dirty) this.saveNow()
   }
 
   // ---- zones --------------------------------------------------------------
@@ -316,6 +366,12 @@ export class MapModel {
       if (!clash) keep.exits.push(exit)
       else if (clash.to === null && exit.to !== null) clash.to = exit.to === dropId ? keepId : exit.to
     }
+    // Two rooms that were neighbours now have exits into each other that
+    // both land on the keeper. A room leading to itself is nonsense the
+    // pathfinder would happily walk in circles on; leave those unexplored.
+    for (const exit of keep.exits) {
+      if (exit.to === keepId || exit.to === dropId) exit.to = null
+    }
     if (!keep.serverId && drop.serverId) keep.serverId = drop.serverId
     for (const w of this.map.waypoints) {
       if (w.roomId === dropId) w.roomId = keepId
@@ -345,8 +401,12 @@ export class MapModel {
     return room.exits.find((e) => e.dir === dir)
   }
 
-  ensureExit(roomId: string, dir: Direction): MapExit {
+  /** The exit in that direction, created unexplored if the room lacks one.
+   *  Null for a room that is not on the map: ids arrive from the pop-out and
+   *  from stale menus, and either can name a room that has since gone. */
+  ensureExit(roomId: string, dir: Direction): MapExit | null {
     const room = this.map.rooms[roomId]
+    if (!room) return null
     let exit = room.exits.find((e) => e.dir === dir)
     if (!exit) {
       exit = { dir, to: null, door: false }
@@ -376,25 +436,46 @@ export class MapModel {
     this.ensureExit(roomId, dir)
   }
 
+  /** Whether linkRooms would accept this link. Callers that announce a
+   *  correction ask first, so nothing is said about a link never made. */
+  canLink(fromId: string, dir: Direction, toId: string): boolean {
+    return (
+      this.map.rooms[fromId] !== undefined &&
+      this.map.rooms[toId] !== undefined &&
+      !this.wouldContradictDirection(fromId, dir, toId)
+    )
+  }
+
   /** Link from→to via dir; adds the reverse link when addReverse.
    *  Refuses a link that would make the same direction reciprocal. */
   linkRooms(fromId: string, dir: Direction, toId: string, addReverse: boolean): void {
-    if (this.wouldContradictDirection(fromId, dir, toId)) return
+    if (!this.canLink(fromId, dir, toId)) return
     const exit = this.ensureExit(fromId, dir)
+    if (!exit) return
+    let changed = exit.to !== toId
     exit.to = toId
     if (addReverse) {
       const back = this.ensureExit(toId, OPPOSITE[dir])
-      if (back.to === null) back.to = fromId
-      // A door is a property of the passage — mirror it onto both faces.
-      if (exit.door && !back.door) {
-        back.door = true
-        back.doorName ??= exit.doorName
-      } else if (back.door && !exit.door) {
-        exit.door = true
-        exit.doorName ??= back.doorName
+      if (back) {
+        if (back.to === null) {
+          back.to = fromId
+          changed = true
+        }
+        // A door is a property of the passage — mirror it onto both faces.
+        if (exit.door && !back.door) {
+          back.door = true
+          back.doorName ??= exit.doorName
+          changed = true
+        } else if (back.door && !exit.door) {
+          exit.door = true
+          exit.doorName ??= back.doorName
+          changed = true
+        }
       }
     }
-    this.touch()
+    // Re-walking a mapped passage confirms it and changes nothing; a touch
+    // here would save, redraw and reconcile on every step of a known route.
+    if (changed) this.touch()
   }
 
   addSpecialExit(fromId: string, command: string, toId: string | null): void {
@@ -428,19 +509,28 @@ export class MapModel {
 
   setDoor(roomId: string, dir: Direction, door: boolean, doorName?: string): void {
     const exit = this.ensureExit(roomId, dir)
-    exit.door = door
-    if (doorName !== undefined) exit.doorName = doorName
+    if (!exit) return
+    let changed = false
+    const setOn = (e: MapExit): void => {
+      if (e.door !== door) {
+        e.door = door
+        changed = true
+      }
+      if (doorName !== undefined && e.doorName !== doorName) {
+        e.doorName = doorName
+        changed = true
+      }
+    }
+    setOn(exit)
     // Mirror onto the reverse side if linked — doors exist on both faces.
     if (exit.to) {
       const back = this.map.rooms[exit.to]?.exits.find(
         (e) => e.dir === OPPOSITE[dir] && (e.to === roomId || e.to === null)
       )
-      if (back) {
-        back.door = door
-        if (doorName !== undefined) back.doorName = doorName
-      }
+      if (back) setOn(back)
     }
-    this.touch()
+    // Every Room.Info repeats the doors it has; only news is worth a save.
+    if (changed) this.touch()
   }
 
   // ---- placement ----------------------------------------------------------

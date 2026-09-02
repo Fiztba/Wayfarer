@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, net, protocol, screen, shell } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, net, protocol, screen, shell } from 'electron'
 import { autoUpdater } from 'electron-updater'
 import path from 'node:path'
 import fs from 'node:fs'
@@ -65,6 +65,32 @@ function rendererPreferences() {
   }
 }
 
+/**
+ * The renderer must only ever show the app's own pages. External links go to
+ * the system browser; anything else that tries to take over the window (an
+ * MXP <a> the sanitizer missed, a dragged-in file) is refused outright.
+ */
+function guardNavigation(win: BrowserWindow): void {
+  win.webContents.setWindowOpenHandler(({ url }) => {
+    if (url.startsWith('http:') || url.startsWith('https:')) shell.openExternal(url)
+    return { action: 'deny' }
+  })
+  win.webContents.on('will-navigate', (event, url) => {
+    if (!isOwnPage(url)) event.preventDefault()
+  })
+}
+
+function isOwnPage(url: string): boolean {
+  if (url.startsWith('file:')) return true
+  const dev = process.env.ELECTRON_RENDERER_URL
+  if (!dev) return false
+  try {
+    return new URL(url).origin === new URL(dev).origin
+  } catch {
+    return false
+  }
+}
+
 function createWindow(): void {
   mainWindow = new BrowserWindow({
     width: 1280,
@@ -81,11 +107,7 @@ function createWindow(): void {
     mainWindow = null
   })
 
-  // Open external links in the system browser, never in-app.
-  mainWindow.webContents.setWindowOpenHandler(({ url }) => {
-    if (url.startsWith('http:') || url.startsWith('https:')) shell.openExternal(url)
-    return { action: 'deny' }
-  })
+  guardNavigation(mainWindow)
 
   if (process.env.ELECTRON_RENDERER_URL) {
     mainWindow.loadURL(process.env.ELECTRON_RENDERER_URL)
@@ -98,7 +120,13 @@ app.whenReady().then(async () => {
   const soundsDir = path.join(app.getPath('userData'), 'sounds')
   fs.mkdirSync(soundsDir, { recursive: true })
   protocol.handle('msp-sound', (request) => {
-    const rel = decodeURIComponent(new URL(request.url).pathname).replace(/^\/+/, '')
+    let rel: string
+    try {
+      rel = decodeURIComponent(new URL(request.url).pathname).replace(/^\/+/, '')
+    } catch {
+      // A stray '%' in a server-supplied file name is a bad URL, not a crash.
+      return new Response('', { status: 404 })
+    }
     const resolved = path.normalize(path.join(soundsDir, rel))
     if (!resolved.startsWith(soundsDir + path.sep) || !fs.existsSync(resolved)) {
       return new Response('', { status: 404 })
@@ -136,9 +164,22 @@ app.whenReady().then(async () => {
   })
 
   ipcMain.handle('session:connect', (_e, opts: ConnectOptions) => sessions.connect(opts))
-  ipcMain.on('session:send', (_e, id: string, text: string) => sessions.send(id, text))
-  ipcMain.on('session:resize', (_e, id: string, cols: number, rows: number) =>
-    sessions.resize(id, cols, rows)
+  // ipcMain.on handlers have nobody to reject to: a throw inside one is an
+  // uncaught exception in the main process. Each fire-and-forget channel is
+  // fenced so a bad write or a dead socket is a log line, not a crash.
+  const fenced =
+    (what: string, body: (...args: any[]) => void) =>
+    (_e: Electron.IpcMainEvent, ...args: any[]): void => {
+      try {
+        body(...args)
+      } catch (err) {
+        console.error(`[ipc] ${what} failed: ${String(err)}`)
+      }
+    }
+  ipcMain.on('session:send', fenced('session:send', (id: string, text: string) => sessions.send(id, text)))
+  ipcMain.on(
+    'session:resize',
+    fenced('session:resize', (id: string, cols: number, rows: number) => sessions.resize(id, cols, rows))
   )
   ipcMain.handle('session:disconnect', (_e, id: string) => sessions.disconnect(id))
   ipcMain.handle('session:reconnect', (_e, id: string) => sessions.reconnect(id))
@@ -179,7 +220,7 @@ app.whenReady().then(async () => {
   const logs = new LogWriter(app.getPath('userData'))
   ipcMain.handle('log:start', (_e, sessionId: string, name: string) => logs.start(sessionId, name))
   ipcMain.handle('log:stop', (_e, sessionId: string) => logs.stop(sessionId))
-  ipcMain.on('log:line', (_e, sessionId: string, text: string) => logs.line(sessionId, text))
+  ipcMain.on('log:line', fenced('log:line', (sessionId: string, text: string) => logs.line(sessionId, text)))
   ipcMain.handle('log:openFolder', () => shell.openPath(logs.logsDir))
   app.on('before-quit', () => logs.stopAll())
   // Closing a pop-out is the user forgetting it; closing because the app is
@@ -193,7 +234,7 @@ app.whenReady().then(async () => {
   // ---- Mapper: storage + pop-out windows with a state mirror --------------
   const maps = new MapStore(app.getPath('userData'), profileName)
   ipcMain.handle('map:load', (_e, key: string) => maps.load(key))
-  ipcMain.on('map:save', (_e, key: string, map: unknown) => maps.save(key, map))
+  ipcMain.on('map:save', fenced('map:save', (key: string, map: unknown) => maps.save(key, map)))
 
   const popouts = new Map<string, Set<BrowserWindow>>()
 
@@ -232,6 +273,7 @@ app.whenReady().then(async () => {
       title: `Map — ${title}`,
       webPreferences: rendererPreferences()
     })
+    guardNavigation(win)
     // Record where it opened, then follow it around.
     reportBounds(sessionId, win.getBounds())
     let settle: ReturnType<typeof setTimeout> | null = null
@@ -267,18 +309,27 @@ app.whenReady().then(async () => {
   })
 
   // Session renderer → pop-outs (map state pushes).
-  ipcMain.on('map:mirror-state', (_e, sessionId: string, state: unknown) => {
-    for (const win of popouts.get(sessionId) ?? []) {
-      if (!win.isDestroyed()) win.webContents.send('map:mirror-state', sessionId, state)
-    }
-  })
+  ipcMain.on(
+    'map:mirror-state',
+    fenced('map:mirror-state', (sessionId: string, state: unknown) => {
+      for (const win of popouts.get(sessionId) ?? []) {
+        if (!win.isDestroyed()) win.webContents.send('map:mirror-state', sessionId, state)
+      }
+    })
+  )
   // Pop-out → session renderer (hello requests + user actions).
-  ipcMain.on('map:mirror-hello', (_e, sessionId: string) => {
-    mainWindow?.webContents.send('map:mirror-hello', sessionId)
-  })
-  ipcMain.on('map:mirror-action', (_e, sessionId: string, action: unknown) => {
-    mainWindow?.webContents.send('map:mirror-action', sessionId, action)
-  })
+  ipcMain.on(
+    'map:mirror-hello',
+    fenced('map:mirror-hello', (sessionId: string) => {
+      mainWindow?.webContents.send('map:mirror-hello', sessionId)
+    })
+  )
+  ipcMain.on(
+    'map:mirror-action',
+    fenced('map:mirror-action', (sessionId: string, action: unknown) => {
+      mainWindow?.webContents.send('map:mirror-action', sessionId, action)
+    })
+  )
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow()
@@ -352,54 +403,71 @@ app.whenReady().then(async () => {
     const updateBeforeLaunch = (): Promise<boolean> =>
       new Promise<boolean>((resolve) => {
         let settled = false
-        const finish = (installing: boolean): void => {
-          if (settled) return
-          settled = true
-          resolve(installing)
-        }
+        // Every listener below is unhooked the moment the startup pass settles.
+        // Left in place, an 'update-available' from a later background check
+        // (or from a startup check that answered after the patience timer)
+        // would open the progress window over a live session and quit-and-
+        // install on top of it. The handlers refer to one another, so they
+        // are function declarations: hoisted, and never used before defined.
         const patience = setTimeout(() => {
           log('[startup] no answer in time — launching')
           finish(false)
         }, STARTUP_CHECK_MS)
-
-        autoUpdater.once('update-not-available', () => {
+        function finish(installing: boolean): void {
+          if (settled) return
+          settled = true
           clearTimeout(patience)
+          autoUpdater.off('update-not-available', onNone)
+          autoUpdater.off('error', onNone)
+          autoUpdater.off('update-available', onAvailable)
+          resolve(installing)
+        }
+        function onNone(): void {
           finish(false)
-        })
-        autoUpdater.once('error', () => {
-          clearTimeout(patience)
-          finish(false)
-        })
-        autoUpdater.once('update-available', (info) => {
+        }
+        function onAvailable(info: { version: string }): void {
+          if (settled) return
           clearTimeout(patience)
           log('[startup] installing', info.version, 'before launch')
           const win = showProgress(info.version)
-          let skipped = false
-          win.on('closed', () => {
-            skipped = true
-            log('[startup] skipped by the user')
-            finish(false)
-          })
-          autoUpdater.on('download-progress', (p) => {
+          const onProgress = (p: { percent: number }): void => {
             if (win.isDestroyed()) return
             const pct = Math.round(p.percent)
             void win.webContents.executeJavaScript(
               `{const s=document.getElementById('s'),b=document.getElementById('b');` +
                 `if(s)s.textContent='Downloading… ${pct}%';if(b)b.style.width='${pct}%';}`
             )
-          })
-          autoUpdater.once('update-downloaded', () => {
-            if (skipped) return
+          }
+          const onClosed = (): void => {
+            autoUpdater.off('download-progress', onProgress)
+            log('[startup] skipped by the user')
+            finish(false)
+          }
+          // Taking the window down ourselves must not read as the user
+          // skipping, so the closed handler comes off before destroy().
+          const dismiss = (): void => {
+            autoUpdater.off('download-progress', onProgress)
+            win.off('closed', onClosed)
             if (!win.isDestroyed()) win.destroy()
+          }
+          win.on('closed', onClosed)
+          autoUpdater.on('download-progress', onProgress)
+          autoUpdater.once('update-downloaded', () => {
+            if (settled) return
+            dismiss()
             autoUpdater.quitAndInstall(true, true)
             finish(true)
           })
           autoUpdater.downloadUpdate().catch((err) => {
             log('[startup] download failed', String(err))
-            if (!win.isDestroyed()) win.destroy()
+            dismiss()
             finish(false)
           })
-        })
+        }
+
+        autoUpdater.once('update-not-available', onNone)
+        autoUpdater.once('error', onNone)
+        autoUpdater.once('update-available', onAvailable)
         autoUpdater.checkForUpdates().catch((err) => {
           clearTimeout(patience)
           log('[startup] check failed', String(err))
@@ -424,6 +492,11 @@ app.whenReady().then(async () => {
     }
     createWindow()
   }
+}).catch((err) => {
+  // An unhandled rejection here would leave a process running with no window
+  // and no explanation.
+  dialog.showErrorBox('Wayfarer failed to start', String(err))
+  app.quit()
 })
 
 app.on('window-all-closed', () => {

@@ -88,6 +88,29 @@ check('lua trigger matches (Mudlet-style)', sent[2], 'm=whole/cap1')
 check('lua error reported', errors.some((e) => e.startsWith('Lua error')), true)
 check('lua beep', beeps, [3, 2])
 
+// ---- Lua trigger context on a warm VM ----
+// The runs above already started the VM; with it up and idle a trigger body
+// must execute before run() returns, or gag()/highlight() would land after
+// processLine has already handed the line to the display.
+sent.length = 0
+let luaGagged = false
+let luaColor = ''
+rt.run('lua', 'gag(); highlight("#00ff00"); send("reply " .. matches[2])', {
+  matches: ['Bob tells you hi', 'Bob'],
+  line: 'Bob tells you hi',
+  gag: () => (luaGagged = true),
+  highlight: (c) => (luaColor = c)
+})
+check('lua trigger gag() synchronous', luaGagged, true)
+check('lua trigger highlight() synchronous', luaColor, '#00ff00')
+check('lua trigger send synchronous', sent, ['reply Bob'])
+check('js session() is a function', (() => {
+  let got: unknown
+  rt.run('js', 'globals.sess = client.session()')
+  got = (rt as unknown as { globalsObj: Record<string, unknown> }).globalsObj.sess
+  return (got as { name: string } | undefined)?.name
+})(), 'Test')
+
 rt.dispose()
 console.log(failures === 0 ? '\nALL PASS' : `\n${failures} FAILURES`)
 process.exit(failures === 0 ? 0 : 1)

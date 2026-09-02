@@ -78,6 +78,15 @@ export function SettingsPanel({ store, onClose }: Props) {
 
   useEffect(() => settingsManager.subscribe(() => force((n) => n + 1)), [])
 
+  // Escape closes the modal from anywhere inside it.
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose()
+    }
+    window.addEventListener('keydown', handler)
+    return () => window.removeEventListener('keydown', handler)
+  }, [onClose])
+
   const set = settingsManager.getScope(scope)
 
   const save = useCallback(
@@ -90,7 +99,7 @@ export function SettingsPanel({ store, onClose }: Props) {
 
   return (
     <div className="panel-overlay" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
-      <div className="panel">
+      <div className="panel" role="dialog" aria-modal="true" aria-label="Automation & Settings">
         <div className="panel-header">
           <span className="panel-title">Automation &amp; Settings</span>
           <select
@@ -514,7 +523,14 @@ function MacrosTab({ set, save }: TabProps) {
             value={draft.key}
             placeholder="Press a key… (F1–F12, Numpad, or Ctrl/Alt + key)"
             onKeyDown={(e) => {
+              // A bare Tab isn't a bindable key (see keyEventSignature), so
+              // let it move focus as usual instead of trapping the keyboard
+              // in this field. Ctrl/Alt+Tab are still captured.
+              if (e.key === 'Tab' && !e.ctrlKey && !e.altKey && !e.metaKey) return
               e.preventDefault()
+              // Ctrl/Alt+Escape are bindable; don't let them reach the
+              // panel's Escape-to-close and throw the draft away.
+              e.stopPropagation()
               const sig = keyEventSignature(e)
               if (sig) setDraft({ ...draft, key: sig })
             }}
@@ -554,8 +570,24 @@ function MacrosTab({ set, save }: TabProps) {
 
 // ---- Timers -----------------------------------------------------------------
 
+/** Seconds as the user would type them: no trailing ".0", no float noise. */
+function formatSeconds(ms: number): string {
+  return String(Math.round(ms) / 1000)
+}
+
 function TimersTab({ set, save }: TabProps) {
-  const [draft, setDraft] = useState<TimerDef | null>(null)
+  const [draft, setDraftState] = useState<TimerDef | null>(null)
+  // Text draft of the interval field; see the input's onChange for why it
+  // is not derived from draft.intervalMs on every render.
+  const [intervalText, setIntervalText] = useState('')
+  // Edits within the draft (language, commands…) go through setDraft and
+  // leave whatever is being typed alone; opening a row or a new timer goes
+  // through openDraft, which reseeds the text.
+  const setDraft = setDraftState
+  const openDraft = (next: TimerDef): void => {
+    setDraftState(next)
+    setIntervalText(formatSeconds(next.intervalMs))
+  }
   const isNew = draft !== null && !set.timers.some((t) => t.id === draft.id)
 
   const commit = async () => {
@@ -587,7 +619,7 @@ function TimersTab({ set, save }: TabProps) {
                 })
               }
             />
-            <span className="row-main" onClick={() => setDraft({ ...t })}>
+            <span className="row-main" onClick={() => openDraft({ ...t })}>
               <span className="row-label">{t.label || t.commands.slice(0, 30)}</span>
               <span className="row-detail">
                 every {(t.intervalMs / 1000).toFixed(t.intervalMs % 1000 ? 1 : 0)}s
@@ -606,7 +638,7 @@ function TimersTab({ set, save }: TabProps) {
         <button
           className="add-btn"
           onClick={() =>
-            setDraft({
+            openDraft({
               id: crypto.randomUUID(),
               label: '',
               intervalMs: 60000,
@@ -625,11 +657,16 @@ function TimersTab({ set, save }: TabProps) {
           <input value={draft.label} onChange={(e) => setDraft({ ...draft, label: e.target.value })} />
           <label className="field-label">Interval (seconds)</label>
           <input
-            value={String(draft.intervalMs / 1000)}
+            value={intervalText}
             onChange={(e) => {
+              // Keep the raw text so "1." survives on the way to "1.5"; the
+              // parsed value only feeds the draft (and the Add button's
+              // enabled state), never the field.
+              setIntervalText(e.target.value)
               const s = parseFloat(e.target.value)
               setDraft({ ...draft, intervalMs: Number.isFinite(s) ? Math.round(s * 1000) : 0 })
             }}
+            onBlur={() => setIntervalText(formatSeconds(draft.intervalMs))}
           />
           <div className="form-row">
             <LanguageSelect
@@ -799,6 +836,47 @@ function ScriptsTab({ set, save, store }: TabProps & { store: SessionStore }) {
 
 // ---- General ----------------------------------------------------------------
 
+/**
+ * Integer option field that commits on blur or Enter, not per keystroke.
+ * Saving as you type meant "50000" landed as 5, 50, 500… on the way — and
+ * the field couldn't be emptied to retype, since NaN was never written back.
+ */
+function IntInput({
+  value,
+  min,
+  max,
+  fallback,
+  onCommit
+}: {
+  value: number
+  min: number
+  max: number
+  /** Used when the field is left blank or unparsable. */
+  fallback: number
+  onCommit(n: number): void
+}) {
+  const [text, setText] = useState(String(value))
+  // Track changes made elsewhere (another window, a reset) while not typing.
+  useEffect(() => setText(String(value)), [value])
+  const commit = (): void => {
+    const n = parseInt(text.replace(/\D/g, ''), 10)
+    const clamped = Math.min(max, Math.max(min, Number.isFinite(n) ? n : fallback))
+    setText(String(clamped))
+    if (clamped !== value) onCommit(clamped)
+  }
+  return (
+    <input
+      className="scrollback-input"
+      value={text}
+      onChange={(e) => setText(e.target.value.replace(/\D/g, ''))}
+      onBlur={commit}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter') commit()
+      }}
+    />
+  )
+}
+
 function GeneralTab() {
   const [, force] = useState(0)
   useEffect(() => settingsManager.subscribe(() => force((n) => n + 1)), [])
@@ -874,17 +952,12 @@ function GeneralTab() {
         </label>
         <div className="logging-option">
           Delay between pasted lines:{' '}
-          <input
-            className="scrollback-input"
-            value={String(global.options.pasteLineDelayMs)}
-            onChange={(e) => {
-              const n = parseInt(e.target.value.replace(/\D/g, ''), 10)
-              if (Number.isFinite(n)) setOption({ pasteLineDelayMs: n })
-            }}
-            onBlur={(e) => {
-              const n = parseInt(e.target.value.replace(/\D/g, ''), 10) || 0
-              setOption({ pasteLineDelayMs: Math.min(5000, Math.max(0, n)) })
-            }}
+          <IntInput
+            value={global.options.pasteLineDelayMs}
+            min={0}
+            max={5000}
+            fallback={0}
+            onCommit={(n) => setOption({ pasteLineDelayMs: n })}
           />{' '}
           ms
           <div className="field-hint">
@@ -906,17 +979,12 @@ function GeneralTab() {
         </label>
         <div className="logging-option">
           Scrollback buffer:{' '}
-          <input
-            className="scrollback-input"
-            value={String(global.options.scrollbackLines)}
-            onChange={(e) => {
-              const n = parseInt(e.target.value.replace(/\D/g, ''), 10)
-              if (Number.isFinite(n)) setOption({ scrollbackLines: n })
-            }}
-            onBlur={(e) => {
-              const n = parseInt(e.target.value.replace(/\D/g, ''), 10) || 100000
-              setOption({ scrollbackLines: Math.min(1_000_000, Math.max(1000, n)) })
-            }}
+          <IntInput
+            value={global.options.scrollbackLines}
+            min={1000}
+            max={1_000_000}
+            fallback={100000}
+            onCommit={(n) => setOption({ scrollbackLines: n })}
           />{' '}
           lines
           <div className="field-hint">

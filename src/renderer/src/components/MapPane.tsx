@@ -190,7 +190,7 @@ export function MapPane({ model, tracker, walkTo, onPopout, onClose }: MapPanePr
         )}
       </div>
 
-      {tracker.lost && (
+      {(tracker.lost || (!tracker.currentRoomId && Object.keys(model.map.rooms).length > 0)) && (
         <div className="map-lost">Position unknown — right-click your room → “I am here”.</div>
       )}
 

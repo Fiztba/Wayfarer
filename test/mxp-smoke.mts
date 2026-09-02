@@ -118,6 +118,53 @@ function spansOf(p: AnsiParser, input: string): Span[] {
   check('a: url', spans[0]?.link?.url, 'https://example.org')
 }
 
+// ---- literal '<' in secure mode must not blackhole the stream ----
+{
+  const { p } = mxpParser()
+  const spans = spansOf(p, '\x1b[1za < b\nnext <b>x</b>')
+  check('literal <: text renders', spans.map((s) => s.text).join(''), 'a < bnext <b>x</b>')
+  check('literal <: mode fell back to open', spans.every((s) => !s.style.bold), true)
+}
+{
+  const { p } = mxpParser()
+  const s1 = spansOf(p, '\x1b[1z<oops')
+  const s2 = p.parse('\nmore')
+  check('literal < across chunks: first chunk waits', s1.length, 0)
+  check(
+    'literal < across chunks: later text renders',
+    s2.map((t) => (t.kind === 'span' ? t.span.text : '|')).join(''),
+    '<oops|more'
+  )
+}
+
+// ---- unterminated OSC gives up eventually ----
+{
+  const p = new AnsiParser()
+  p.parse('\x1b]0;' + 'x'.repeat(3000))
+  const spans = spansOf(p, 'later text')
+  check('unterminated OSC: later text renders', spans.map((s) => s.text).join('').endsWith('later text'), true)
+}
+
+// ---- escapes do not split a CR/LF pair ----
+{
+  const p = new AnsiParser()
+  const breaks = p.parse('line\r\x1b[0m\nnext').filter((t) => t.kind === 'newline').length
+  check('CR ESC LF: one line break', breaks, 1)
+}
+
+// ---- extended SGR colours ----
+function fgOf(seq: string): string | undefined {
+  return spansOf(new AnsiParser(), seq + 'x')[0]?.style.color
+}
+check('sgr 256-colour', fgOf('\x1b[38;5;196m'), 'rgb(255,0,0)')
+check('sgr truecolour', fgOf('\x1b[38;2;255;0;0m'), 'rgb(255,0,0)')
+check('sgr colon 256-colour', fgOf('\x1b[38:5:196m'), 'rgb(255,0,0)')
+check('sgr colon truecolour with colourspace', fgOf('\x1b[38:2::255:0:0m'), 'rgb(255,0,0)')
+check('sgr truncated 38 does not set bold', spansOf(new AnsiParser(), '\x1b[38;1mx')[0]?.style.bold, undefined)
+check('sgr 38;5;1 is palette 1, not bold', spansOf(new AnsiParser(), '\x1b[38;5;1mx')[0]?.style.bold, undefined)
+check('sgr truncated 38;5 does not eat later sequences', spansOf(new AnsiParser(), '\x1b[38;5m\x1b[1mx')[0]?.style.bold, true)
+check('sgr truncated 38;2 does not misread', spansOf(new AnsiParser(), '\x1b[38;2;255;0mx')[0]?.style.dim, undefined)
+
 // ---- MSP parsing ----
 check('msp: basic sound', parseMspLine('!!SOUND(thunder.wav)'), {
   kind: 'sound',

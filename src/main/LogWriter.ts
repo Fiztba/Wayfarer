@@ -28,6 +28,13 @@ export class LogWriter {
       .replace(/\..+$/, '')
     const file = path.join(this.dir, `${safe}_${stamp}.log`)
     const stream = fs.createWriteStream(file, { flags: 'a' })
+    // A stream with no error listener turns a full disk into a crash. Only
+    // drop this entry if it is still the session's current one — a restart
+    // may already have replaced it.
+    stream.on('error', (err) => {
+      console.error(`[log] ${file}: ${err.message}`)
+      if (this.streams.get(sessionId)?.stream === stream) this.streams.delete(sessionId)
+    })
     stream.write(`--- Wayfarer log for "${name}" started ${new Date().toLocaleString()} ---\n`)
     this.streams.set(sessionId, { stream, path: file })
     return file

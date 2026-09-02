@@ -4,10 +4,16 @@
  */
 import React, { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { SessionStore } from '../SessionStore'
-import { OutputLine } from './OutputLine'
+import { OutputLine, type LinkHandler } from './OutputLine'
 import { settingsManager } from '../SettingsManager'
 
-export function CapturePane({ store }: { store: SessionStore }) {
+/**
+ * `onLink` is the session's own MXP handler, so a link in a capture window
+ * behaves exactly as it does in the main scroll (URL prefixing, prompt
+ * staging into the command line, the right-click command menu) — and being
+ * a stable reference it lets OutputLine's memo hold.
+ */
+export function CapturePane({ store, onLink }: { store: SessionStore; onLink: LinkHandler }) {
   const names = [...store.captureWindows.keys()]
   const [active, setActive] = useState<string | null>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
@@ -66,10 +72,7 @@ export function CapturePane({ store }: { store: SessionStore }) {
             key={line.id}
             line={line}
             showTime={settingsManager.globalOptions.showTimestamps}
-            onLink={(link) => {
-              if (link.url) window.open(link.url)
-              else if (link.command) store.sendInput(link.command, false)
-            }}
+            onLink={onLink}
           />
         ))}
       </div>

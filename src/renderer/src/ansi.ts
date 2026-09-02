@@ -60,7 +60,19 @@ const BASE16 = [
 
 const CUBE_LEVELS = [0, 95, 135, 175, 215, 255]
 
-/** Index of the '>' closing a tag opened at `start` ('<'), honoring quotes; -1 if absent. */
+/**
+ * Longest partial escape / MXP tag we will hold back waiting for its end.
+ * Past this it is not a split sequence but a stray ESC or '<' with no
+ * terminator coming, and buffering further would swallow the stream.
+ */
+const MAX_PENDING = 2048
+
+/**
+ * Index of the '>' closing a tag opened at `start` ('<'), honoring quotes.
+ * -1 if the text ran out first (the tag may continue in the next chunk);
+ * -2 if a line break came first (tags never span lines, so this '<' is
+ * literal text, not a tag).
+ */
 function findTagEnd(text: string, start: number): number {
   let quote: string | null = null
   for (let j = start + 1; j < text.length; j++) {
@@ -72,7 +84,7 @@ function findTagEnd(text: string, start: number): number {
     } else if (c === '>') {
       return j
     } else if (c === '\n' || c === '\r') {
-      return -1 // tags never span lines; treat as malformed
+      return -2
     }
   }
   return -1
@@ -235,10 +247,13 @@ export class AnsiParser {
     for (let i = 0; i < text.length; i++) {
       const ch = text[i]
       if (ch === '\x1b') {
-        this.lastWasCR = false
-        this.lastWasLF = false
+        // Escapes are invisible, so they must not break a \r\n pair
+        // (\r ESC[0m \n is one line ending, not two).
         const consumed = this.tryConsumeEscape(text, i, flushPlain)
         if (consumed === -1) {
+          // Give up on a sequence that never terminates: drop the ESC and
+          // let the rest flow through as ordinary text.
+          if (text.length - i > MAX_PENDING) continue
           // Incomplete escape at end of chunk; save the tail for next time.
           this.escBuf = text.slice(i)
           break
@@ -263,9 +278,15 @@ export class AnsiParser {
       } else if (ch === '\x00' || ch === '\x07') {
         // Ignore NUL, BEL.
       } else if (this.mxpEnabled && this.mxpSecure() && ch === '<') {
-        this.lastWasCR = false
-        this.lastWasLF = false
         const end = findTagEnd(text, i)
+        if (end === -2 || (end === -1 && text.length - i > MAX_PENDING)) {
+          // Not a tag after all (line ended, or nothing closes it): show the
+          // '<' literally rather than holding the stream hostage for a '>'.
+          this.lastWasCR = false
+          this.lastWasLF = false
+          plain += ch
+          continue
+        }
         if (end === -1) {
           // Tag split across chunks; keep the tail for next time.
           this.escBuf = text.slice(i)
@@ -344,7 +365,16 @@ export class AnsiParser {
 
   private applySgr(params: string): void {
     this.cachedStyle = null
-    const parts = params.length === 0 ? [0] : params.split(';').map((p) => parseInt(p, 10) || 0)
+    // ':' is the ITU-T subparameter form (38:5:196, 38:2::255:0:0); MUDs send
+    // both. Empties are dropped so the optional colourspace slot in
+    // 38:2::r:g:b does not shift the channels.
+    const parts =
+      params.length === 0
+        ? [0]
+        : params
+            .split(/[;:]/)
+            .filter((p) => p.length > 0)
+            .map((p) => parseInt(p, 10) || 0)
     for (let i = 0; i < parts.length; i++) {
       const p = parts[i]
       const a = this.attrs
@@ -380,6 +410,10 @@ export class AnsiParser {
           if (isFg) a.fg = css
           else a.bg = css
           i += 4
+        } else {
+          // Truncated extended colour: whatever follows was meant as its
+          // arguments, not as attributes, so do not misread it as such.
+          break
         }
       }
     }

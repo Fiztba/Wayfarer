@@ -65,6 +65,13 @@ const ST_SB_OPT = 3
 const ST_SB_DATA = 4
 const ST_SB_IAC = 5
 
+/** No legitimate subnegotiation comes anywhere near this; a server that never
+ *  sends IAC SE would otherwise grow the buffer until the process dies. */
+const SB_MAX = 64 * 1024
+/** How long a connect (including the TLS handshake) may take before it is
+ *  reported instead of hanging on the OS's much longer default. */
+const CONNECT_TIMEOUT_MS = 20_000
+
 export type Encoding = 'utf8' | 'latin1'
 
 export interface TelnetOptions {
@@ -132,7 +139,11 @@ export class TelnetSocket extends EventEmitter<TelnetEvents> {
   }
 
   connect(): void {
-    const onConnect = () => this.emit('connect')
+    const onConnect = () => {
+      // The timer only guards the connect; a quiet MUD is not a dead one.
+      this.socket?.setTimeout(0)
+      this.emit('connect')
+    }
     if (this.opts.tls) {
       this.socket = tls.connect(
         { host: this.opts.host, port: this.opts.port, rejectUnauthorized: false },
@@ -143,6 +154,11 @@ export class TelnetSocket extends EventEmitter<TelnetEvents> {
     }
     this.socket.setNoDelay(true)
     this.socket.setKeepAlive(true, 30_000)
+    this.socket.setTimeout(CONNECT_TIMEOUT_MS)
+    this.socket.on('timeout', () => {
+      this.emit('error', `Connection to ${this.opts.host}:${this.opts.port} timed out`)
+      this.socket?.destroy()
+    })
     this.socket.on('data', (buf: Buffer) => this.feed(buf))
     this.socket.on('error', (err) => this.emit('error', err.message))
     this.socket.on('close', (hadError) => {
@@ -152,6 +168,9 @@ export class TelnetSocket extends EventEmitter<TelnetEvents> {
   }
 
   destroy(): void {
+    // 'close' arrives a tick later; anything written in between would land
+    // on a socket that is already going away.
+    this.closed = true
     this.socket?.destroy()
     this.inflater?.close()
     this.inflater = null
@@ -226,7 +245,13 @@ export class TelnetSocket extends EventEmitter<TelnetEvents> {
     this.compressed = true
     this.inflater = zlib.createInflate()
     this.inflater.on('data', (d: Buffer) => this.parse(d))
-    this.inflater.on('error', (err) => this.emit('error', `MCCP2 error: ${err.message}`))
+    this.inflater.on('error', (err) => {
+      // A corrupt zlib stream cannot be resynchronised, and with the inflater
+      // gone the raw bytes would otherwise be fed to the parser as text.
+      this.emit('error', `MCCP2 error: ${err.message}`)
+      this.inflater = null
+      this.socket?.destroy()
+    })
     this.inflater.on('end', () => {
       this.inflater = null
       this.compressed = false
@@ -285,7 +310,13 @@ export class TelnetSocket extends EventEmitter<TelnetEvents> {
 
         case ST_SB_DATA:
           if (b === IAC) this.state = ST_SB_IAC
-          else this.sbBuf.push(b)
+          else if (this.sbBuf.length >= SB_MAX) {
+            // Give up on this subnegotiation; the rest shows as text until the
+            // IAC SE finally arrives, which the ST_IAC path simply ignores.
+            this.sbBuf = []
+            this.state = ST_DATA
+            this.emit('error', `Subnegotiation for option ${this.sbOption} exceeded ${SB_MAX} bytes`)
+          } else this.sbBuf.push(b)
           break
 
         case ST_SB_IAC:
@@ -300,6 +331,10 @@ export class TelnetSocket extends EventEmitter<TelnetEvents> {
               this.startCompression(buf.subarray(i + 1))
               return
             }
+            // Text that arrived ahead of the block must be seen first, or a
+            // GMCP room packet is handled before the room description it
+            // belongs to has been shown.
+            this.flushText()
             this.handleSubnegotiation(opt, data)
           } else if (b === IAC) {
             this.sbBuf.push(IAC)
@@ -429,8 +464,15 @@ export class TelnetSocket extends EventEmitter<TelnetEvents> {
     const latin = offered.find((c) => /^(iso-?8859-?1|latin-?1)$/i.test(c))
     const pick = utf8 ?? latin
     if (pick) {
-      this.encoding = utf8 ? 'utf8' : 'latin1'
-      this.decoder = new StringDecoder(this.encoding)
+      const next: Encoding = utf8 ? 'utf8' : 'latin1'
+      if (next !== this.encoding) {
+        // The old decoder may be holding the head of a multi-byte character;
+        // let it out rather than dropping it with the decoder.
+        const tail = this.decoder.end()
+        if (tail.length > 0) this.emit('text', tail)
+        this.encoding = next
+        this.decoder = new StringDecoder(next)
+      }
       this.writeSub(
         OPT.CHARSET,
         Buffer.concat([Buffer.from([CHARSET_ACCEPTED]), Buffer.from(pick, 'ascii')])

@@ -88,6 +88,8 @@ const MSG_DUPE = (name: string, count: number): string =>
 
 const PENDING_CAP = 30
 const PENDING_TTL_MS = 15_000
+/** How long after a server id the room's own prose may still arrive. */
+const SERVER_TEXT_WINDOW_MS = 3_000
 
 export interface TrackerHost {
   /** This MUD's capture rule, read fresh so edits take effect immediately. */
@@ -125,6 +127,17 @@ export class MapTracker implements TrackerControl {
   private pending: PendingMove[] = []
   private lastOpenDir: Direction | null = null
   private subs = new Set<() => void>()
+  /**
+   * When a server id last settled an arrival. The room text that follows on
+   * such a MUD describes that same room, so a detection hard on its heels is
+   * a refresh of it rather than a step of its own -- otherwise every queued
+   * move would be spent twice, once by the id and once by the prose. Bounded
+   * in time so an id with no prose behind it cannot swallow a later step.
+   */
+  private serverSettledAt = 0
+  /** Room prose that arrived before the server's id for it, on a MUD that
+   *  reports ids. It is applied to whichever room the id settles on. */
+  private heldDetection: { det: RoomDetection; at: number } | null = null
 
   constructor(model: MapModel, host: TrackerHost) {
     this.model = model
@@ -133,6 +146,40 @@ export class MapTracker implements TrackerControl {
     // login re-verifies (mismatch → unique-fingerprint snap or lost flag).
     const last = model.map.lastRoomId
     if (last && model.room(last)) this.currentRoomId = last
+    model.subscribe(() => this.onModelChanged())
+  }
+
+  /**
+   * The map can lose the room we are standing in from under us -- the player
+   * deletes it, or merges it away by hand. A merge names its survivor, so
+   * that is simply where we are now; anything else is a position we can no
+   * longer vouch for.
+   */
+  private onModelChanged(): void {
+    if (!this.currentRoomId || this.model.room(this.currentRoomId)) return
+    const merges = this.model.map.merges
+    const last = merges && merges.length > 0 ? merges[merges.length - 1] : null
+    if (last && last.dropped.id === this.currentRoomId && this.model.room(last.keptId)) {
+      this.currentRoomId = last.keptId
+      this.notify()
+      return
+    }
+    this.currentRoomId = null
+    this.markLost('your room was removed from the map.')
+  }
+
+  /**
+   * Forget everything in flight -- queued moves, an open bet, half-captured
+   * text -- while keeping the position itself. For the moments the stream is
+   * known to be discontinuous: a reconnect, a map swapped underneath us.
+   */
+  reset(): void {
+    this.pending = []
+    this.abandonSpeculation()
+    this.serverSettledAt = 0
+    this.heldDetection = null
+    this.capture.reset()
+    this.notify()
   }
 
   subscribe = (fn: () => void): (() => void) => {
@@ -203,6 +250,7 @@ export class MapTracker implements TrackerControl {
     this.currentRoomId = roomId
     this.lost = false
     this.pending = []
+    this.serverSettledAt = 0
     this.notify()
   }
 
@@ -268,8 +316,16 @@ export class MapTracker implements TrackerControl {
     if (detection.serverId) {
       // The title line carried the server's own room id (staff roomflags),
       // so identity is settled the authoritative way before any dead
-      // reckoning runs. handleDetection then has only exits left to add.
+      // reckoning runs. All the prose has left to offer is exits and a
+      // description for the room that settled on.
       this.onServerRoom({ serverId: detection.serverId, name: detection.name })
+      this.serverSettledAt = 0
+      const room = this.lost ? null : this.currentRoom
+      if (room) {
+        this.applyDetectedExits(room, detection)
+        this.notify()
+      }
+      return
     }
     this.handleDetection(detection)
   }
@@ -277,6 +333,21 @@ export class MapTracker implements TrackerControl {
   /** Structured room info from GMCP/MSDP — authoritative identity. */
   onServerRoom(info: ServerRoomInfo): void {
     if (this.mode === 'off') return
+    const held = this.heldDetection
+    this.heldDetection = null
+    this.settleServerRoom(info)
+    // Prose that got here first was describing this room; now that the id
+    // has said which room that is, its exits and description can land.
+    if (held && Date.now() - held.at < SERVER_TEXT_WINDOW_MS && !this.lost) {
+      const room = this.currentRoom
+      if (room && (!held.det.name || held.det.name === room.name)) {
+        this.applyDetectedExits(room, held.det)
+        this.notify()
+      }
+    }
+  }
+
+  private settleServerRoom(info: ServerRoomInfo): void {
     // An authoritative id settles identity outright, so any run of guesses is
     // moot. Only reachable on MUDs that report room ids, which are exactly the
     // MUDs that never had to guess in the first place.
@@ -284,12 +355,18 @@ export class MapTracker implements TrackerControl {
     this.serverDriven = true
     this.expirePending()
     const existing = this.model.findByServerId(info.serverId)
+    // One arrival answers one move. The rest of the queue stays: a speedwalk
+    // has several in flight, and each id that comes back pairs with the next.
     const move = this.pending.shift()
-    this.pending = [] // server info supersedes any queued guesses
+    this.serverSettledAt = Date.now()
 
     if (existing) {
-      // Known room: link the path that got us here if it was unmapped.
-      if (move && this.currentRoomId && this.mode === 'map' && !this.lost) {
+      // Known room: link the path that got us here if it was unmapped. The
+      // room we are already in is a look, whatever move was queued -- that
+      // move evidently went nowhere, and linking a room to itself is worse
+      // than forgetting it.
+      const stayed = existing.id === this.currentRoomId
+      if (move && !stayed && this.currentRoomId && this.mode === 'map' && !this.lost) {
         const from = this.model.room(this.currentRoomId)
         if (from && this.model.exitOf(from, move.dir)?.to == null) {
           this.model.linkRooms(from.id, move.dir, existing.id, true)
@@ -372,7 +449,7 @@ export class MapTracker implements TrackerControl {
         const dir = wordToDirection(dirWord)
         if (!dir) continue
         const exit = this.model.ensureExit(room.id, dir)
-        if (destSid) {
+        if (exit && destSid) {
           const dest = this.model.findByServerId(String(destSid))
           if (dest) exit.to = dest.id
         }
@@ -402,7 +479,7 @@ export class MapTracker implements TrackerControl {
     const exit = this.model.exitOf(current, dir)
     if (exit?.to) {
       const dest = this.model.room(exit.to)
-      if (dest && this.couldBe(dest, det)) {
+      if (dest && (this.couldBe(dest, det) || this.canLearn(dest, det))) {
         this.currentRoomId = dest.id
         this.refreshExits(dest, det)
         this.syncName(dest, det)
@@ -411,10 +488,12 @@ export class MapTracker implements TrackerControl {
       }
       // The link may be a wrong guess (reverse links are heuristic, and MUD
       // geometry is often asymmetric). On solid evidence, correct the exit
-      // and follow the player instead of going lost.
+      // and follow the player instead of going lost. The model has the last
+      // word on whether the corrected link is even possible; a refusal there
+      // is a contradiction we must not paper over by moving anyway.
       const fixes = this.candidatesFor(det)
       const fixed = this.pickArrival(fixes, current, dir)
-      if (fixed) {
+      if (fixed && this.model.canLink(current.id, dir, fixed.id)) {
         this.model.linkRooms(current.id, dir, fixed.id, false)
         this.currentRoomId = fixed.id
         this.refreshExits(fixed, det)
@@ -483,8 +562,23 @@ export class MapTracker implements TrackerControl {
 
   private handleDetection(det: RoomDetection): void {
     const dirs = det.exits.map((e) => e.dir)
-    const move = this.pending.shift()
+    // Prose describing a room the server just identified is not a step.
     const current = this.model.room(this.currentRoomId)
+    // ...but only prose that names that room. Under a speedwalk the next
+    // room's text can land inside the window too, and that one is a step.
+    const fromServer =
+      Date.now() - this.serverSettledAt < SERVER_TEXT_WINDOW_MS &&
+      !!current &&
+      (!det.name || det.name === current.name)
+    this.serverSettledAt = 0
+    if (!fromServer && this.serverDriven && !this.speculation) {
+      // On a MUD that reports ids, prose is never a step: the id for this
+      // room is on its way (some MUDs print the room before they send the
+      // packet), and stepping now would spend a queued move the id needs.
+      this.heldDetection = { det, at: Date.now() }
+      return
+    }
+    const move = fromServer ? undefined : this.pending.shift()
 
     if (this.speculation) {
       this.advanceSpeculation(move, det)
@@ -915,6 +1009,26 @@ export class MapTracker implements TrackerControl {
     return true
   }
 
+  /**
+   * Whether a description this room has not shown before can be taken as a
+   * second face of it. Only asked when an exit we walked already led here,
+   * which is evidence couldBe does not have: a room reached by its own link
+   * that merely looks different today (night, rain) is still that room, and
+   * refusing to learn would leave it forever one description short.
+   *
+   * Only while the name is unique on the map. Where names repeat, the
+   * description is the one thing that tells the rooms apart, and a stored
+   * link is exactly what cannot be trusted there -- the water-filled tunnels
+   * had a north exit wired to the room drawn south, and learning would have
+   * let the wrong room quietly absorb the right room's description.
+   */
+  private canLearn(room: MapRoom, det: RoomDetection): boolean {
+    if (!det.descHash || !this.roomMatches(room, det)) return false
+    return !Object.values(this.map.rooms).some(
+      (r) => r.id !== room.id && this.roomMatches(r, det)
+    )
+  }
+
   /** Loose match: same name; exits may differ (doors, hidden exits).
    *  Normalized so rooms captured with a glued prompt prefix still match. */
   private roomMatches(room: MapRoom, det: RoomDetection): boolean {
@@ -934,6 +1048,7 @@ export class MapTracker implements TrackerControl {
     this.model.addDescHash(room.id, det.descHash)
     for (const e of det.exits) {
       const exit = this.model.ensureExit(room.id, e.dir)
+      if (!exit) continue
       if (e.door) exit.door = true
       // Some MUDs name the room an exit leads to before it is walked. Worth
       // keeping: it shows in the exits panel, and it is a check on arrival.

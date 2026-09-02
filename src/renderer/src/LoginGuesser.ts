@@ -86,5 +86,7 @@ export class LoginGuesser {
 }
 
 function capitalize(word: string): string {
-  return word[0].toUpperCase() + word.slice(1).toLowerCase()
+  // First letter only, like Diku's CAP(): the rest is the player's own
+  // spelling (O'Brien, McCoy).
+  return word[0].toUpperCase() + word.slice(1)
 }

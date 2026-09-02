@@ -156,6 +156,30 @@ check('gag trigger (case-insensitive)', d2.gag, true)
 const d3 = engine.processLine('nothing special')
 check('non-matching line', d3, { gag: false })
 
+// ---- server text can't become command syntax ----
+settings.triggers.push({
+  id: 'tinj',
+  label: '',
+  pattern: '^(\\w+) tells you (.*)',
+  matchType: 'regex',
+  caseInsensitive: false,
+  commands: 'reply %1 %2',
+  gag: false,
+  highlight: '',
+  enabled: true
+})
+sent.length = 0
+echoed.length = 0
+engine.processLine('Bob tells you hi;give all gold bob')
+// t1 ("^(\w+) tells you") fires on the same line, so two commands total.
+check('trigger capture ; does not split', sent, ['reply Bob I am AFK', 'reply Bob hi;give all gold bob'])
+check('trigger echo shows plain text', echoed.some((e) => e.includes('hi;give')), true)
+sent.length = 0
+engine.processLine('Bob tells you #var target you;{n};@target')
+check('trigger capture #/{}/@ inert', sent, ['reply Bob I am AFK', 'reply Bob #var target you;{n};@target'])
+check('trigger capture did not set a variable', engine.variables.target, 'goblin')
+settings.triggers.pop()
+
 // ---- escaped semicolons ----
 // BS keeps a real backslash out of reach of TS string-literal escaping.
 const BS = String.fromCharCode(92)
@@ -227,6 +251,14 @@ check('runaway repeat capped at burst limit', sent.length, 20000)
 check('runaway repeat reports error', errors.length, 1)
 
 sent.length = 0
+errors.length = 0
+// A paced repeat's first tick runs inside the outer burst; if it refilled the
+// budget, each lap of the outer loop would start the runaway guard afresh.
+engine.processInput('#3 {#2@10ms x;#10000 y}')
+check('nested paced repeat cannot refill burst', sent.length, 20000)
+engine.cancelPacedRepeats()
+
+sent.length = 0
 engine.processInput('say #1 fan of yours')
 check('mid-sentence # untouched', sent, ['say #1 fan of yours'])
 
@@ -274,6 +306,15 @@ check('aliases see runtime value', sent, ['kill dragon'])
 const persistedBefore = persisted.length
 engine.setVar('livehp', '50', false)
 check('persist=false skips disk', persisted.length, persistedBefore)
+
+// Settings saved from the panel must win over a stale persisted overlay,
+// while session-only values (live vitals) keep shadowing.
+engine.setVar('hp', '1')
+settings.variables.hp = '2'
+engine.refreshTimers()
+check('refresh drops persisted overlay', engine.variables.hp, '2')
+check('refresh keeps session-only overlay', engine.variables.livehp, '50')
+check('refresh keeps session-only target', engine.variables.target, 'dragon')
 
 settings.triggers.push({
   id: 't3',

@@ -32,8 +32,17 @@ export class ProfileStore {
     for (const file of fs.readdirSync(this.dir)) {
       if (!file.endsWith('.json')) continue
       const full = path.join(this.dir, file)
+      // A read that fails with an OS error (EBUSY from a sync client holding
+      // the file, EPERM from a scanner) says nothing about the contents;
+      // quarantining on that would exile a perfectly good profile.
+      let raw: string
       try {
-        const raw = fs.readFileSync(full, 'utf8')
+        raw = fs.readFileSync(full, 'utf8')
+      } catch (err) {
+        console.warn(`[profiles] skipping ${file}: ${String(err)}`)
+        continue
+      }
+      try {
         const parsed = JSON.parse(raw)
         if (this.isValid(parsed)) profiles.push(parsed)
         else this.quarantine(full)
@@ -108,8 +117,11 @@ export class ProfileStore {
   }
 
   private quarantine(file: string): void {
+    // Stamped, so a second bad copy under the same name keeps the first
+    // rather than overwriting the one piece of evidence there was.
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-')
     try {
-      fs.renameSync(file, file + '.corrupt')
+      fs.renameSync(file, `${file}.corrupt-${stamp}`)
     } catch {
       // If even that fails, leave the file in place for manual recovery.
     }

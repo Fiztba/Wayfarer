@@ -25,10 +25,24 @@ export class SessionManager {
   constructor(private getWebContents: () => WebContents | null) {}
 
   connect(opts: ConnectOptions): string {
+    // Rejected here, as a message the renderer can show, rather than as an
+    // ERR_INVALID_ARG_TYPE from deep inside net.connect.
+    if (typeof opts.host !== 'string' || opts.host.trim() === '') {
+      throw new Error('A host name is required')
+    }
+    if (!Number.isInteger(opts.port) || opts.port < 1 || opts.port > 65535) {
+      throw new Error(`Port must be a whole number from 1 to 65535 (got ${String(opts.port)})`)
+    }
     const id = crypto.randomUUID()
     const entry: SessionEntry = { opts, telnet: null as unknown as TelnetSocket }
     this.sessions.set(id, entry)
-    entry.telnet = this.buildTelnet(id, entry)
+    try {
+      entry.telnet = this.buildTelnet(id, entry)
+    } catch (err) {
+      // No half-made session may linger for send/resize to trip over.
+      this.sessions.delete(id)
+      throw err
+    }
     return id
   }
 

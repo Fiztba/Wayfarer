@@ -28,6 +28,17 @@ export default function App() {
   const [settingsFor, setSettingsFor] = useState<string | null>(null)
   const [helpOpen, setHelpOpen] = useState(false)
   const [, forceRender] = useState(0)
+  // Bumped whenever a modal closes; the active SessionView refocuses its
+  // command line on the change so the keyboard goes back where it was.
+  const [focusTick, setFocusTick] = useState(0)
+  const closeSettings = useCallback(() => {
+    setSettingsFor(null)
+    setFocusTick((n) => n + 1)
+  }, [])
+  const closeHelp = useCallback(() => {
+    setHelpOpen(false)
+    setFocusTick((n) => n + 1)
+  }, [])
 
   useEffect(() => {
     uiState.modalOpen = settingsFor !== null || helpOpen
@@ -219,6 +230,7 @@ export default function App() {
               key={tab.id}
               store={store}
               active={tab.id === activeId}
+              focusTick={focusTick}
               onOpenSettings={() => setSettingsFor(tab.id)}
               onOpenHelp={() => setHelpOpen(true)}
             />
@@ -229,9 +241,9 @@ export default function App() {
         )}
       </div>
       {settingsStore && (
-        <SettingsPanel store={settingsStore} onClose={() => setSettingsFor(null)} />
+        <SettingsPanel store={settingsStore} onClose={closeSettings} />
       )}
-      {helpOpen && <HelpPanel onClose={() => setHelpOpen(false)} />}
+      {helpOpen && <HelpPanel onClose={closeHelp} />}
     </div>
   )
 }

@@ -91,17 +91,17 @@ export class SoundPlayer {
       'msp-sound://s/' + cmd.file.split(/[\\/]/).map((p) => encodeURIComponent(p)).join('/')
     const audio = new Audio(src)
     audio.volume = cmd.volume / 100
-    if (cmd.loops === -1) {
-      audio.loop = true
-    } else if (cmd.loops > 1) {
-      let remaining = cmd.loops - 1
-      audio.addEventListener('ended', () => {
-        if (remaining-- > 0) void audio.play().catch(() => {})
-      })
-    }
+    if (cmd.loops === -1) audio.loop = true
+    let remaining = cmd.loops > 1 ? cmd.loops - 1 : 0
     audio.addEventListener('error', () => this.active.delete(audio))
     audio.addEventListener('ended', () => {
-      if (!audio.loop) this.active.delete(audio)
+      // A finite loop stays in `active` until its last repeat has played, so
+      // !!SOUND(Off) can still silence the remaining plays.
+      if (audio.loop) return
+      if (remaining > 0) {
+        remaining--
+        void audio.play().catch(() => this.active.delete(audio))
+      } else this.active.delete(audio)
     })
     if (cmd.kind === 'music') {
       this.stopMusic()
