@@ -443,6 +443,10 @@ export function SessionView({
         // can be written or fixed up in place. Enter always sends the lot.
         if ((e.shiftKey || e.ctrlKey) && el instanceof HTMLTextAreaElement) return
         e.preventDefault()
+        // A held Enter auto-repeats, and with the command left selected after
+        // sending, each repeat would resend it. Only a real press sends; two
+        // deliberate taps still send twice.
+        if (e.repeat) return
         sendCommand()
       } else if (e.key === 'ArrowUp') {
         // Inside a multi-line block the arrows walk the caret; history only
