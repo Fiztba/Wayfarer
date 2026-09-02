@@ -13,7 +13,7 @@ import { settingsManager } from '../SettingsManager'
 import { uiState } from '../uiState'
 import { updateState } from '../updateState'
 import { MapPane } from './MapPane'
-import { OutputLine, OutputSpan, formatTime, type LinkHandler } from './OutputLine'
+import { OutputLine, OutputSpan, formatTime, lineText, type LinkHandler } from './OutputLine'
 import { GaugeBar } from './GaugeBar'
 import { CapturePane } from './CapturePane'
 import { ClampedMenu } from './ClampedMenu'
@@ -238,16 +238,29 @@ export function SessionView({
     y: number
     items: { label: string; command: string }[]
   } | null>(null)
+  // Right-click on a line: build a trigger from it, or copy it. Only output
+  // lines are offered; a trigger built from your own echoed input or a
+  // system line would never fire.
+  const [lineMenu, setLineMenu] = useState<{ x: number; y: number; text: string } | null>(null)
+  const onLineMenu = useCallback((line: Line, at: { x: number; y: number }) => {
+    if (line.kind !== 'output') return
+    const text = lineText(line)
+    if (!text.trim()) return
+    setLineMenu({ ...at, text })
+  }, [])
   useEffect(() => {
-    if (!linkMenu) return
-    const close = (): void => setLinkMenu(null)
+    if (!linkMenu && !lineMenu) return
+    const close = (): void => {
+      setLinkMenu(null)
+      setLineMenu(null)
+    }
     window.addEventListener('click', close)
     window.addEventListener('keydown', close)
     return () => {
       window.removeEventListener('click', close)
       window.removeEventListener('keydown', close)
     }
-  }, [linkMenu])
+  }, [linkMenu, lineMenu])
 
   // Ctrl+F opens search (seeded from any selected text).
   useEffect(() => {
@@ -552,6 +565,7 @@ export function SessionView({
                 searchQuery={searchOpen && query.length > 0 ? query : undefined}
                 searchCurrent={searchOpen && matches[matchIdx] === line.id}
                 onLink={handleMxpLink}
+                onLineMenu={onLineMenu}
               />
             ))}
             {store.openSpans.length > 0 && (
@@ -582,6 +596,34 @@ export function SessionView({
                   {item.label}
                 </div>
               ))}
+            </ClampedMenu>
+          )}
+          {lineMenu && (
+            <ClampedMenu
+              x={lineMenu.x}
+              y={lineMenu.y}
+              className="mxp-menu"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div
+                className="mxp-menu-item"
+                onClick={() => {
+                  const text = lineMenu.text
+                  setLineMenu(null)
+                  uiState.openTriggerFromLine?.(store.id, text)
+                }}
+              >
+                Make a trigger from this line…
+              </div>
+              <div
+                className="mxp-menu-item"
+                onClick={() => {
+                  void navigator.clipboard.writeText(lineMenu.text)
+                  setLineMenu(null)
+                }}
+              >
+                Copy line
+              </div>
             </ClampedMenu>
           )}
           {searchOpen && (

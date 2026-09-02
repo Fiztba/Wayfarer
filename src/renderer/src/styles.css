@@ -239,6 +239,64 @@ body,
   background: rgba(255, 255, 255, 0.08);
 }
 
+/* ---- Trigger builder (Settings → Triggers, seeded from a line) ---- */
+.trigger-builder {
+  margin: 6px 0 4px;
+  padding: 8px 10px;
+  border: 1px solid var(--border, #555);
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.03);
+}
+.tb-line {
+  font-family: var(--mono, ui-monospace, Consolas, monospace);
+  font-size: 13px;
+  line-height: 1.9;
+  white-space: pre-wrap;
+  word-break: break-word;
+  margin: 4px 0 6px;
+}
+.tb-lit {
+  opacity: 0.75;
+}
+.tb-chip {
+  font: inherit;
+  color: inherit;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid transparent;
+  border-radius: 3px;
+  padding: 0 4px;
+  margin: 0 1px;
+  cursor: pointer;
+}
+.tb-chip:hover {
+  border-color: var(--border, #555);
+}
+.tb-chip-suggested {
+  border-color: rgba(97, 175, 239, 0.45);
+  border-style: dashed;
+}
+.tb-chip-on {
+  background: rgba(97, 175, 239, 0.22);
+  border-color: #61afef;
+}
+.tb-num {
+  margin-left: 4px;
+  font-size: 11px;
+  color: #61afef;
+}
+.tb-preview {
+  margin: 4px 0 8px;
+  font-size: 12px;
+  color: var(--muted, #8b949e);
+}
+.tb-preview-none {
+  color: #e0a54a;
+}
+.tb-sample {
+  font-family: var(--mono, ui-monospace, Consolas, monospace);
+  color: var(--fg, #c8ccd4);
+}
+
 /* ---- Scrollback search ---- */
 .search-bar {
   position: absolute;

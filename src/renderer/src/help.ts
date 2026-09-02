@@ -164,6 +164,10 @@ export const HELP_TOPICS: HelpTopic[] = [
       {
         p: 'A trigger watches every line the MUD sends and reacts when its pattern matches. Manage them in ⚙ Settings → Triggers.'
       },
+      { h: 'Start from a line the MUD sent' },
+      {
+        p: 'Right-click any line of output and choose "Make a trigger from this line…". The editor opens with that line as the pattern. Click a word or number to capture it instead of matching it literally (captures become %1, %2… in order), and untick "Line must start/end here" to match the line anywhere. Under the pattern, the editor counts how many of the last 500 lines would have fired, with the most recent one shown, so you can see the pattern is right before saving it.'
+      },
       {
         list: [
           'Contains text: fires when the line contains your text anywhere.',

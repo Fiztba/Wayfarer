@@ -5,6 +5,13 @@ import type { MxpLink, Span, SpanStyle } from '../ansi'
 
 /** `menu` is set on right-click, with the pointer position for a context menu. */
 export type LinkHandler = (link: MxpLink, menu?: { x: number; y: number }) => void
+/** Right-click on a line of output. */
+export type LineMenuHandler = (line: Line, at: { x: number; y: number }) => void
+
+/** The line as plain text, the way a trigger sees it. */
+export function lineText(line: Line): string {
+  return line.spans.map((s) => s.text).join('')
+}
 
 export function formatTime(at: number): string {
   const t = new Date(at)
@@ -75,6 +82,8 @@ export const OutputSpan = React.memo(function OutputSpan({
         onClick={() => onLink?.(link)}
         onContextMenu={(e) => {
           e.preventDefault()
+          // The link's own menu, not the line's.
+          e.stopPropagation()
           onLink?.(link, { x: e.clientX, y: e.clientY })
         }}
       >
@@ -90,16 +99,29 @@ export const OutputLine = React.memo(function OutputLine({
   showTime,
   searchQuery,
   searchCurrent,
-  onLink
+  onLink,
+  onLineMenu
 }: {
   line: Line
   showTime: boolean
   searchQuery?: string
   searchCurrent?: boolean
   onLink?: LinkHandler
+  onLineMenu?: LineMenuHandler
 }) {
   return (
-    <div className={`line line-${line.kind}`} data-lid={line.id}>
+    <div
+      className={`line line-${line.kind}`}
+      data-lid={line.id}
+      onContextMenu={
+        onLineMenu
+          ? (e) => {
+              e.preventDefault()
+              onLineMenu(line, { x: e.clientX, y: e.clientY })
+            }
+          : undefined
+      }
+    >
       {showTime && <span className="line-time">{formatTime(line.at)}</span>}
       {line.spans.length === 0 ? ' ' : line.spans.map((s, i) => (
             <OutputSpan

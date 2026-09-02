@@ -26,6 +26,8 @@ export default function App() {
   const [tabs, setTabs] = useState<TabInfo[]>([])
   const [activeId, setActiveId] = useState<string | null>(null) // null → connect screen
   const [settingsFor, setSettingsFor] = useState<string | null>(null)
+  /** A line of output to build a trigger from, when Settings was opened for that. */
+  const [settingsSeedLine, setSettingsSeedLine] = useState<string | null>(null)
   const [helpOpen, setHelpOpen] = useState(false)
   const [, forceRender] = useState(0)
   // Bumped whenever a modal closes; the active SessionView refocuses its
@@ -33,6 +35,7 @@ export default function App() {
   const [focusTick, setFocusTick] = useState(0)
   const closeSettings = useCallback(() => {
     setSettingsFor(null)
+    setSettingsSeedLine(null)
     setFocusTick((n) => n + 1)
   }, [])
   const closeHelp = useCallback(() => {
@@ -46,8 +49,13 @@ export default function App() {
 
   useEffect(() => {
     uiState.openHelp = () => setHelpOpen(true)
+    uiState.openTriggerFromLine = (sessionId, line) => {
+      setSettingsSeedLine(line)
+      setSettingsFor(sessionId)
+    }
     return () => {
       uiState.openHelp = undefined
+      uiState.openTriggerFromLine = undefined
     }
   }, [])
 
@@ -241,7 +249,7 @@ export default function App() {
         )}
       </div>
       {settingsStore && (
-        <SettingsPanel store={settingsStore} onClose={closeSettings} />
+        <SettingsPanel store={settingsStore} onClose={closeSettings} seedLine={settingsSeedLine} />
       )}
       {helpOpen && <HelpPanel onClose={closeHelp} />}
     </div>

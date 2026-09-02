@@ -3,6 +3,14 @@ import { MapperTab } from './MapperTab'
 import { settingsManager } from '../SettingsManager'
 import { sessionStores, type SessionStore } from '../SessionStore'
 import { keyEventSignature } from '../automation/AutomationEngine'
+import {
+  buildPattern,
+  captureNumber,
+  previewMatches,
+  tokenizeLine,
+  type LineToken
+} from '../automation/triggerBuilder'
+import { lineText } from './OutputLine'
 import type {
   ActionLanguage,
   AliasDef,
@@ -69,11 +77,32 @@ function langBadge(language: ActionLanguage | undefined): string {
 interface Props {
   store: SessionStore
   onClose(): void
+  /** A line of output to seed a new trigger from (opens on the Triggers tab). */
+  seedLine?: string | null
 }
 
-export function SettingsPanel({ store, onClose }: Props) {
+/** How much recent output a trigger is previewed against. */
+const PREVIEW_LINES = 500
+
+export function SettingsPanel({ store, onClose, seedLine }: Props) {
   const [scope, setScope] = useState<string | null>(store.profileId)
   const [tab, setTab] = useState<Tab>('triggers')
+  // The seed is used exactly once. The Triggers tab unmounts whenever another
+  // tab is shown, so it cannot own this: it would re-seed a phantom trigger
+  // every time the tab came back. The panel unmounts on close, so the
+  // initializer runs fresh for each open.
+  const [pendingSeed, setPendingSeed] = useState<string | null>(seedLine ?? null)
+  // What the MUD said lately, as a trigger would see it, for the editor's
+  // "would fire on N of the last M lines" preview. Read once per open: the
+  // count is a sanity check on the pattern, not a live monitor.
+  const recentLines = useMemo(
+    () =>
+      store.lines
+        .filter((l) => l.kind === 'output')
+        .slice(-PREVIEW_LINES)
+        .map(lineText),
+    [store]
+  )
   const [, force] = useState(0)
 
   useEffect(() => settingsManager.subscribe(() => force((n) => n + 1)), [])
@@ -134,7 +163,15 @@ export function SettingsPanel({ store, onClose }: Props) {
           ))}
         </div>
         <div className="panel-body">
-          {tab === 'triggers' && <TriggersTab set={set} save={save} />}
+          {tab === 'triggers' && (
+            <TriggersTab
+              set={set}
+              save={save}
+              seedLine={pendingSeed}
+              onSeedConsumed={() => setPendingSeed(null)}
+              recentLines={recentLines}
+            />
+          )}
           {tab === 'aliases' && <AliasesTab set={set} save={save} />}
           {tab === 'macros' && <MacrosTab set={set} save={save} />}
           {tab === 'timers' && <TimersTab set={set} save={save} />}
@@ -171,9 +208,65 @@ function emptyTrigger(): TriggerDef {
   }
 }
 
-function TriggersTab({ set, save }: TabProps) {
+/** The line a draft trigger was built from, and which of its tokens are captured. */
+interface BuilderState {
+  line: string
+  tokens: LineToken[]
+  captured: Set<number>
+  anchorStart: boolean
+  anchorEnd: boolean
+}
+
+function seededTrigger(line: string): { draft: TriggerDef; builder: BuilderState } {
+  const tokens = tokenizeLine(line)
+  const builder: BuilderState = { line, tokens, captured: new Set(), anchorStart: true, anchorEnd: true }
+  const draft: TriggerDef = {
+    ...emptyTrigger(),
+    matchType: 'regex',
+    caseInsensitive: false,
+    pattern: buildPattern(tokens, builder.captured, builder)
+  }
+  return { draft, builder }
+}
+
+function TriggersTab({
+  set,
+  save,
+  seedLine,
+  onSeedConsumed,
+  recentLines
+}: TabProps & { seedLine: string | null; onSeedConsumed(): void; recentLines: string[] }) {
   const [draft, setDraft] = useState<TriggerDef | null>(null)
+  // Present while the pattern is being composed from a line. Editing the
+  // pattern by hand takes over from it -- the chips then no longer describe
+  // what the pattern says, so they go away rather than lie.
+  const [builder, setBuilder] = useState<BuilderState | null>(null)
   const isNew = draft !== null && !set.triggers.some((t) => t.id === draft.id)
+
+  useEffect(() => {
+    if (!seedLine) return
+    const seeded = seededTrigger(seedLine)
+    setDraft(seeded.draft)
+    setBuilder(seeded.builder)
+    onSeedConsumed()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [seedLine])
+
+  const updateBuilder = (next: Partial<BuilderState>): void => {
+    if (!builder || !draft) return
+    const merged = { ...builder, ...next }
+    setBuilder(merged)
+    setDraft({ ...draft, pattern: buildPattern(merged.tokens, merged.captured, merged) })
+  }
+  const toggleCapture = (i: number): void => {
+    if (!builder) return
+    const captured = new Set(builder.captured)
+    if (captured.has(i)) captured.delete(i)
+    else captured.add(i)
+    updateBuilder({ captured })
+  }
+
+  const preview = useMemo(() => (draft ? previewMatches(draft, recentLines) : null), [draft, recentLines])
 
   const patternError = useMemo(() => {
     if (!draft || draft.matchType !== 'regex' || !draft.pattern) return null
@@ -190,6 +283,7 @@ function TriggersTab({ set, save }: TabProps) {
     const rest = set.triggers.filter((t) => t.id !== draft.id)
     await save({ ...set, triggers: [...rest, draft] })
     setDraft(null)
+    setBuilder(null)
   }
 
   return (
@@ -214,7 +308,13 @@ function TriggersTab({ set, save }: TabProps) {
                 })
               }
             />
-            <span className="row-main" onClick={() => setDraft({ ...t })}>
+            <span
+              className="row-main"
+              onClick={() => {
+                setBuilder(null)
+                setDraft({ ...t })
+              }}
+            >
               <span className="row-label">{t.label || t.pattern}</span>
               <span className="row-detail">
                 {t.matchType === 'regex' ? 'regex' : 'text'}
@@ -233,7 +333,13 @@ function TriggersTab({ set, save }: TabProps) {
             </button>
           </div>
         ))}
-        <button className="add-btn" onClick={() => setDraft(emptyTrigger())}>
+        <button
+          className="add-btn"
+          onClick={() => {
+            setBuilder(null)
+            setDraft(emptyTrigger())
+          }}
+        >
           + New Trigger
         </button>
       </div>
@@ -245,16 +351,84 @@ function TriggersTab({ set, save }: TabProps) {
           <input
             value={draft.pattern}
             placeholder={draft.matchType === 'regex' ? '^(\\w+) tells you' : 'tells you'}
-            onChange={(e) => setDraft({ ...draft, pattern: e.target.value })}
+            onChange={(e) => {
+              setBuilder(null)
+              setDraft({ ...draft, pattern: e.target.value })
+            }}
           />
           {patternError && <p className="form-error">{patternError}</p>}
+          {builder && (
+            <div className="trigger-builder">
+              <p className="field-hint">
+                Built from a line of output. Click a word to capture it instead of matching it
+                literally; captures become %1, %2… in order.
+              </p>
+              <div className="tb-line">
+                {builder.tokens.map((tok, i) => {
+                  if (tok.kind === 'other') {
+                    return (
+                      <span key={i} className="tb-lit">
+                        {tok.text}
+                      </span>
+                    )
+                  }
+                  const n = captureNumber(builder.captured, i)
+                  return (
+                    <button
+                      key={i}
+                      type="button"
+                      className={`tb-chip${n ? ' tb-chip-on' : ''}${tok.suggested && !n ? ' tb-chip-suggested' : ''}`}
+                      title={n ? `Captured as %${n}` : 'Click to capture'}
+                      onClick={() => toggleCapture(i)}
+                    >
+                      {tok.text}
+                      {n ? <span className="tb-num">%{n}</span> : null}
+                    </button>
+                  )
+                })}
+              </div>
+              <div className="form-row">
+                <label>
+                  <input
+                    type="checkbox"
+                    checked={builder.anchorStart}
+                    onChange={(e) => updateBuilder({ anchorStart: e.target.checked })}
+                  />{' '}
+                  Line must start here
+                </label>
+                <label>
+                  <input
+                    type="checkbox"
+                    checked={builder.anchorEnd}
+                    onChange={(e) => updateBuilder({ anchorEnd: e.target.checked })}
+                  />{' '}
+                  Line must end here
+                </label>
+              </div>
+            </div>
+          )}
+          {preview && draft.pattern && !patternError && (
+            <p className={`tb-preview${preview.count === 0 ? ' tb-preview-none' : ''}`}>
+              Would have fired on {preview.count} of the last {preview.total} lines
+              {preview.sample ? (
+                <>
+                  , most recently: <span className="tb-sample">{preview.sample}</span>
+                </>
+              ) : (
+                '.'
+              )}
+            </p>
+          )}
           <div className="form-row">
             <label>
               <select
                 value={draft.matchType}
-                onChange={(e) =>
+                onChange={(e) => {
+                  // The composed pattern is a regex; as plain text it could
+                  // never match, and the chips would be describing nothing.
+                  setBuilder(null)
                   setDraft({ ...draft, matchType: e.target.value as TriggerDef['matchType'] })
-                }
+                }}
               >
                 <option value="substring">Contains text</option>
                 <option value="regex">Regular expression</option>
@@ -332,7 +506,13 @@ function TriggersTab({ set, save }: TabProps) {
             <button className="connect-btn" disabled={!draft.pattern || !!patternError} onClick={commit}>
               {isNew ? 'Add Trigger' : 'Save Trigger'}
             </button>
-            <button className="save-btn" onClick={() => setDraft(null)}>
+            <button
+              className="save-btn"
+              onClick={() => {
+                setDraft(null)
+                setBuilder(null)
+              }}
+            >
               Cancel
             </button>
           </div>
