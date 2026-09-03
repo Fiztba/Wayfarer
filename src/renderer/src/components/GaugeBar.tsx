@@ -6,12 +6,13 @@
 import React from 'react'
 import type { SessionStore } from '../SessionStore'
 import { settingsManager } from '../SettingsManager'
+import { forCharacter } from '../automation/scope.ts'
 
 export function GaugeBar({ store }: { store: SessionStore }) {
   const vars = store.engine.variables
   const gauges = settingsManager
     .getSets(store.profileId)
-    .flatMap((s) => s.gauges)
+    .flatMap((s) => s.gauges.filter((g) => forCharacter(g.character, store.charName)))
     .filter((g) => g.enabled)
 
   if (gauges.length === 0) return null

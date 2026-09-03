@@ -53,6 +53,8 @@ export interface TriggerDef {
   highlight: string
   /** Copy the matching line into a named capture window ('' = off). */
   captureWindow?: string
+  /** Only active while logged in as one of these characters (comma-separated, any case); blank = any. */
+  character?: string
   enabled: boolean
 }
 
@@ -63,6 +65,8 @@ export interface AliasDef {
   /** Expansion; %1..%9 = argument words, %0 = the whole argument string. */
   commands: string
   language?: ActionLanguage
+  /** Only active while logged in as one of these characters (comma-separated, any case); blank = any. */
+  character?: string
   enabled: boolean
 }
 
@@ -72,6 +76,8 @@ export interface MacroDef {
   key: string
   commands: string
   language?: ActionLanguage
+  /** Only active while logged in as one of these characters (comma-separated, any case); blank = any. */
+  character?: string
   enabled: boolean
 }
 
@@ -82,6 +88,8 @@ export interface TimerDef {
   commands: string
   language?: ActionLanguage
   oneShot: boolean
+  /** Only active while logged in as one of these characters (comma-separated, any case); blank = any. */
+  character?: string
   enabled: boolean
 }
 
@@ -94,6 +102,8 @@ export interface GaugeDef {
   /** Variable holding the max ('' = show the raw number without a bar). */
   maxVar: string
   color: string
+  /** Only active while logged in as one of these characters (comma-separated, any case); blank = any. */
+  character?: string
   enabled: boolean
 }
 
@@ -102,6 +112,9 @@ export interface ScriptDef {
   name: string
   language: 'js' | 'lua'
   code: string
+  /** Only active while logged in as one of these characters (comma-separated, any case); blank = any.
+   *  A character-scoped script runs when that character's name is learned, not at connect. */
+  character?: string
   /** Enabled scripts run automatically when a session connects. */
   enabled: boolean
 }

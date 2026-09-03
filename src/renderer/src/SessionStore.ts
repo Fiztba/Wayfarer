@@ -14,6 +14,7 @@ import { ScriptRuntime } from './scripting/ScriptRuntime'
 import { settingsManager } from './SettingsManager'
 import { uiState } from './uiState'
 import { LoginGuesser } from './LoginGuesser'
+import { characterList, forCharacter } from './automation/scope.ts'
 import { MapModel } from './map/MapModel.ts'
 import { MapTracker } from './map/MapTracker.ts'
 import { MODEL_ACTION_METHODS } from './map/RemoteMap.ts'
@@ -101,6 +102,16 @@ export class SessionStore {
     if (name === this.charName) return
     this.charName = name
     this.onCharName?.()
+    // Character-scoped items wake up (or go quiet) with the name. Timers
+    // re-arm to pick up the ones now active (startTimers, not refreshTimers:
+    // that one also reconciles variables against a settings save that did
+    // not happen, and would blank live vitals); scripts scoped to this
+    // character run now, since connect-time was too early to know it.
+    if (this.status === 'connected') {
+      this.engine.startTimers()
+      if (name) this.runStartupScripts(true)
+    }
+    this.notify()
   }
 
   lines: Line[] = []
@@ -182,7 +193,8 @@ export class SessionStore {
         echoError: (message) => this.addSystemLine(message, 'error'),
         runScript: (language, code, ctx) => this.scripts.run(language, code, ctx),
         persistVariable: (name, value) => this.queueVariablePersist(name, value),
-        onVariablesChanged: () => this.notify()
+        onVariablesChanged: () => this.notify(),
+        characterName: () => this.charName
       },
       () => settingsManager.getSets(this.profileId)
     )
@@ -580,10 +592,19 @@ export class SessionStore {
     this.scripts.run(script.language, script.code, {})
   }
 
-  private runStartupScripts(): void {
+  /**
+   * Run the scripts that start on their own. At connect the character is
+   * not known yet, so scripts scoped to one wait; when the name arrives
+   * this runs again for those alone (`scopedOnly`), so nothing runs twice.
+   */
+  private runStartupScripts(scopedOnly = false): void {
     for (const set of settingsManager.getSets(this.profileId)) {
       for (const script of set.scripts) {
-        if (script.enabled) this.scripts.run(script.language, script.code, {})
+        if (!script.enabled) continue
+        const scoped = characterList(script.character).length > 0
+        if (scopedOnly !== scoped) continue
+        if (!forCharacter(script.character, this.charName)) continue
+        this.scripts.run(script.language, script.code, {})
       }
     }
   }
@@ -856,6 +877,25 @@ export class SessionStore {
     }
     if (/^#rec(onnect)?$/i.test(raw.trim())) {
       this.reconnect()
+      return
+    }
+    // #char [name]: say, or set by hand, who is logged in. Character-scoped
+    // triggers and aliases depend on the name, and a MUD that speaks no
+    // GMCP only ever gives the login guesser a guess to work with.
+    const charCmd = /^#char(?:acter)?(?:\s+(.*))?$/i.exec(raw.trim())
+    if (charCmd) {
+      const wanted = (charCmd[1] ?? '').trim()
+      if (wanted) {
+        this.setCharName(wanted, true) // by hand beats a guess, like GMCP
+        this.addSystemLine(`Character set to ${wanted}: items scoped to that name are active.`, 'system')
+      } else {
+        this.addSystemLine(
+          this.charName
+            ? `Logged in as ${this.charName}${this.charNameFromGmcp ? '' : ' (guessed from the login)'}.`
+            : 'Character unknown: items scoped to a character are inactive. #char <name> sets it.',
+          'system'
+        )
+      }
       return
     }
     if (this.tryMapperCommand(raw)) return

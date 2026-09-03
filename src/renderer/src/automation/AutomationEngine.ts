@@ -10,6 +10,7 @@
  * Deliberately DOM-free so it can be exercised headlessly in Node.
  */
 import type { SettingsSet, TriggerDef } from '../../../shared/types'
+import { forCharacter } from './scope.ts'
 
 export interface ScriptInvocation {
   matches?: string[]
@@ -31,6 +32,9 @@ export interface EngineHost {
   persistVariable(name: string, value: string): void
   /** Any variable changed — refresh gauges etc. */
   onVariablesChanged(): void
+  /** Who is logged in, if the session knows; character-scoped items are
+   *  inactive until it does. */
+  characterName?(): string | null
 }
 
 export interface LineDirective {
@@ -217,6 +221,11 @@ export class AutomationEngine {
     this.getSets = getSets
   }
 
+  /** Enabled is not enough: an item may also be limited to a character. */
+  private active(item: { character?: string }): boolean {
+    return forCharacter(item.character, this.host.characterName?.() ?? null)
+  }
+
   /**
    * Live variable overlay. Fast-changing values (prompt vitals, script state)
    * land here immediately; persistence to the settings file is debounced by
@@ -388,7 +397,7 @@ export class AutomationEngine {
     const argString = spaceIdx === -1 ? '' : trimmed.slice(spaceIdx + 1)
 
     for (const set of this.getSets()) {
-      const alias = set.aliases.find((a) => a.enabled && a.name === word)
+      const alias = set.aliases.find((a) => a.enabled && a.name === word && this.active(a))
       if (alias) {
         const args = argString.length > 0 ? argString.split(/\s+/) : []
         const lang = alias.language ?? 'commands'
@@ -417,7 +426,7 @@ export class AutomationEngine {
     const directive: LineDirective = { gag: false }
     for (const set of this.getSets()) {
       for (const trigger of set.triggers) {
-        if (!trigger.enabled || trigger.pattern.length === 0) continue
+        if (!trigger.enabled || !this.active(trigger) || trigger.pattern.length === 0) continue
         const captures = this.matchTrigger(trigger, plainText)
         if (!captures) continue
         if (trigger.gag) directive.gag = true
@@ -524,7 +533,7 @@ export class AutomationEngine {
   /** Try to handle a key signature; returns true if a macro fired. */
   runMacro(signature: string): boolean {
     for (const set of this.getSets()) {
-      const macro = set.macros.find((m) => m.enabled && m.key === signature)
+      const macro = set.macros.find((m) => m.enabled && m.key === signature && this.active(m))
       if (macro) {
         this.resetBurst()
         const lang = macro.language ?? 'commands'
@@ -543,7 +552,7 @@ export class AutomationEngine {
     this.timersRunning = true
     for (const set of this.getSets()) {
       for (const timer of set.timers) {
-        if (!timer.enabled || timer.intervalMs < 100) continue
+        if (!timer.enabled || !this.active(timer) || timer.intervalMs < 100) continue
         const lang = timer.language ?? 'commands'
         const run =
           lang !== 'commands'

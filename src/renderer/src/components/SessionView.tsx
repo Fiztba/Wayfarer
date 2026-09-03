@@ -594,9 +594,12 @@ export function SessionView({
     if (store.msp) bits.push('MSP')
     if (store.serverEchoes) bits.push('🔒 masked')
     if (store.logging) bits.push('📝 logging')
+    // Who the session thinks is logged in: what character-scoped triggers
+    // and aliases key on, so a wrong or missing name is visible (#char).
+    if (store.charName) bits.push(`👤 ${store.charName}`)
     bits.push(`v${window.mud.version}`)
     return bits
-  }, [store.status, store.host, store.port, store.mccp, store.gmcp, store.msdp, store.mxp, store.msp, store.serverEchoes, store.logging, store.version])
+  }, [store.status, store.host, store.port, store.mccp, store.gmcp, store.msdp, store.mxp, store.msp, store.serverEchoes, store.logging, store.charName, store.version])
 
   // The unterminated line (usually the prompt) belongs at the very end of
   // whichever pane is live: the scrollback while pinned, the tail while split.

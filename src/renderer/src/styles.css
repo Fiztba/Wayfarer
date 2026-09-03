@@ -945,6 +945,14 @@ body,
   text-overflow: ellipsis;
 }
 
+/* Character-scoped item: who it is for. */
+.row-char {
+  color: var(--accent);
+  font-size: 11px;
+  margin-left: 6px;
+  white-space: nowrap;
+}
+
 .row-delete {
   background: none;
   border: none;

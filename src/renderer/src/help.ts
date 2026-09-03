@@ -73,6 +73,7 @@ export const HELP_TOPICS: HelpTopic[] = [
           '#var hp 224 — set a variable (see Gauges & Vitals)',
           '#map, #go, #wp, #zone, #lost — mapper commands (see The Mapper)',
           '#reconnect — re-dial a dropped or quit session in the same tab (pressing Enter on an empty line while disconnected does the same); scrollback, map position, and settings all carry over',
+          '#char — who the session thinks is logged in; #char Mystra sets it by hand (see Settings, Scopes & Your Data → One character only)',
           '#help — open this help'
         ]
       }
@@ -504,6 +505,17 @@ export const HELP_TOPICS: HelpTopic[] = [
           'This world — applies only to sessions using that profile.',
           'All worlds (global) — applies to every session.',
           'Both are active at once; when they clash, the world-specific setting wins.'
+        ]
+      },
+      { h: 'One character only' },
+      {
+        p: 'Any trigger, alias, macro, timer, script or gauge can also be limited to a character: fill in "Only for character" in its editor (several names with commas, any capitalisation). It is then active only while the session is logged in as that character, so two characters on one world can each have their own k alias. Rows show 👤 with the name.'
+      },
+      {
+        list: [
+          'The session learns the name from GMCP (Char.Name), or by watching the login prompt and the password that follows; the status bar shows 👤 Name once it knows. Until it knows, character-scoped items are inactive.',
+          '#char — say who the session thinks is logged in. #char Mystra — set it by hand, for a MUD that never says (or guesses wrong); items scoped to that name wake up at once.',
+          'A character-scoped script runs when the name is learned rather than at connect; a scoped timer starts then too. Disconnecting forgets the name.'
         ]
       },
       { h: 'Where your data lives' },

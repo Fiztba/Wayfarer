@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react'
 import { MapperTab } from './MapperTab'
 import { settingsManager } from '../SettingsManager'
+import { forCharacter } from '../automation/scope.ts'
 import { sessionStores, type SessionStore } from '../SessionStore'
 import { keyEventSignature } from '../automation/AutomationEngine'
 import {
@@ -72,6 +73,56 @@ function langBadge(language: ActionLanguage | undefined): string {
   if (language === 'js') return ' · JS'
   if (language === 'lua') return ' · Lua'
   return ''
+}
+
+/**
+ * Limit an item to one or more characters on this world. Blank means every
+ * character; the session's current name is offered as the placeholder so the
+ * spelling matches what the login guesser or GMCP produced.
+ */
+function CharacterField({
+  value,
+  current,
+  onChange
+}: {
+  value: string
+  current: string | null | undefined
+  onChange(v: string): void
+}) {
+  const active = value.trim() === '' || forCharacter(value, current)
+  return (
+    <>
+      <label className="field-label">
+        Only for character{' '}
+        <span className="field-hint">(blank = any; several with commas)</span>
+      </label>
+      <input
+        value={value}
+        placeholder={current ? `e.g. ${current}` : 'e.g. Mystra'}
+        onChange={(e) => onChange(e.target.value)}
+      />
+      {value.trim() !== '' && (
+        <p className="field-hint" style={{ marginTop: 4 }}>
+          {current
+            ? active
+              ? `Active now: this session is logged in as ${current}.`
+              : `Not active now: this session is logged in as ${current}.`
+            : 'Not active until the session knows who is logged in (GMCP, the login prompt, or #char <name>).'}
+        </p>
+      )}
+    </>
+  )
+}
+
+/** Row marker for a character-scoped item. */
+function charTag(character: string | undefined): React.ReactNode {
+  const names = (character ?? '').trim()
+  if (!names) return null
+  return (
+    <span className="row-char" title={`Only while logged in as ${names}`}>
+      👤 {names}
+    </span>
+  )
 }
 
 interface Props {
@@ -170,13 +221,14 @@ export function SettingsPanel({ store, onClose, seedLine }: Props) {
               seedLine={pendingSeed}
               onSeedConsumed={() => setPendingSeed(null)}
               recentLines={recentLines}
+              charName={store.charName}
             />
           )}
-          {tab === 'aliases' && <AliasesTab set={set} save={save} />}
-          {tab === 'macros' && <MacrosTab set={set} save={save} />}
-          {tab === 'timers' && <TimersTab set={set} save={save} />}
-          {tab === 'scripts' && <ScriptsTab set={set} save={save} store={store} />}
-          {tab === 'gauges' && <GaugesTab set={set} save={save} />}
+          {tab === 'aliases' && <AliasesTab set={set} save={save} charName={store.charName} />}
+          {tab === 'macros' && <MacrosTab set={set} save={save} charName={store.charName} />}
+          {tab === 'timers' && <TimersTab set={set} save={save} charName={store.charName} />}
+          {tab === 'scripts' && <ScriptsTab set={set} save={save} store={store} charName={store.charName} />}
+          {tab === 'gauges' && <GaugesTab set={set} save={save} charName={store.charName} />}
           {tab === 'variables' && <VariablesTab set={set} save={save} />}
           {tab === 'mapper' && <MapperTab set={set} save={save} />}
           {tab === 'logging' && <LoggingTab set={set} save={save} store={store} />}
@@ -190,6 +242,8 @@ export function SettingsPanel({ store, onClose, seedLine }: Props) {
 interface TabProps {
   set: SettingsSet
   save(next: SettingsSet): Promise<void>
+  /** Who this session is logged in as, for the character field's hint. */
+  charName?: string | null
 }
 
 // ---- Triggers ---------------------------------------------------------------
@@ -232,6 +286,7 @@ function seededTrigger(line: string): { draft: TriggerDef; builder: BuilderState
 function TriggersTab({
   set,
   save,
+  charName,
   seedLine,
   onSeedConsumed,
   recentLines
@@ -316,6 +371,7 @@ function TriggersTab({
               }}
             >
               <span className="row-label">{t.label || t.pattern}</span>
+              {charTag(t.character)}
               <span className="row-detail">
                 {t.matchType === 'regex' ? 'regex' : 'text'}
                 {t.gag ? ' · gag' : ''}
@@ -502,6 +558,11 @@ function TriggersTab({
               />
             )}
           </div>
+          <CharacterField
+            value={draft.character ?? ''}
+            current={charName}
+            onChange={(character) => setDraft({ ...draft, character })}
+          />
           <div className="form-buttons">
             <button className="connect-btn" disabled={!draft.pattern || !!patternError} onClick={commit}>
               {isNew ? 'Add Trigger' : 'Save Trigger'}
@@ -524,7 +585,7 @@ function TriggersTab({
 
 // ---- Aliases ----------------------------------------------------------------
 
-function AliasesTab({ set, save }: TabProps) {
+function AliasesTab({ set, save, charName }: TabProps) {
   const [draft, setDraft] = useState<AliasDef | null>(null)
   const isNew = draft !== null && !set.aliases.some((a) => a.id === draft.id)
 
@@ -561,6 +622,7 @@ function AliasesTab({ set, save }: TabProps) {
             />
             <span className="row-main" onClick={() => setDraft({ ...a })}>
               <span className="row-label">{a.name}</span>
+              {charTag(a.character)}
               <span className="row-detail">
                 {a.commands.split('\n')[0].slice(0, 60)}
                 {langBadge(a.language)}
@@ -618,6 +680,11 @@ function AliasesTab({ set, save }: TabProps) {
             placeholder="e.g. get all corpse;bury corpse"
             onChange={(e) => setDraft({ ...draft, commands: e.target.value })}
           />
+          <CharacterField
+            value={draft.character ?? ''}
+            current={charName}
+            onChange={(character) => setDraft({ ...draft, character })}
+          />
           <div className="form-buttons">
             <button
               className="connect-btn"
@@ -638,7 +705,7 @@ function AliasesTab({ set, save }: TabProps) {
 
 // ---- Macros -----------------------------------------------------------------
 
-function MacrosTab({ set, save }: TabProps) {
+function MacrosTab({ set, save, charName }: TabProps) {
   const [draft, setDraft] = useState<MacroDef | null>(null)
   const isNew = draft !== null && !set.macros.some((m) => m.id === draft.id)
 
@@ -673,6 +740,7 @@ function MacrosTab({ set, save }: TabProps) {
             />
             <span className="row-main" onClick={() => setDraft({ ...m })}>
               <span className="row-label">{m.key}</span>
+              {charTag(m.character)}
               <span className="row-detail">
                 {m.commands.split('\n')[0].slice(0, 60)}
                 {langBadge(m.language)}
@@ -730,6 +798,11 @@ function MacrosTab({ set, save }: TabProps) {
             placeholder="e.g. cast 'cure light' ; look"
             onChange={(e) => setDraft({ ...draft, commands: e.target.value })}
           />
+          <CharacterField
+            value={draft.character ?? ''}
+            current={charName}
+            onChange={(character) => setDraft({ ...draft, character })}
+          />
           <div className="form-buttons">
             <button
               className="connect-btn"
@@ -755,7 +828,7 @@ function formatSeconds(ms: number): string {
   return String(Math.round(ms) / 1000)
 }
 
-function TimersTab({ set, save }: TabProps) {
+function TimersTab({ set, save, charName }: TabProps) {
   const [draft, setDraftState] = useState<TimerDef | null>(null)
   // Text draft of the interval field; see the input's onChange for why it
   // is not derived from draft.intervalMs on every render.
@@ -801,6 +874,7 @@ function TimersTab({ set, save }: TabProps) {
             />
             <span className="row-main" onClick={() => openDraft({ ...t })}>
               <span className="row-label">{t.label || t.commands.slice(0, 30)}</span>
+              {charTag(t.character)}
               <span className="row-detail">
                 every {(t.intervalMs / 1000).toFixed(t.intervalMs % 1000 ? 1 : 0)}s
                 {t.oneShot ? ' · once' : ''}
@@ -873,6 +947,11 @@ function TimersTab({ set, save }: TabProps) {
               Run once, then stop
             </label>
           </div>
+          <CharacterField
+            value={draft.character ?? ''}
+            current={charName}
+            onChange={(character) => setDraft({ ...draft, character })}
+          />
           <div className="form-buttons">
             <button
               className="connect-btn"
@@ -894,7 +973,7 @@ function TimersTab({ set, save }: TabProps) {
 
 // ---- Scripts ----------------------------------------------------------------
 
-function ScriptsTab({ set, save, store }: TabProps & { store: SessionStore }) {
+function ScriptsTab({ set, save, store, charName }: TabProps & { store: SessionStore }) {
   const [draft, setDraft] = useState<ScriptDef | null>(null)
   const isNew = draft !== null && !set.scripts.some((s) => s.id === draft.id)
 
@@ -931,6 +1010,7 @@ function ScriptsTab({ set, save, store }: TabProps & { store: SessionStore }) {
             />
             <span className="row-main" onClick={() => setDraft({ ...s })}>
               <span className="row-label">{s.name}</span>
+              {charTag(s.character)}
               <span className="row-detail">
                 {s.language === 'js' ? 'JavaScript' : 'Lua'} · {s.code.split('\n').length} lines
               </span>
@@ -995,6 +1075,11 @@ function ScriptsTab({ set, save, store }: TabProps & { store: SessionStore }) {
             }
             onChange={(e) => setDraft({ ...draft, code: e.target.value })}
             spellCheck={false}
+          />
+          <CharacterField
+            value={draft.character ?? ''}
+            current={charName}
+            onChange={(character) => setDraft({ ...draft, character })}
           />
           <div className="form-buttons">
             <button
@@ -1179,7 +1264,7 @@ function GeneralTab() {
 
 // ---- Gauges -----------------------------------------------------------------
 
-function GaugesTab({ set, save }: TabProps) {
+function GaugesTab({ set, save, charName }: TabProps) {
   const [draft, setDraft] = useState<GaugeDef | null>(null)
   const isNew = draft !== null && !set.gauges.some((g) => g.id === draft.id)
 
@@ -1222,6 +1307,7 @@ function GaugesTab({ set, save }: TabProps) {
             />
             <span className="row-main" onClick={() => setDraft({ ...g })}>
               <span className="row-label">{g.label}</span>
+              {charTag(g.character)}
               <span className="row-detail">
                 @{g.valueVar}
                 {g.maxVar ? ` / @${g.maxVar}` : ''}
@@ -1286,6 +1372,11 @@ function GaugesTab({ set, save }: TabProps) {
               />
             </label>
           </div>
+          <CharacterField
+            value={draft.character ?? ''}
+            current={charName}
+            onChange={(character) => setDraft({ ...draft, character })}
+          />
           <div className="form-buttons">
             <button
               className="connect-btn"
