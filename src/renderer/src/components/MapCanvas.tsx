@@ -13,8 +13,25 @@ import {
   cubicPoint,
   cubicTangent,
   drawnAsClaimed,
-  linkPath
+  linkPath,
+  polyPoint,
+  polyTangent,
+  routeLink
 } from '../map/geometry'
+
+/** Trace a polyline with its corners rounded off, without stroking it. */
+function traceWire(ctx: CanvasRenderingContext2D, pts: { x: number; y: number }[], radius: number): void {
+  ctx.moveTo(pts[0].x, pts[0].y)
+  for (let k = 1; k < pts.length - 1; k++) {
+    const a = pts[k - 1]
+    const b = pts[k]
+    const c = pts[k + 1]
+    const r = Math.min(radius, Math.hypot(b.x - a.x, b.y - a.y) / 2, Math.hypot(c.x - b.x, c.y - b.y) / 2)
+    ctx.arcTo(b.x, b.y, c.x, c.y, r)
+  }
+  const last = pts[pts.length - 1]
+  ctx.lineTo(last.x, last.y)
+}
 
 export interface MapContextInfo {
   roomId: string | null
@@ -124,15 +141,22 @@ export function MapCanvas(props: Props) {
 
     /** Draw one exit, as owned by `room`. */
     const drawLink = (room: MapRoom, exit: MapExit, highlight: boolean): void => {
-      if (exit.dir === 'u' || exit.dir === 'd') return // drawn as glyphs
+      const dest = exit.to ? map.rooms[exit.to] : null
+      const vertical = exit.dir === 'u' || exit.dir === 'd'
+      // Up and down are glyphs on the room -- unless both rooms sit on this
+      // level, when the pair is drawn as a link (with the glyph riding it)
+      // so it does not look unconnected.
+      if (vertical && !(dest && visibleById.has(dest.id))) return
       const [rx, ry] = roomPos(room)
       const [sx, sy] = toScreen(rx, ry)
-      const dest = exit.to ? map.rooms[exit.to] : null
       let ex: number
       let ey: number
       let stub = false
       let door = exit.door
       let curve: { c1: [number, number]; c2: [number, number]; span: number } | null = null
+      // Screen-space wire around the rooms in the way, when the straight line
+      // would cross one and a route exists; otherwise the curve bows.
+      let route: { x: number; y: number }[] | null = null
       let destCell: { x: number; y: number } | null = null
       if (dest && visibleById.has(dest.id)) {
         const [dx, dy] = roomPos(dest)
@@ -143,6 +167,15 @@ export function MapCanvas(props: Props) {
           c1: toScreen(path.c1.x, path.c1.y),
           c2: toScreen(path.c2.x, path.c2.y),
           span: path.span
+        }
+        if (path.bowed) {
+          const wire = routeLink({ x: rx, y: ry }, { x: dx, y: dy }, isOccupied)
+          if (wire) {
+            route = wire.map((p) => {
+              const [wx, wy] = toScreen(p.x, p.y)
+              return { x: wx, y: wy }
+            })
+          }
         }
         // This face may be the only one carrying the door if the pair was
         // linked one-way, and it is the only face drawn (see dedupe below).
@@ -164,9 +197,17 @@ export function MapCanvas(props: Props) {
       const C1 = curve ? { x: curve.c1[0], y: curve.c1[1] } : P0
       const C2 = curve ? { x: curve.c2[0], y: curve.c2[1] } : P3
       const at = (t: number) =>
-        curve ? cubicPoint(P0, C1, C2, P3, t) : { x: sx + (ex - sx) * t, y: sy + (ey - sy) * t }
+        route
+          ? polyPoint(route, t)
+          : curve
+            ? cubicPoint(P0, C1, C2, P3, t)
+            : { x: sx + (ex - sx) * t, y: sy + (ey - sy) * t }
       const dirAt = (t: number) =>
-        curve ? cubicTangent(P0, C1, C2, P3, t) : { x: ex - sx, y: ey - sy }
+        route
+          ? polyTangent(route, t)
+          : curve
+            ? cubicTangent(P0, C1, C2, P3, t)
+            : { x: ex - sx, y: ey - sy }
 
       const base = highlight
         ? '#ffffff'
@@ -179,9 +220,13 @@ export function MapCanvas(props: Props) {
       ctx.lineWidth = highlight ? Math.max(2, 2.4 * view.scale) : thin
       ctx.setLineDash(exit.to === null ? [3, 3] : [])
       ctx.beginPath()
-      ctx.moveTo(sx, sy)
-      if (curve) ctx.bezierCurveTo(curve.c1[0], curve.c1[1], curve.c2[0], curve.c2[1], ex, ey)
-      else ctx.lineTo(ex, ey)
+      if (route) {
+        traceWire(ctx, route, 7 * view.scale)
+      } else {
+        ctx.moveTo(sx, sy)
+        if (curve) ctx.bezierCurveTo(curve.c1[0], curve.c1[1], curve.c2[0], curve.c2[1], ex, ey)
+        else ctx.lineTo(ex, ey)
+      }
       ctx.stroke()
       ctx.setLineDash([])
 
@@ -251,6 +296,18 @@ export function MapCanvas(props: Props) {
         ctx.moveTo(mid.x - Math.cos(angle) * t, mid.y - Math.sin(angle) * t)
         ctx.lineTo(mid.x + Math.cos(angle) * t, mid.y + Math.sin(angle) * t)
         ctx.stroke()
+      }
+
+      if (vertical) {
+        // Two rooms on one level joined by up or down: the line says
+        // connected, the glyph riding it says which way (off the midpoint
+        // when a door tick is already there).
+        const p = at(door ? 0.3 : 0.5)
+        const glyph = Math.max(7, 9 * view.scale)
+        ctx.font = `${glyph}px sans-serif`
+        ctx.textAlign = 'center'
+        ctx.fillStyle = highlight ? '#ffffff' : '#c8ccd4'
+        ctx.fillText(exit.dir === 'u' ? '▲' : '▼', p.x, p.y + glyph * 0.35)
       }
     }
 

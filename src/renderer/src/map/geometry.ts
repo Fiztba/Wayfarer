@@ -8,7 +8,8 @@
  *    the links, so the middle of such a segment is erased and what survives is
  *    a line from A stopping at that room's edge plus another leaving its far
  *    edge — pixel-identical to two genuine short links. Obstructed links are
- *    bowed aside.
+ *    routed around the rooms in their way, along the gutters between cells
+ *    (routeLink); a bow is the fallback when no route exists.
  *
  * 2. It says nothing true about the exit's direction. Coordinates are only a
  *    drawing suggestion (see types.ts) and placement is greedy, so a `nw` exit
@@ -241,4 +242,136 @@ export function cubicTangent(p0: Cell, c1: Cell, c2: Cell, p3: Cell, t: number):
     x: a * (c1.x - p0.x) + b * (c2.x - c1.x) + c * (p3.x - c2.x),
     y: a * (c1.y - p0.y) + b * (c2.y - c1.y) + c * (p3.y - c2.y)
   }
+}
+
+// ---- Orthogonal routing for obstructed links ----
+
+/**
+ * Route for a link whose straight line would cross a room: a polyline from
+ * `from` to `to` in cell coordinates, running along the gutters between
+ * cells and through empty ones, never across a room box. Null when no
+ * route exists inside a small margin around the pair, in which case the
+ * caller bows the link as before.
+ *
+ * Why a wire rather than an arc: a bow is pushed a whole cell off its chord
+ * and sweeps over whatever sits there, and two of them near each other read
+ * as a tangle. A wire hugs the rooms it avoids, turns at right angles like
+ * the grid it lives on, and stays out of every box by construction, since
+ * the half-cell lanes it prefers pass exactly between rooms.
+ *
+ * The search is A* over a half-cell lattice with a turn penalty, so the
+ * route is the one with the fewest corners among the shortest. Endpoint
+ * order is canonicalised, so the same link asked about from either end
+ * yields the same wire.
+ */
+export function routeLink(
+  from: Cell,
+  to: Cell,
+  isOccupied: (x: number, y: number) => boolean
+): Cell[] | null {
+  const forward = from.x < to.x || (from.x === to.x && from.y <= to.y)
+  const a = forward ? from : to
+  const b = forward ? to : from
+  // Lattice in half cells: node (i, j) sits at cell (i / 2, j / 2).
+  const MARGIN = 4
+  const minI = Math.min(a.x, b.x) * 2 - MARGIN
+  const maxI = Math.max(a.x, b.x) * 2 + MARGIN
+  const minJ = Math.min(a.y, b.y) * 2 - MARGIN
+  const maxJ = Math.max(a.y, b.y) * 2 + MARGIN
+  const isEnd = (i: number, j: number): boolean =>
+    (i === a.x * 2 && j === a.y * 2) || (i === b.x * 2 && j === b.y * 2)
+  const blocked = (i: number, j: number): boolean =>
+    i % 2 === 0 && j % 2 === 0 && !isEnd(i, j) && isOccupied(i / 2, j / 2)
+  /** Extra cost of standing on a node: a cell centre reads as passing
+   *  through that cell, and the midpoint between two rooms is where their
+   *  own link would be drawn, so both are avoided when a gutter will do. */
+  const nodeCost = (i: number, j: number): number => {
+    if (i % 2 === 0 && j % 2 === 0) return 0.5
+    if (i % 2 === 0 && isOccupied(i / 2, (j - 1) / 2) && isOccupied(i / 2, (j + 1) / 2)) return 2
+    if (j % 2 === 0 && isOccupied((i - 1) / 2, j / 2) && isOccupied((i + 1) / 2, j / 2)) return 2
+    return 0
+  }
+  const STEP = 1
+  const TURN = 3
+  const dirs: Array<[number, number]> = [[1, 0], [-1, 0], [0, 1], [0, -1]]
+  type Node = { i: number; j: number; d: number; g: number; f: number; prev: Node | null }
+  const stateKey = (i: number, j: number, d: number): number =>
+    ((i - minI) * (maxJ - minJ + 1) + (j - minJ)) * 5 + d + 1
+  const heuristic = (i: number, j: number): number => Math.abs(i - b.x * 2) + Math.abs(j - b.y * 2)
+  const open: Node[] = [{ i: a.x * 2, j: a.y * 2, d: -1, g: 0, f: heuristic(a.x * 2, a.y * 2), prev: null }]
+  const bestG = new Map<number, number>()
+  bestG.set(stateKey(open[0].i, open[0].j, -1), 0)
+  let goal: Node | null = null
+  while (open.length > 0) {
+    // Smallest f wins; ties go to the node pushed first, so the route is
+    // deterministic for a given pair of rooms.
+    let bi = 0
+    for (let k = 1; k < open.length; k++) if (open[k].f < open[bi].f) bi = k
+    const cur = open.splice(bi, 1)[0]
+    if (cur.i === b.x * 2 && cur.j === b.y * 2) {
+      goal = cur
+      break
+    }
+    for (let d = 0; d < dirs.length; d++) {
+      const ni = cur.i + dirs[d][0]
+      const nj = cur.j + dirs[d][1]
+      if (ni < minI || ni > maxI || nj < minJ || nj > maxJ) continue
+      if (blocked(ni, nj)) continue
+      const g = cur.g + STEP + (cur.d !== -1 && cur.d !== d ? TURN : 0) + nodeCost(ni, nj)
+      const k = stateKey(ni, nj, d)
+      const known = bestG.get(k)
+      if (known !== undefined && known <= g) continue
+      bestG.set(k, g)
+      open.push({ i: ni, j: nj, d, g, f: g + heuristic(ni, nj), prev: cur })
+    }
+  }
+  if (!goal) return null
+  const raw: Cell[] = []
+  for (let n: Node | null = goal; n; n = n.prev) raw.push({ x: n.i / 2, y: n.j / 2 })
+  raw.reverse()
+  // Collapse runs of collinear nodes to the corners.
+  const pts: Cell[] = [raw[0]]
+  for (let k = 1; k < raw.length - 1; k++) {
+    const p = pts[pts.length - 1]
+    const q = raw[k]
+    const r = raw[k + 1]
+    if ((q.x - p.x) * (r.y - q.y) - (q.y - p.y) * (r.x - q.x) !== 0) pts.push(q)
+  }
+  pts.push(raw[raw.length - 1])
+  return forward ? pts : pts.reverse()
+}
+
+/** Length of a polyline. */
+export function polyLength(pts: Cell[]): number {
+  let len = 0
+  for (let k = 1; k < pts.length; k++) len += Math.hypot(pts[k].x - pts[k - 1].x, pts[k].y - pts[k - 1].y)
+  return len
+}
+
+/** Point at fraction `t` of a polyline's length, and the segment it is on. */
+export function polyPoint(pts: Cell[], t: number): Cell {
+  const target = polyLength(pts) * Math.min(1, Math.max(0, t))
+  let run = 0
+  for (let k = 1; k < pts.length; k++) {
+    const seg = Math.hypot(pts[k].x - pts[k - 1].x, pts[k].y - pts[k - 1].y)
+    if (run + seg >= target || k === pts.length - 1) {
+      const u = seg === 0 ? 0 : (target - run) / seg
+      return { x: pts[k - 1].x + (pts[k].x - pts[k - 1].x) * u, y: pts[k - 1].y + (pts[k].y - pts[k - 1].y) * u }
+    }
+    run += seg
+  }
+  return pts[pts.length - 1]
+}
+
+/** Direction (unnormalised) of the polyline at fraction `t` of its length. */
+export function polyTangent(pts: Cell[], t: number): Cell {
+  const target = polyLength(pts) * Math.min(1, Math.max(0, t))
+  let run = 0
+  for (let k = 1; k < pts.length; k++) {
+    const seg = Math.hypot(pts[k].x - pts[k - 1].x, pts[k].y - pts[k - 1].y)
+    if (run + seg >= target || k === pts.length - 1) return { x: pts[k].x - pts[k - 1].x, y: pts[k].y - pts[k - 1].y }
+    run += seg
+  }
+  const n = pts.length
+  return { x: pts[n - 1].x - pts[n - 2].x, y: pts[n - 1].y - pts[n - 2].y }
 }
