@@ -59,7 +59,7 @@ export const HELP_TOPICS: HelpTopic[] = [
           'Braces group commands so a group can be repeated or fired as a unit: #5 {sneak;hide}. Braces do NOT protect a semicolon from splitting — use \; for that.',
           'Password masking: when a server asks for a password, the input masks itself automatically, clears whatever was on the line (even with "Clear the input line after sending" off, so your name is never typed into the password), and skips history/echo.',
           'An empty Enter sends a blank line — many MUDs use this to repeat the prompt.',
-          'Scrollback: each session keeps 100,000 lines of history by default (configurable up to 1,000,000 in ⚙ Settings → General). Scroll up to read; older history loads as you approach the top; the ▼ button jumps back to live output.',
+          'Scrollback: each session keeps 100,000 lines of history by default (configurable up to 1,000,000 in ⚙ Settings → General). Scroll up to read and the pane splits: history scrolls above a divider while new output keeps arriving in a live tail below it, so nothing is missed. Drag the divider to resize the tail (remembered between sessions). Older history loads as you approach the top; scrolling back down to the end, or the ▼ Jump to bottom button on the divider, rejoins the panes.',
           'Search: Ctrl+F searches the entire scrollback (case-insensitive), starting from the most recent match. Enter steps to older matches, Shift+Enter to newer, Esc closes. Select text first and Ctrl+F searches for it.',
           'Tabs: drag a session tab left or right to reorder it (a bar shows where it will land), or press Ctrl+Shift+PgUp / PgDn to move the active tab.'
         ]

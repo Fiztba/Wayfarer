@@ -22,6 +22,12 @@ import { ClampedMenu } from './ClampedMenu'
 const BASE_WINDOW = 1500
 /** How many more lines materialize per approach to the top of the scroll. */
 const WINDOW_CHUNK = 1500
+/** How many lines the live tail below the split keeps in the DOM. */
+const LIVE_WINDOW = 300
+/** Live tail height while scrolled back, in pixels, before the user drags it. */
+const DEFAULT_LIVE_HEIGHT = 180
+/** Smallest either half of the split may be dragged to, in pixels. */
+const MIN_SPLIT_HEIGHT = 60
 
 /** Tallest the command input grows to fit a pasted block, in pixels. */
 const MAX_INPUT_HEIGHT = 260
@@ -97,6 +103,15 @@ export function SessionView({
   // and would otherwise see only the width from the render they closed over.
   const mapWidthRef = useRef(mapWidth)
   const mapDrag = useRef<{ startX: number; startW: number } | null>(null)
+  // Split scrollback: while the reader is scrolled up, the live tail keeps
+  // going in its own pane below a divider, so new output is never missed.
+  const splitRef = useRef<HTMLDivElement>(null)
+  const liveRef = useRef<HTMLDivElement>(null)
+  const [liveHeight, setLiveHeight] = useState(() =>
+    Number(localStorage.getItem('wayfarer-live-height')) || DEFAULT_LIVE_HEIGHT
+  )
+  const liveHeightRef = useRef(liveHeight)
+  const liveDrag = useRef<{ startY: number; startH: number } | null>(null)
 
   // ---- Ctrl+F search over the full scrollback ----
   const [searchOpen, setSearchOpen] = useState(false)
@@ -306,6 +321,37 @@ export function SessionView({
     []
   )
 
+  // Drag the split divider: pulling it up gives the live tail more room.
+  // Clamped so neither half can be squeezed away entirely.
+  const onSplitDividerDown = useCallback(
+    (e: React.MouseEvent) => {
+      e.preventDefault()
+      liveDrag.current = { startY: e.clientY, startH: liveHeightRef.current }
+      const move = (ev: MouseEvent) => {
+        if (!liveDrag.current) return
+        const total = splitRef.current?.clientHeight ?? 0
+        const maxH = Math.max(MIN_SPLIT_HEIGHT, total - MIN_SPLIT_HEIGHT * 2)
+        const h = Math.min(
+          maxH,
+          Math.max(MIN_SPLIT_HEIGHT, liveDrag.current.startH + (liveDrag.current.startY - ev.clientY))
+        )
+        liveHeightRef.current = h
+        setLiveHeight(h)
+      }
+      const up = () => {
+        if (liveDrag.current) {
+          localStorage.setItem('wayfarer-live-height', String(liveHeightRef.current))
+        }
+        liveDrag.current = null
+        window.removeEventListener('mousemove', move)
+        window.removeEventListener('mouseup', up)
+      }
+      window.addEventListener('mousemove', move)
+      window.addEventListener('mouseup', up)
+    },
+    []
+  )
+
   // Grow the input to fit a pasted block (up to MAX_INPUT_HEIGHT, then it
   // scrolls), and shrink back to one line when it empties. Declared above the
   // auto-scroll effect on purpose: growing the input shrinks the output pane,
@@ -331,6 +377,10 @@ export function SessionView({
     } else if (pinnedRef.current) {
       el.scrollTop = el.scrollHeight
     }
+    // The live tail is never scrolled by hand (overflow hidden), so it is
+    // simply re-pinned after every render.
+    const live = liveRef.current
+    if (live) live.scrollTop = live.scrollHeight
   })
 
   const onScroll = useCallback(() => {
@@ -374,6 +424,9 @@ export function SessionView({
       setWindowStartId(null)
       el.scrollTop = el.scrollHeight
     }
+    // The button that was clicked unmounts with the split; give the keyboard
+    // back to the command line rather than leaving focus on the page body.
+    inputRef.current?.focus()
   }, [])
 
   const allLines = store.lines
@@ -400,9 +453,11 @@ export function SessionView({
     expandRef.current = null
   }, [windowStale])
 
-  // Report terminal size (NAWS) on mount and resize.
+  // Report terminal size (NAWS) on mount and resize. Measured on the split
+  // container, not the scrollback pane: splitting off the live tail must not
+  // shrink the rows the MUD pages by while the player is reading history.
   useEffect(() => {
-    const el = scrollRef.current
+    const el = splitRef.current
     const measure = measureRef.current
     if (!el || !measure) return
     const report = () => {
@@ -543,38 +598,71 @@ export function SessionView({
     return bits
   }, [store.status, store.host, store.port, store.mccp, store.gmcp, store.msdp, store.mxp, store.msp, store.serverEchoes, store.logging, store.version])
 
+  // The unterminated line (usually the prompt) belongs at the very end of
+  // whichever pane is live: the scrollback while pinned, the tail while split.
+  const openPrompt = store.openSpans.length > 0 && (
+    <div className="line line-prompt">
+      {options.showTimestamps && <span className="line-time">{formatTime(Date.now())}</span>}
+      {store.openSpans.map((s, i) => (
+        <OutputSpan key={i} span={s} onLink={handleMxpLink} />
+      ))}
+    </div>
+  )
+
   return (
     <div className="session" style={{ display: active ? 'flex' : 'none' }}>
       <div className="session-main">
         <div className="session-terminal">
           <GaugeBar store={store} />
-          <div className="output" ref={scrollRef} onScroll={onScroll}>
-            <span ref={measureRef} className="measure" aria-hidden>
-              MMMMMMMMMM
-            </span>
-            {hiddenAbove > 0 && (
-              <div className="scrollback-note">
-                — {hiddenAbove.toLocaleString()} older lines — keep scrolling up to load —
-              </div>
-            )}
-            {renderedLines.map((line) => (
-              <OutputLine
-                key={line.id}
-                line={line}
-                showTime={options.showTimestamps}
-                searchQuery={searchOpen && query.length > 0 ? query : undefined}
-                searchCurrent={searchOpen && matches[matchIdx] === line.id}
-                onLink={handleMxpLink}
-                onLineMenu={onLineMenu}
-              />
-            ))}
-            {store.openSpans.length > 0 && (
-              <div className="line line-prompt">
-                {options.showTimestamps && <span className="line-time">{formatTime(Date.now())}</span>}
-                {store.openSpans.map((s, i) => (
-                  <OutputSpan key={i} span={s} onLink={handleMxpLink} />
-                ))}
-              </div>
+          <div className="output-split" ref={splitRef}>
+            <div className="output" ref={scrollRef} onScroll={onScroll}>
+              <span ref={measureRef} className="measure" aria-hidden>
+                MMMMMMMMMM
+              </span>
+              {hiddenAbove > 0 && (
+                <div className="scrollback-note">
+                  — {hiddenAbove.toLocaleString()} older lines — keep scrolling up to load —
+                </div>
+              )}
+              {renderedLines.map((line) => (
+                <OutputLine
+                  key={line.id}
+                  line={line}
+                  showTime={options.showTimestamps}
+                  searchQuery={searchOpen && query.length > 0 ? query : undefined}
+                  searchCurrent={searchOpen && matches[matchIdx] === line.id}
+                  onLink={handleMxpLink}
+                  onLineMenu={onLineMenu}
+                />
+              ))}
+              {pinned && openPrompt}
+            </div>
+            {!pinned && (
+              <>
+                <div className="split-divider" onMouseDown={onSplitDividerDown}>
+                  <span className="split-label">live output</span>
+                  <button
+                    className="jump-bottom"
+                    onMouseDown={(e) => e.stopPropagation()}
+                    onClick={jumpToBottom}
+                  >
+                    ▼ Jump to bottom
+                  </button>
+                </div>
+                <div className="output output-live" ref={liveRef} style={{ height: liveHeight }}>
+                  {allLines.slice(-LIVE_WINDOW).map((line) => (
+                    <OutputLine
+                      key={line.id}
+                      line={line}
+                      showTime={options.showTimestamps}
+                      searchQuery={searchOpen && query.length > 0 ? query : undefined}
+                      onLink={handleMxpLink}
+                      onLineMenu={onLineMenu}
+                    />
+                  ))}
+                  {openPrompt}
+                </div>
+              </>
             )}
           </div>
           {linkMenu && (
@@ -657,11 +745,6 @@ export function SessionView({
                 ✕
               </button>
             </div>
-          )}
-          {!pinned && (
-            <button className="jump-bottom" onClick={jumpToBottom}>
-              ▼ Jump to bottom
-            </button>
           )}
           {store.showCaptures && <CapturePane store={store} onLink={handleMxpLink} />}
         </div>

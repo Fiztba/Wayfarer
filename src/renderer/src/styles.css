@@ -356,18 +356,58 @@ body,
   user-select: none;
 }
 
+/* ---- Split scrollback: history above, live tail below ---- */
+.output-split {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.output-live {
+  flex: none;
+  /* A remembered height taller than a later, smaller window would otherwise
+     squeeze the scrollback to nothing and spill over the input row. */
+  max-height: 70%;
+  overflow: hidden;
+}
+
+.split-divider {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 2px 12px 2px 12px;
+  background: var(--bg-raised);
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+  cursor: row-resize;
+  user-select: none;
+}
+
+.split-divider:hover {
+  border-color: var(--accent);
+}
+
+.split-label {
+  color: #5c6370;
+  font-size: 11px;
+  font-style: italic;
+}
+
 .jump-bottom {
-  position: absolute;
-  bottom: 14px;
-  right: 24px;
   background: var(--bg-raised);
   color: var(--accent);
   border: 1px solid var(--border);
   border-radius: 6px;
-  padding: 6px 14px;
+  padding: 3px 12px;
   font-size: 12px;
   cursor: pointer;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.5);
+}
+
+.jump-bottom:hover {
+  border-color: var(--accent);
 }
 
 .input-row {
