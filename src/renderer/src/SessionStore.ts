@@ -412,6 +412,17 @@ export class SessionStore {
 
   // ---- mapper commands (#map, #go, #wp, #zone, #lost) ---------------------
 
+  /** One line on what a tidy did, or why it did nothing. */
+  describeTidy(r: ReturnType<MapModel['tidyZone']>): string {
+    const say = (s: { contrary: number; through: number; long: number }): string =>
+      `${s.through} through rooms, ${s.contrary} off-axis, ${s.long} long`
+    if (!r.applied) {
+      return `Left the zone as it is: no layout was found that lies less (now ${say(r.before)}; best attempt ${say(r.attempted)}). #map tidy! applies the attempt anyway; #map untidy puts it back.`
+    }
+    const moved = Object.keys(r.moves).length
+    return `Tidied ${moved} rooms: ${say(r.before)} → ${say(r.after)}. #map untidy puts them back.`
+  }
+
   /** Returns true if the input was a mapper command (consumed). */
   private tryMapperCommand(raw: string): boolean {
     const m = /^#(map|go!?|wp|waypoint|zone|lost)(?:\s+(.*))?$/i.exec(raw.trim())
@@ -419,6 +430,26 @@ export class SessionStore {
     const verb = m[1].toLowerCase()
     const arg = (m[2] ?? '').trim()
 
+    if (verb === 'map' && /^(tidy!?|untidy)$/i.test(arg)) {
+      if (!this.mapModel || !this.tracker) {
+        this.addSystemLine('Map still loading — try again in a moment.', 'error')
+        return true
+      }
+      if (arg.toLowerCase() === 'untidy') {
+        const n = this.mapModel.undoTidy()
+        this.addSystemLine(n === null ? 'No tidy to undo.' : `Put ${n} rooms back where they were.`, n === null ? 'error' : 'system')
+        return true
+      }
+      const current = this.tracker.currentRoom
+      const zoneId = current?.zoneId ?? this.mapModel.activeZoneId
+      if (!zoneId) {
+        this.addSystemLine('No zone to tidy — stand in one, or pick it on the map.', 'error')
+        return true
+      }
+      const result = this.mapModel.tidyZone(zoneId, current?.id, arg.endsWith('!'))
+      this.addSystemLine(this.describeTidy(result), result.applied ? 'system' : 'error')
+      return true
+    }
     if (verb === 'map') {
       this.toggleMap()
       return true

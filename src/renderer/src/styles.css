@@ -1191,6 +1191,20 @@ body,
   font-size: 12px;
 }
 
+.map-note {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: #2b3340;
+  color: var(--fg);
+  font-size: 12px;
+  padding: 4px 10px;
+  border-bottom: 1px solid var(--border);
+}
+.map-note > span {
+  flex: 1;
+}
+
 .map-lost {
   background: #5a2d2d;
   color: #ffb3b3;

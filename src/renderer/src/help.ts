@@ -430,7 +430,8 @@ export const HELP_TOPICS: HelpTopic[] = [
           'Name zones anything: "＋ New zone…" in the dropdown asks for a name, and ✎ renames the current zone. #zone <name> also creates by name.',
           'Reassign anytime: right-click a room → "Move to zone…", or Shift-drag a box around a whole region → right-click → "Move N rooms to zone…" (you can type a brand-new zone name right there). Links and layout are untouched.',
           'Shift-click adds or removes single rooms from a box selection; the multi-menu can also delete the selection.',
-          'The 🗑 toolbar button deletes an entire zone and all its rooms (with confirmation).'
+          'The 🗑 toolbar button deletes an entire zone and all its rooms (with confirmation).',
+          'The ⌗ toolbar button (or #map tidy) lays the current zone out again from its exits. Rooms are placed where their exits say, never on top of another room or across a link, and every room keeps its level. Only coordinates change; links are untouched, and #map untidy (or the Undo button) puts everything back. If no layout lies less than the current one — some areas are simply not flat — it says so and leaves the zone alone; "Apply anyway" or #map tidy! uses the best attempt regardless.'
         ]
       },
       { h: 'Fixing mistakes' },

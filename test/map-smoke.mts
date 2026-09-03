@@ -24,6 +24,7 @@ import {
   stripPromptPrefix,
   type MudMap
 } from '../src/renderer/src/map/types.ts'
+import { relayoutZone } from '../src/renderer/src/map/relayout.ts'
 import {
   cubicPoint,
   cubicTangent,
@@ -1843,6 +1844,42 @@ check('open cmd: no door, no command',
      r3(cubicPoint(P3, bowed.c2, bowed.c1, P0, 0.5).y)])
   check('geometry: tangent on a straight link points along it',
     r3(cubicTangent({ x: 0, y: 0 }, honest.c1, honest.c2, { x: 0, y: -1 }, 0.5).x), 0)
+}
+
+
+// ---- tidy: a room pushed past a neighbour comes back beside it, and the tidy is undoable ----
+{
+  const model = new MapModel(emptyMap(), () => {})
+  const zone = model.createZone('Yard')
+  // A's east exit leads to B, but B was placed three cells out because C
+  // had taken the cell in between -- and C itself belongs north-east of A,
+  // not east: the mapper slid it as it slid B. The straight link A→B is
+  // drawn through C.
+  const a = model.createRoom({ name: 'A', x: 0, y: 0, z: 0, zoneId: zone, exits: [] })
+  const b = model.createRoom({ name: 'B', x: 3, y: 0, z: 0, zoneId: zone, exits: [] })
+  const c = model.createRoom({ name: 'C', x: 1, y: 0, z: 0, zoneId: zone, exits: [] })
+  const loft = model.createRoom({ name: 'Loft', x: 0, y: 0, z: 1, zoneId: zone, exits: [] })
+  model.linkRooms(a.id, 'e', b.id, true)
+  model.linkRooms(a.id, 'ne', c.id, true)
+  model.linkRooms(a.id, 'u', loft.id, true)
+  const dry = relayoutZone(model.map, zone, a.id)
+  check('tidy: the starting layout draws a link through a room (both ways)', dry.before.through, 2)
+  check('tidy: and has C off its north-east axis (both ways)', dry.before.contrary, 2)
+  check('tidy: the new layout does not', dry.after.through, 0)
+  check('tidy: and lies about no direction', dry.after.contrary, 0)
+  check('tidy: the anchor stays put', dry.moves[a.id], undefined)
+  const result = model.tidyZone(zone, a.id)
+  check('tidy: applied', result.applied, true)
+  check('tidy: the loft keeps its level', model.room(loft.id)?.z, 1)
+  const bb = model.room(b.id)!
+  check('tidy: B is now directly east of A', [bb.x, bb.y], [1, 0])
+  check('tidy: C is now north-east of A', [model.room(c.id)!.x, model.room(c.id)!.y], [1, -1])
+  check('tidy: links untouched', model.exitOf(model.room(a.id)!, 'e')?.to, b.id)
+  const again = model.tidyZone(zone, a.id)
+  check('tidy: a tidy zone is left alone', again.applied, false)
+  check('tidy: undo puts every moved room back', model.undoTidy(), Object.keys(result.moves).length)
+  check('tidy: B is back where it was', [model.room(b.id)!.x, model.room(b.id)!.y], [3, 0])
+  check('tidy: nothing left to undo', model.undoTidy(), null)
 }
 
 console.log(failures === 0 ? '\nALL PASS' : `\n${failures} FAILURES`)

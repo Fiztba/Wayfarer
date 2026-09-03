@@ -130,6 +130,16 @@ export interface MudMap {
   popout?: PopoutBounds | null
   /** Recent automatic merges, newest last, so they can be undone. */
   merges?: MergeRecord[]
+  /** The last zone tidy, so it can be undone. Only the newest is kept:
+   *  a tidy moves rooms, never links, and the one you just did is the
+   *  one you might want back. */
+  relayout?: RelayoutRecord
+}
+
+export interface RelayoutRecord {
+  zoneId: string
+  /** Where every moved room sat before, by id. */
+  before: Record<string, [number, number, number]>
 }
 
 /** Screen rectangle of the pop-out map window. */

@@ -2,6 +2,7 @@
  * MapModel — owns a MudMap, applies all mutations, notifies subscribers,
  * and debounces persistence through an injected saver (DOM-free, testable).
  */
+import { relayoutZone, type RelayoutResult } from './relayout.ts'
 import {
   emptyMap,
   OPPOSITE,
@@ -13,6 +14,7 @@ import {
   type MapRoom,
   type MergeRecord,
   type MudMap,
+  type RelayoutRecord,
   type PopoutBounds
 } from './types.ts'
 
@@ -280,6 +282,65 @@ export class MapModel {
    * far harder to notice than a duplicate, so nothing may merge automatically
    * without this being possible.
    */
+  /**
+   * Lay a zone out again from its links (see relayout.ts). Applies only
+   * when the result lies less than what is there, unless forced; the
+   * previous coordinates are kept so it can be undone either way.
+   */
+  tidyZone(zoneId: string, anchorId?: string | null, force = false): RelayoutResult & { applied: boolean } {
+    const result = relayoutZone(this.map, zoneId, anchorId)
+    let moves = result.moves
+    if (Object.keys(moves).length === 0 && force) {
+      // Nothing better was found, but the caller wants the best attempt
+      // anyway: run it against a scrambled copy so the attempt is returned
+      // as moves rather than declined.
+      const scrambled = structuredClone(this.map)
+      Object.values(scrambled.rooms).forEach((r, i) => {
+        if (r.zoneId === zoneId) r.x += 1000 * (i + 1)
+      })
+      const forced = relayoutZone(scrambled, zoneId, anchorId)
+      moves = {}
+      for (const r of Object.values(this.map.rooms)) {
+        if (r.zoneId !== zoneId) continue
+        const p = forced.moves[r.id] ?? scrambled.rooms[r.id]
+        if (p.x !== r.x || p.y !== r.y || p.z !== r.z) moves[r.id] = { x: p.x, y: p.y, z: p.z }
+      }
+      result.after = forced.attempted
+    }
+    const ids = Object.keys(moves)
+    if (ids.length === 0) return { ...result, applied: false }
+    const before: RelayoutRecord['before'] = {}
+    for (const id of ids) {
+      const room = this.map.rooms[id]
+      if (!room) continue
+      before[id] = [room.x, room.y, room.z]
+      room.x = moves[id].x
+      room.y = moves[id].y
+      room.z = moves[id].z
+    }
+    this.map.relayout = { zoneId, before }
+    this.touch()
+    return { ...result, moves, applied: true }
+  }
+
+  /** Put every room the last tidy moved back. Returns how many moved back. */
+  undoTidy(): number | null {
+    const rec = this.map.relayout
+    if (!rec) return null
+    let n = 0
+    for (const [id, [x, y, z]] of Object.entries(rec.before)) {
+      const room = this.map.rooms[id]
+      if (!room) continue
+      room.x = x
+      room.y = y
+      room.z = z
+      n++
+    }
+    delete this.map.relayout
+    this.touch()
+    return n
+  }
+
   undoLastMerge(): MapRoom | null {
     const merges = this.map.merges
     if (!merges || merges.length === 0) return null

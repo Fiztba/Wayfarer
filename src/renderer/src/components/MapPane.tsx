@@ -9,6 +9,7 @@ import React, { useCallback, useEffect, useState } from 'react'
 import { MapCanvas, type MapContextInfo } from './MapCanvas'
 import { ClampedMenu } from './ClampedMenu'
 import type { MapModel } from '../map/MapModel'
+import type { RelayoutResult } from '../map/relayout'
 import type { TrackerControl } from '../map/RemoteMap'
 import { DIRECTIONS, DIR_FULL, type Direction, type MapExit, type MapRoom } from '../map/types'
 
@@ -30,6 +31,16 @@ type MenuState =
 
 const ROOM_COLORS = ['', '#7c2d2d', '#7c5a2d', '#2d5a2d', '#2d4a7c', '#5a2d7c', '#2d6b6b']
 
+/** One line on what a tidy did, or why it did nothing. */
+function describeTidy(r: RelayoutResult & { applied: boolean }): string {
+  const say = (s: { contrary: number; through: number; long: number }): string =>
+    `${s.through} through rooms, ${s.contrary} off-axis, ${s.long} long`
+  if (!r.applied) {
+    return `No layout found that lies less than this one (${say(r.before)}; best attempt ${say(r.attempted)}).`
+  }
+  return `Tidied ${Object.keys(r.moves).length} rooms: ${say(r.before)} → ${say(r.after)}.`
+}
+
 export function MapPane({ model, tracker, walkTo, onPopout, onClose }: MapPaneProps) {
   const [, force] = useState(0)
   useEffect(() => {
@@ -50,6 +61,8 @@ export function MapPane({ model, tracker, walkTo, onPopout, onClose }: MapPanePr
   const [menu, setMenu] = useState<MenuState>({ kind: 'closed' })
   const [showWaypoints, setShowWaypoints] = useState(false)
   const [showDupes, setShowDupes] = useState(false)
+  /** What the last tidy from this pane did, shown until dismissed. */
+  const [tidyNote, setTidyNote] = useState<string | null>(null)
   const [zoneDialog, setZoneDialog] = useState<{
     mode: 'create' | 'rename' | 'delete'
     value: string
@@ -152,6 +165,17 @@ export function MapPane({ model, tracker, walkTo, onPopout, onClose }: MapPanePr
         >
           🗑
         </button>
+        <button
+          className="map-btn"
+          title="Tidy this zone: lay its rooms out again from their exits (moves rooms, never links; undoable)"
+          onClick={() => {
+            if (!zoneId) return
+            const anchor = current?.zoneId === zoneId ? current.id : null
+            setTidyNote(describeTidy(model.tidyZone(zoneId, anchor)))
+          }}
+        >
+          ⌗
+        </button>
         <span className="map-level">
           <button className="map-btn" title="Level down" onClick={() => setViewZ(z - 1)}>
             −
@@ -190,6 +214,36 @@ export function MapPane({ model, tracker, walkTo, onPopout, onClose }: MapPanePr
         )}
       </div>
 
+      {tidyNote && (
+        <div className="map-note">
+          <span>{tidyNote}</span>
+          {model.map.relayout ? (
+            <button
+              className="map-btn"
+              onClick={() => {
+                const n = model.undoTidy()
+                setTidyNote(n === null ? null : `Put ${n} rooms back.`)
+              }}
+            >
+              Undo
+            </button>
+          ) : (
+            <button
+              className="map-btn"
+              title="Apply the best layout found even though it is not a clear improvement"
+              onClick={() => {
+                const anchor = current?.zoneId === zoneId ? current.id : null
+                setTidyNote(describeTidy(model.tidyZone(zoneId, anchor, true)))
+              }}
+            >
+              Apply anyway
+            </button>
+          )}
+          <button className="map-btn" onClick={() => setTidyNote(null)}>
+            ✕
+          </button>
+        </div>
+      )}
       {(tracker.lost || (!tracker.currentRoomId && Object.keys(model.map.rooms).length > 0)) && (
         <div className="map-lost">Position unknown — right-click your room → “I am here”.</div>
       )}

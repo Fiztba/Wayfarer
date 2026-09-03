@@ -35,7 +35,9 @@ export const MODEL_ACTION_METHODS = new Set([
   'removeExitAt',
   'addSpecialExit',
   'setWaypoint',
-  'removeWaypoint'
+  'removeWaypoint',
+  'tidyZone',
+  'undoTidy'
 ])
 
 export class RemoteMapModel extends MapModel {
@@ -140,6 +142,18 @@ export class RemoteMapModel extends MapModel {
   override addSpecialExit(fromId: string, command: string, toId: string | null): void {
     super.addSpecialExit(fromId, command, toId)
     this.rpc('addSpecialExit', [fromId, command, toId])
+  }
+
+  override tidyZone(zoneId: string, anchorId?: string | null, force = false): ReturnType<MapModel['tidyZone']> {
+    const result = super.tidyZone(zoneId, anchorId, force)
+    this.rpc('tidyZone', [zoneId, anchorId ?? null, force])
+    return result
+  }
+
+  override undoTidy(): number | null {
+    const n = super.undoTidy()
+    this.rpc('undoTidy', [])
+    return n
   }
 
   override setWaypoint(name: string, roomId: string): void {
