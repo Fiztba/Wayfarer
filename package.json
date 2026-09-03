@@ -1,7 +1,7 @@
 {
   "name": "wayfarer",
   "productName": "Wayfarer",
-  "version": "0.4.23",
+  "version": "0.4.24",
   "description": "A modern, feature-rich MUD client",
   "main": "out/main/index.js",
   "license": "MIT",
