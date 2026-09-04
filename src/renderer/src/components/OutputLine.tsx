@@ -2,6 +2,7 @@
 import React from 'react'
 import type { Line } from '../SessionStore'
 import type { MxpLink, Span, SpanStyle } from '../ansi'
+import { splitLinks } from '../linkify.ts'
 
 /** `menu` is set on right-click, with the pointer position for a context menu. */
 export type LinkHandler = (link: MxpLink, menu?: { x: number; y: number }) => void
@@ -91,7 +92,37 @@ export const OutputSpan = React.memo(function OutputSpan({
       </span>
     )
   }
-  return <span style={spanCss(span.style)}>{content}</span>
+  // Web addresses in plain text (see linkify.ts) open in the system browser:
+  // window.open is routed there by the main process, never to a new window.
+  const parts = splitLinks(span.text)
+  if (parts.length === 1 && !parts[0].href) {
+    return <span style={spanCss(span.style)}>{content}</span>
+  }
+  return (
+    <span style={spanCss(span.style)}>
+      {parts.map((part, i) => {
+        const text = highlight ? highlightParts(part.text, highlight, highlightCurrent ?? false) : part.text
+        if (!part.href) return <React.Fragment key={i}>{text}</React.Fragment>
+        const href = part.href
+        return (
+          <span
+            key={i}
+            className="web-link"
+            title={`Open ${href} in your browser`}
+            onClick={(e) => {
+              e.stopPropagation()
+              // Dragging across a URL to copy it ends with a click on the
+              // same span; that is a selection, not a request to open it.
+              if (window.getSelection()?.toString()) return
+              window.open(href)
+            }}
+          >
+            {text}
+          </span>
+        )
+      })}
+    </span>
+  )
 })
 
 export const OutputLine = React.memo(function OutputLine({

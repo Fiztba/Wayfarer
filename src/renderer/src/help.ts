@@ -461,6 +461,7 @@ export const HELP_TOPICS: HelpTopic[] = [
           'Underlined dotted text is clickable: exits, items, menu entries. Clicking sends the associated command, exactly as if you typed it.',
           'Hover shows what will be sent. Links marked "prompt" put the command into your input line for editing instead of sending.',
           'Web links open in your system browser — never inside the client.',
+          'Plain web addresses in ordinary output are clickable too, on any MUD: https://…, www.…, or a bare site name like tbamud.com (solid underline, where MXP links are dotted). They open in your system browser. A MUD address with a port (tbamud.com:9091) links to the site alone, and email addresses are left as text.',
           'Bold/italic/color markup from the server renders inline. For safety, tags are only honored on server-secured lines; anything a player says renders as plain text.'
         ]
       },

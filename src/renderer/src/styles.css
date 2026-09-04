@@ -216,6 +216,17 @@ body,
   text-decoration-style: solid;
 }
 
+/* A web address found in plain text: opens in the system browser. Solid
+   underline, unlike the dotted MXP link, so the two read differently. */
+.web-link {
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.web-link:hover {
+  filter: brightness(1.35);
+}
+
 /* Right-click menu for MXP links with several commands. */
 .mxp-menu {
   position: fixed;
