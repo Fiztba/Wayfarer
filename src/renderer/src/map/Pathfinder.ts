@@ -65,3 +65,20 @@ export function findPath(model: MapModel, fromId: string, toId: string): WalkSte
   }
   return null
 }
+
+/**
+ * A command as typed, reduced to what identifies it: case, runs of spaces
+ * and a trailing full stop are how people vary, not what the MUD keys on.
+ * "say I seek entrance to the spire." and "say i seek entrance to the spire"
+ * are the same special exit.
+ */
+export function normalizeCommand(command: string): string {
+  return command.trim().toLowerCase().replace(/\s+/g, ' ').replace(/[.!?]+$/, '')
+}
+
+/** Index of the special exit that `typed` walks, or -1. */
+export function specialExitIndex(room: { exits: MapExit[] }, typed: string): number {
+  const wanted = normalizeCommand(typed)
+  if (!wanted) return -1
+  return room.exits.findIndex((e) => e.dir === null && !!e.command && normalizeCommand(e.command) === wanted)
+}

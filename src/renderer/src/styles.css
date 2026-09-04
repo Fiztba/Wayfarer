@@ -1415,6 +1415,20 @@ body,
   color: var(--fg);
 }
 
+/* A special exit's command is editable in place. */
+input.map-exit-command {
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 1px 4px;
+  min-width: 0;
+  outline: none;
+}
+
+input.map-exit-command:focus {
+  border-color: var(--accent);
+}
+
 .map-exit-dir {
   width: 82px;
   flex: none;

@@ -441,7 +441,8 @@ export const HELP_TOPICS: HelpTopic[] = [
         list: [
           'Right-click a room: rename, recolor, add notes, delete, or "Merge into selected room" (select the keeper first, then right-click the duplicate).',
           'The 🧹 toolbar button finds rooms with identical name + exits — locate each copy, and one click merges them all into the best-connected one (all links redirect). Leave genuine maze rooms unmerged.',
-          'Exits & doors: delete bogus exits, link an unexplored stub to a selected room, add special exits ("enter portal") that pathfinding will use.',
+          'Exits & doors: delete bogus exits, link an unexplored stub to a selected room, add special exits ("enter portal", or a phrase said aloud) that pathfinding will use. The command of a special exit can be edited in place there.',
+          'Typing a special exit\'s command yourself is followed like a compass move: case, spacing and a trailing full stop do not matter. An exit that has never been walked learns the room it leads to (drawn a couple of cells away, so it does not look like a compass neighbour); one that leads somewhere it turns out not to is corrected when the room beyond is unmistakable.',
           'Right-click empty space: add a room by hand.',
           'Maps save automatically (atomic writes + hourly backups) per world profile.'
         ]

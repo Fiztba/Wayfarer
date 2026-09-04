@@ -707,9 +707,16 @@ function ExitsEditor({
       <AddExit model={model} room={room} />
       {room.exits.map((exit, i) => (
         <div key={i} className="map-exit-row">
-          <span className="map-exit-dir">
-            {exit.dir ? DIR_FULL[exit.dir as Direction] : exit.command}
-          </span>
+          {exit.dir ? (
+            <span className="map-exit-dir">{DIR_FULL[exit.dir as Direction]}</span>
+          ) : (
+            <input
+              className="map-exit-dir map-exit-command"
+              value={exit.command ?? ''}
+              title="The command that walks this exit. Case, spacing and a trailing full stop do not matter when you type it."
+              onChange={(e) => model.setExitAt(room.id, i, { command: e.target.value })}
+            />
+          )}
           <span className="map-exit-dest" title={describe(exit)}>
             → {describe(exit)}
           </span>

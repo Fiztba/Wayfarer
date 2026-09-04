@@ -20,18 +20,25 @@ import {
   OPPOSITE,
   wordToDirection,
   type Direction,
+  type MapExit,
   type MapRoom,
   type RoomDetection,
   type ServerRoomInfo
 } from './types.ts'
 
 import type { TrackerControl } from './RemoteMap.ts'
+import { specialExitIndex } from './Pathfinder.ts'
 
 export type TrackerMode = 'map' | 'follow' | 'off'
 
 interface PendingMove {
-  dir: Direction
+  /** Compass move, or null for a special exit walked by its command. */
+  dir: Direction | null
+  /** The exit's own command, when dir is null. */
+  command?: string
   at: number
+  /** How long this move may wait for its room, when not the default. */
+  ttl?: number
 }
 
 /**
@@ -88,6 +95,9 @@ const MSG_DUPE = (name: string, count: number): string =>
 
 const PENDING_CAP = 30
 const PENDING_TTL_MS = 15_000
+/** A special exit is a deliberate act, and the room beyond it may not print
+ *  until the player looks -- after reading whatever the passage said. */
+const SPECIAL_TTL_MS = 90_000
 /** How long after a server id the room's own prose may still arrive. */
 const SERVER_TEXT_WINDOW_MS = 3_000
 
@@ -276,6 +286,17 @@ export class MapTracker implements TrackerControl {
       if (this.pending.length > PENDING_CAP) this.pending.shift()
       return
     }
+    // A special exit walked by its own command -- "enter portal", or a phrase
+    // said aloud. Only the current room's exits are consulted, and the match
+    // forgives case, spacing and a trailing full stop: the exit was typed in
+    // once by hand, and the command is typed again by hand every time.
+    const here = this.lost ? null : this.currentRoom
+    const specialIdx = here ? specialExitIndex(here, command) : -1
+    if (here && specialIdx !== -1) {
+      this.pending.push({ dir: null, command: here.exits[specialIdx].command ?? '', at: Date.now(), ttl: SPECIAL_TTL_MS })
+      if (this.pending.length > PENDING_CAP) this.pending.shift()
+      return
+    }
     // "open <thing> <dir>" — a door exists on that exit.
     const open = /^open\s+\S+\s+(\w+)$/.exec(trimmed)
     if (open) {
@@ -297,7 +318,8 @@ export class MapTracker implements TrackerControl {
 
     if (isMoveFailure(plain)) {
       const failed = this.pending.shift()
-      if (failed) {
+      // A special exit that failed has no direction to hang a door on.
+      if (failed && failed.dir) {
         const closedDoor = isClosedDoorFailure(plain)
         const named = closedDoor ? closedDoorName(plain) : null
         if (closedDoor && this.currentRoomId && !this.lost) {
@@ -368,9 +390,7 @@ export class MapTracker implements TrackerControl {
       const stayed = existing.id === this.currentRoomId
       if (move && !stayed && this.currentRoomId && this.mode === 'map' && !this.lost) {
         const from = this.model.room(this.currentRoomId)
-        if (from && this.model.exitOf(from, move.dir)?.to == null) {
-          this.model.linkRooms(from.id, move.dir, existing.id, true)
-        }
+        if (from) this.linkMove(from, move, existing.id, false)
       }
       this.currentRoomId = existing.id
       this.lost = false
@@ -405,7 +425,7 @@ export class MapTracker implements TrackerControl {
     }
     if (from && move) {
       // We walked an exit that already points at an id-less room: same room.
-      const viaId = this.model.exitOf(from, move.dir)?.to
+      const viaId = this.exitForMove(from, move)?.to
       const via = viaId != null ? this.model.room(viaId) : null
       if (via && !via.serverId) {
         adopt(via.id)
@@ -435,7 +455,7 @@ export class MapTracker implements TrackerControl {
     const pos = usable
       ? { x: given.x, y: given.y, z: given.z }
       : from && move
-        ? this.model.placeFrom(from, move.dir)
+        ? this.placeForMove(from, move)
         : { x: 0, y: 0, z: 0 }
     const room = this.model.createRoom({
       name: info.name ?? 'Unknown room',
@@ -455,7 +475,7 @@ export class MapTracker implements TrackerControl {
         }
       }
     }
-    if (from && move) this.model.linkRooms(from.id, move.dir, room.id, true)
+    if (from && move) this.linkMove(from, move, room.id, true)
     this.currentRoomId = room.id
     this.lost = false
     this.notify()
@@ -606,7 +626,8 @@ export class MapTracker implements TrackerControl {
     }
 
     if (move && current) {
-      this.handleMove(current, move.dir, det)
+      if (move.dir) this.handleMove(current, move.dir, det)
+      else this.handleSpecialMove(current, move.command ?? '', det)
       return
     }
 
@@ -638,6 +659,98 @@ export class MapTracker implements TrackerControl {
       this.seedFirstRoom(det)
     }
     // Ambiguous or non-empty map: stay unanchored quietly until certain.
+  }
+
+  // ---- special exits ------------------------------------------------------
+
+  /** The exit a queued move walks out of `room`, compass or special. */
+  private exitForMove(room: MapRoom, move: PendingMove): MapExit | undefined {
+    if (move.dir) return this.model.exitOf(room, move.dir)
+    const idx = specialExitIndex(room, move.command ?? '')
+    return idx === -1 ? undefined : room.exits[idx]
+  }
+
+  /** Record that a queued move out of `from` arrived at `toId`. Without
+   *  `force`, an exit that already leads somewhere is left alone. */
+  private linkMove(from: MapRoom, move: PendingMove, toId: string, force: boolean): void {
+    if (move.dir) {
+      if (force || this.model.exitOf(from, move.dir)?.to == null) {
+        this.model.linkRooms(from.id, move.dir, toId, true)
+      }
+      return
+    }
+    const idx = specialExitIndex(from, move.command ?? '')
+    if (idx !== -1 && (force || from.exits[idx].to == null)) {
+      this.model.setExitAt(from.id, idx, { to: toId })
+    }
+  }
+
+  private placeForMove(from: MapRoom, move: PendingMove): { x: number; y: number; z: number } {
+    return move.dir ? this.model.placeFrom(from, move.dir) : this.placeSpecial(from)
+  }
+
+  /** A cell for a room reached by a special exit: on the same floor, two or
+   *  more cells away, so it does not read as a compass neighbour. */
+  private placeSpecial(from: MapRoom): { x: number; y: number; z: number } {
+    const taken = (x: number, y: number): boolean =>
+      Object.values(this.map.rooms).some(
+        (r) => r.zoneId === from.zoneId && r.x === x && r.y === y && r.z === from.z
+      )
+    for (let ring = 2; ring <= 8; ring++) {
+      // East first, then the rest of the ring.
+      const cells: Array<[number, number]> = [[ring, 0], [ring, 1], [ring, -1], [0, ring], [0, -ring], [-ring, 0]]
+      for (let ox = -ring; ox <= ring; ox++) {
+        for (let oy = -ring; oy <= ring; oy++) {
+          if (Math.max(Math.abs(ox), Math.abs(oy)) === ring) cells.push([ox, oy])
+        }
+      }
+      for (const [ox, oy] of cells) {
+        if (!taken(from.x + ox, from.y + oy)) return { x: from.x + ox, y: from.y + oy, z: from.z }
+      }
+    }
+    return { x: from.x + 2, y: from.y, z: from.z }
+  }
+
+  /**
+   * Arrival after a special exit's command was sent from `current`. The room
+   * the exit already leads to is expected; failing that, a room this text
+   * unmistakably describes is adopted (and, in map mode, the exit learns
+   * it); failing that, in map mode, a new room is created and the exit
+   * pointed at it. Only then is the position lost.
+   */
+  private handleSpecialMove(current: MapRoom, command: string, det: RoomDetection): void {
+    const idx = specialExitIndex(current, command)
+    const exit = idx === -1 ? null : current.exits[idx]
+    const expected = exit?.to ? this.model.room(exit.to) : null
+    const arrive = (room: MapRoom): void => {
+      this.currentRoomId = room.id
+      this.lost = false
+      this.refreshExits(room, det)
+      this.syncName(room, det)
+      this.notify()
+    }
+    if (expected && this.roomMatches(expected, det)) {
+      arrive(expected)
+      return
+    }
+    const matches = this.candidatesFor(det).filter((r) => r.id !== current.id)
+    if (matches.length === 1) {
+      if (exit && this.mode === 'map') this.model.setExitAt(current.id, idx, { to: matches[0].id })
+      arrive(matches[0])
+      return
+    }
+    if (matches.length === 0 && exit && this.mode === 'map') {
+      const room = this.model.createRoom({
+        name: det.name,
+        zoneId: this.zoneForNewRoom(current),
+        ...this.placeSpecial(current)
+      })
+      this.applyDetectedExits(room, det)
+      this.model.setExitAt(current.id, idx, { to: room.id })
+      arrive(room)
+      return
+    }
+    this.markLost(`"${command}" led somewhere unrecognized ("${det.name}").`)
   }
 
   private isMapEmpty(): boolean {
@@ -869,7 +982,7 @@ export class MapTracker implements TrackerControl {
         }
         continue
       }
-      const exit = this.model.exitOf(at, move.dir)
+      const exit = this.exitForMove(at, move)
       if (!exit || exit.to === null) continue
       const dest = this.model.room(exit.to)
       if (!dest || !this.couldBe(dest, det)) continue
@@ -1065,6 +1178,6 @@ export class MapTracker implements TrackerControl {
 
   private expirePending(): void {
     const now = Date.now()
-    this.pending = this.pending.filter((p) => now - p.at < PENDING_TTL_MS)
+    this.pending = this.pending.filter((p) => now - p.at < (p.ttl ?? PENDING_TTL_MS))
   }
 }
