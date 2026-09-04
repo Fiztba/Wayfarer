@@ -37,7 +37,10 @@ export const MODEL_ACTION_METHODS = new Set([
   'setWaypoint',
   'removeWaypoint',
   'tidyZone',
-  'undoTidy'
+  'undoTidy',
+  'undoMerge',
+  'undoLastMerge',
+  'dismissDoubt'
 ])
 
 export class RemoteMapModel extends MapModel {
@@ -114,9 +117,26 @@ export class RemoteMapModel extends MapModel {
     this.rpc('deleteRoom', [id])
   }
 
-  override mergeRooms(keepId: string, dropId: string): void {
-    super.mergeRooms(keepId, dropId)
-    this.rpc('mergeRooms', [keepId, dropId])
+  override mergeRooms(keepId: string, dropId: string, meta?: { auto?: boolean; reason?: string }): void {
+    super.mergeRooms(keepId, dropId, meta)
+    this.rpc('mergeRooms', [keepId, dropId, meta])
+  }
+
+  override undoMerge(recordId: string): MapRoom | null {
+    const restored = super.undoMerge(recordId)
+    this.rpc('undoMerge', [recordId])
+    return restored
+  }
+
+  override undoLastMerge(): MapRoom | null {
+    const restored = super.undoLastMerge()
+    this.rpc('undoLastMerge', [])
+    return restored
+  }
+
+  override dismissDoubt(roomId: string): void {
+    super.dismissDoubt(roomId)
+    this.rpc('dismissDoubt', [roomId])
   }
 
   override linkRooms(fromId: string, dir: Direction, toId: string, addReverse: boolean): void {

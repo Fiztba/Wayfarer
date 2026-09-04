@@ -27,8 +27,8 @@ const SAVE_MAX_WAIT_MS = 10_000
 /** How many descriptions to remember per room. Weather and daylight give one
  *  room a handful; beyond that we are hoarding, not identifying. */
 const MAX_DESC_HASHES = 6
-/** How many automatic merges stay undoable. */
-const MERGE_HISTORY = 20
+/** How many merges stay in the journal, and so undoable. */
+const MERGE_HISTORY = 50
 
 function uuid(): string {
   return typeof crypto !== 'undefined' && crypto.randomUUID
@@ -277,6 +277,51 @@ export class MapModel {
     return Object.values(this.map.rooms).filter((r) => (r.rivals?.length ?? 0) > 0)
   }
 
+  /** The player says this room is its own place, not a copy: the doubt is
+   *  dropped for good, and the reconciler never revisits it. */
+  dismissDoubt(roomId: string): void {
+    this.setRivals(roomId, [])
+  }
+
+  /**
+   * Record where the server says an exit leads. If that room is already on
+   * the map the link is written now; if not, it is written the moment a
+   * room with that id turns up (see resolveServerLinks).
+   */
+  setServerLink(roomId: string, dir: Direction, destServerId: string): void {
+    const exit = this.ensureExit(roomId, dir)
+    if (!exit) return
+    let changed = false
+    if (exit.destServerId !== destServerId) {
+      exit.destServerId = destServerId
+      changed = true
+    }
+    if (exit.to == null) {
+      const dest = this.findByServerId(destServerId)
+      if (dest && dest.id !== roomId) {
+        exit.to = dest.id
+        changed = true
+      }
+    }
+    if (changed) this.touch()
+  }
+
+  /** Every unwalked exit the server said leads to this id now leads to this
+   *  room. Returns how many links that wrote. */
+  resolveServerLinks(serverId: string, roomId: string): number {
+    let n = 0
+    for (const room of Object.values(this.map.rooms)) {
+      for (const exit of room.exits) {
+        if (exit.destServerId === serverId && exit.to == null && room.id !== roomId) {
+          exit.to = roomId
+          n++
+        }
+      }
+    }
+    if (n > 0) this.touch()
+    return n
+  }
+
   /**
    * Put back the most recent merge. Merging is destructive and a bad one is
    * far harder to notice than a duplicate, so nothing may merge automatically
@@ -344,12 +389,43 @@ export class MapModel {
   undoLastMerge(): MapRoom | null {
     const merges = this.map.merges
     if (!merges || merges.length === 0) return null
-    const rec = merges[merges.length - 1]
+    return this.undoMerge(merges[merges.length - 1].id)
+  }
+
+  /**
+   * Put back a room that a merge absorbed -- any entry in the journal, not
+   * only the newest. The newest is restored exactly. An older one is
+   * restored as far as the map still allows: the room comes back verbatim,
+   * exits elsewhere that were redirected onto the keeper and still point
+   * there are pointed back, and exits the keeper only has because it
+   * absorbed them are handed back. Anything mapped since stays.
+   */
+  undoMerge(recordId: string): MapRoom | null {
+    const merges = this.map.merges ?? []
+    const index = merges.findIndex((m) => m.id === recordId)
+    if (index === -1) return null
+    const rec = merges[index]
     const keep = this.map.rooms[rec.keptId]
-    if (!keep) return null
+    if (!keep || this.map.rooms[rec.dropped.id]) return null
     const restored = structuredClone(rec.dropped)
     this.map.rooms[restored.id] = restored
-    keep.exits = structuredClone(rec.keptExits)
+    const newest = index === merges.length - 1
+    if (newest) {
+      keep.exits = structuredClone(rec.keptExits)
+    } else {
+      keep.exits = keep.exits.filter((e) => {
+        const absorbed = restored.exits.some((d) =>
+          d.dir ? d.dir === e.dir : d.command === e.command
+        )
+        const hadBefore = rec.keptExits.some((k) => (k.dir ? k.dir === e.dir : k.command === e.command))
+        return !absorbed || hadBefore
+      })
+      for (const e of keep.exits) {
+        const before = rec.keptExits.find((k) => (k.dir ? k.dir === e.dir : k.command === e.command))
+        const fromDrop = restored.exits.find((d) => (d.dir ? d.dir === e.dir : d.command === e.command))
+        if (before && before.to === null && fromDrop && e.to === fromDrop.to) e.to = null
+      }
+    }
     for (const back of rec.inbound) {
       const room = this.map.rooms[back.roomId]
       const exit = room?.exits.find((e) =>
@@ -357,8 +433,13 @@ export class MapModel {
       )
       if (exit && exit.to === rec.keptId) exit.to = restored.id
     }
-    if (rec.lastRoomId !== undefined) this.map.lastRoomId = rec.lastRoomId
-    this.map.merges = merges.slice(0, -1)
+    for (const w of this.map.waypoints) {
+      if (rec.waypoints?.includes(w.name) && w.roomId === rec.keptId) w.roomId = restored.id
+    }
+    // The restored room's own exits may still name the keeper from when the
+    // two were neighbours; that is what they said before, so it stands.
+    if (newest && rec.lastRoomId !== undefined) this.map.lastRoomId = rec.lastRoomId
+    this.map.merges = merges.filter((m) => m.id !== recordId)
     this.touch()
     return restored
   }
@@ -400,13 +481,20 @@ export class MapModel {
     this.map.waypoints = this.map.waypoints.filter((w) => w.roomId !== id)
   }
 
-  /** Merge dropId into keepId: redirect inbound links, absorb exits, delete. */
-  mergeRooms(keepId: string, dropId: string): void {
+  /** Merge dropId into keepId: redirect inbound links, absorb exits, delete.
+   *  `meta` says whether the mapper decided this and on what evidence, so
+   *  the journal can show it. */
+  mergeRooms(keepId: string, dropId: string, meta?: { auto?: boolean; reason?: string }): void {
     const keep = this.map.rooms[keepId]
     const drop = this.map.rooms[dropId]
     if (!keep || !drop || keepId === dropId) return
     const record: MergeRecord = {
+      id: uuid(),
+      at: Date.now(),
+      auto: meta?.auto ?? false,
+      ...(meta?.reason ? { reason: meta.reason } : {}),
       keptId: keepId,
+      keptName: keep.name,
       dropped: structuredClone(drop),
       keptExits: structuredClone(keep.exits),
       inbound: [],
@@ -435,7 +523,10 @@ export class MapModel {
     }
     if (!keep.serverId && drop.serverId) keep.serverId = drop.serverId
     for (const w of this.map.waypoints) {
-      if (w.roomId === dropId) w.roomId = keepId
+      if (w.roomId === dropId) {
+        w.roomId = keepId
+        record.waypoints = [...(record.waypoints ?? []), w.name]
+      }
     }
     if (this.map.lastRoomId === dropId) this.map.lastRoomId = keepId
     // Descriptions are evidence; the survivor keeps everything either saw.

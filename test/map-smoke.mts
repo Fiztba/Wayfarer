@@ -1258,6 +1258,8 @@ check('open cmd: no door, no command',
   check('explore: the copy is gone', model.room(copy.id), null)
   check('explore: back to the original count', Object.keys(model.map.rooms).length, before + 1)
   check('explore: standing in the real room', tracker.currentRoomId, known.id)
+  check('explore: the message names both signals',
+    infos.some((t) => t.includes('same description, north leads to the same room')), true)
   check('explore: told what happened',
     infos.some((t) => t.includes('already on the map')), true)
   check('explore: the way in was kept', model.exitOf(model.room(start.id)!, 'e')?.to, known.id)
@@ -1880,6 +1882,101 @@ check('open cmd: no door, no command',
   check('tidy: undo puts every moved room back', model.undoTidy(), Object.keys(result.moves).length)
   check('tidy: B is back where it was', [model.room(b.id)!.x, model.room(b.id)!.y], [3, 0])
   check('tidy: nothing left to undo', model.undoTidy(), null)
+}
+
+
+// ---- journal: merges are recorded with their evidence, and any entry can be undone ----
+{
+  const model = new MapModel(emptyMap(), () => {})
+  const hub = model.createRoom({ name: 'Hub', x: 0, y: 0, z: 0, exits: [] })
+  const a = model.createRoom({ name: 'Copy A', x: 1, y: 0, z: 0, exits: [] })
+  const b = model.createRoom({ name: 'Copy B', x: -1, y: 0, z: 0, exits: [] })
+  const east = model.createRoom({ name: 'East', x: 2, y: 0, z: 0, exits: [] })
+  const west = model.createRoom({ name: 'West', x: -2, y: 0, z: 0, exits: [] })
+  model.linkRooms(east.id, 'w', a.id, true)
+  model.linkRooms(west.id, 'e', b.id, true)
+  model.mergeRooms(hub.id, a.id, { auto: true, reason: 'same description' })
+  model.mergeRooms(hub.id, b.id, { auto: false, reason: 'merged by hand' })
+  const journal = model.map.merges ?? []
+  check('journal: two entries, oldest first', journal.map((m) => m.dropped.name), ['Copy A', 'Copy B'])
+  check('journal: who decided and why', journal.map((m) => [m.auto, m.reason]), [[true, 'same description'], [false, 'merged by hand']])
+  check('journal: each entry is addressable', journal.every((m) => typeof m.id === 'string' && m.at > 0), true)
+  check('journal: the keeper took both inbound links', [model.exitOf(east, 'w')?.to, model.exitOf(west, 'e')?.to], [hub.id, hub.id])
+
+  // Undo the OLDER one while the newer stands.
+  const restored = model.undoMerge(journal[0].id)
+  check('journal: the older merge is undone', restored?.name, 'Copy A')
+  check('journal: East points back at the restored room', model.exitOf(east, 'w')?.to, a.id)
+  check('journal: West still points at the keeper', model.exitOf(west, 'e')?.to, hub.id)
+  check('journal: the keeper gave back the exit it only had from Copy A', model.exitOf(model.room(hub.id)!, 'e'), undefined)
+  check('journal: the keeper kept the exit from Copy B', model.exitOf(model.room(hub.id)!, 'w')?.to, west.id)
+  check('journal: the newer entry remains', (model.map.merges ?? []).map((m) => m.dropped.name), ['Copy B'])
+  check('journal: undoing it twice does nothing', model.undoMerge(journal[0].id), null)
+  model.setWaypoint('home', hub.id)
+  check('journal: #unmerge takes the newest', model.undoLastMerge()?.name, 'Copy B')
+  check('journal: a waypoint set on the keeper stays there', model.map.waypoints.find((w) => w.name === 'home')?.roomId, hub.id)
+  check('journal: empty', (model.map.merges ?? []).length, 0)
+}
+
+// ---- doubts: "Different" drops the doubt for good ----
+{
+  const model = new MapModel(emptyMap(), () => {})
+  const one = model.createRoom({ name: 'Maze', x: 0, y: 0, z: 0, exits: [] })
+  const two = model.createRoom({ name: 'Maze', x: 1, y: 0, z: 0, exits: [], rivals: [one.id] })
+  check('doubt: recorded', model.provisionalRooms().map((r) => r.id), [two.id])
+  model.dismissDoubt(two.id)
+  check('doubt: dropped', model.provisionalRooms().length, 0)
+  check('doubt: the room itself stays', model.room(two.id)?.name, 'Maze')
+}
+
+// ---- journal: a waypoint carried by a merge comes back with the room ----
+{
+  const model = new MapModel(emptyMap(), () => {})
+  const keep = model.createRoom({ name: 'Inn', x: 0, y: 0, z: 0, exits: [] })
+  const drop = model.createRoom({ name: 'Inn', x: 1, y: 0, z: 0, exits: [] })
+  model.setWaypoint('bed', drop.id)
+  model.mergeRooms(keep.id, drop.id)
+  check('journal: the merge moved the waypoint', model.map.waypoints[0].roomId, keep.id)
+  model.undoLastMerge()
+  check('journal: undo moved it back', model.map.waypoints[0].roomId, drop.id)
+}
+
+// ---- server exits: a link the MUD promised is written when the room appears ----
+{
+  const { model, tracker } = makeWorld()
+  tracker.onServerRoom({ serverId: 'gmcp:1', name: 'Gate', exits: { n: 'gmcp:2', e: 'gmcp:3' } })
+  const gate = tracker.currentRoom!
+  check('server exits: unwalked exits remember their destination id',
+    gate.exits.map((e) => [e.dir, e.to, e.destServerId]), [['n', null, 'gmcp:2'], ['e', null, 'gmcp:3']])
+  // Walk east; the room north of the gate is reached later, from elsewhere.
+  tracker.onCommand('e')
+  tracker.onServerRoom({ serverId: 'gmcp:3', name: 'Road', exits: { w: 'gmcp:1', n: 'gmcp:2' } })
+  const road = tracker.currentRoom!
+  check('server exits: the walked exit is linked', model.exitOf(model.room(gate.id)!, 'e')?.to, road.id)
+  check('server exits: and the return exit was resolved from the promise', model.exitOf(road, 'w')?.to, gate.id)
+  tracker.onCommand('n')
+  tracker.onServerRoom({ serverId: 'gmcp:2', name: 'Square', exits: { s: 'gmcp:1', w: 'gmcp:1' } })
+  const square = tracker.currentRoom!
+  check('server exits: the gate’s north now leads to the square without walking it',
+    model.exitOf(model.room(gate.id)!, 'n')?.to, square.id)
+  check('server exits: so does the road’s north', model.exitOf(model.room(road.id)!, 'n')?.to, square.id)
+  // Revisiting a known room still applies what the server says about it.
+  tracker.onCommand('s')
+  tracker.onServerRoom({ serverId: 'gmcp:1', name: 'Gate', exits: { n: 'gmcp:2', e: 'gmcp:3', w: 'gmcp:4' } })
+  check('server exits: a revisit learns a new exit', model.exitOf(model.room(gate.id)!, 'w')?.destServerId, 'gmcp:4')
+}
+
+// ---- reconcile: a copy on a GMCP MUD is settled by the server id ----
+{
+  const { model, tracker, infos } = makeWorld()
+  const real = model.createRoom({ name: 'Plaza', x: 0, y: 0, z: 0, serverId: 'gmcp:7', exits: [] })
+  const copy = model.createRoom({ name: 'Plaza', x: 3, y: 3, z: 0, serverId: 'gmcp:7', exits: [], rivals: [real.id] })
+  tracker.setCurrentRoom(copy.id)
+  check('reconcile: decided by the id alone', model.room(copy.id), null)
+  check('reconcile: standing in the survivor', tracker.currentRoomId, real.id)
+  const rec = (model.map.merges ?? []).slice(-1)[0]
+  check('reconcile: journaled as automatic, with the reason', [rec?.auto, rec?.reason], [true, 'same server id'])
+  check('reconcile: said so', infos.some((t) => t.includes('same server id')), true)
 }
 
 console.log(failures === 0 ? '\nALL PASS' : `\n${failures} FAILURES`)

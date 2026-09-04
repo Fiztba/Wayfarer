@@ -76,6 +76,10 @@ export interface MapExit {
   /** Where the MUD says this exit leads, when it says so before we walk it.
    *  Some codebases list exits as "North - The Path of the Magician". */
   destName?: string
+  /** The server's id for the room this exit leads to, on MUDs that say so.
+   *  Kept even when that room is not mapped yet: the link is written the
+   *  moment a room with this id appears, without anyone walking it. */
+  destServerId?: string
 }
 
 export interface MapRoom {
@@ -207,15 +211,26 @@ export function hashText(text: string): string {
   return h.toString(16).padStart(8, '0')
 }
 
-/** A room absorbed by an automatic merge, kept so it can be put back. */
+/** A room absorbed by a merge, kept so it can be put back. */
 export interface MergeRecord {
+  id: string
+  /** When, so the journal reads in order and the player can tell "just
+   *  now" from "last week". */
+  at: number
+  /** Decided by the mapper's evidence rather than by hand. */
+  auto: boolean
+  /** The evidence, in words, for the journal. */
+  reason?: string
   keptId: string
+  keptName: string
   /** The absorbed room verbatim. */
   dropped: MapRoom
   /** The keeper's exits before it absorbed anything. */
   keptExits: MapExit[]
   /** Exits elsewhere that were redirected onto the keeper. */
   inbound: Array<{ roomId: string; dir: Direction | null; command?: string }>
+  /** Waypoints that stood on the absorbed room and were moved to the keeper. */
+  waypoints?: string[]
   lastRoomId?: string | null
 }
 

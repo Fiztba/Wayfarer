@@ -5,7 +5,7 @@
  * mirroring over IPC). Every mutation goes through MapModel methods, which the
  * remote variant forwards to the owning session.
  */
-import React, { useCallback, useEffect, useState } from 'react'
+import React, { useCallback, useEffect, useMemo, useState } from 'react'
 import { MapCanvas, type MapContextInfo } from './MapCanvas'
 import { ClampedMenu } from './ClampedMenu'
 import type { MapModel } from '../map/MapModel'
@@ -61,6 +61,10 @@ export function MapPane({ model, tracker, walkTo, onPopout, onClose }: MapPanePr
   const [menu, setMenu] = useState<MenuState>({ kind: 'closed' })
   const [showWaypoints, setShowWaypoints] = useState(false)
   const [showDupes, setShowDupes] = useState(false)
+  // Doubts are scanned once per map change, not once per render: the pane
+  // re-renders on every room line, and a big map has a lot of rooms.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const doubts = useMemo(() => model.provisionalRooms(), [model, model.getVersion()])
   /** What the last tidy from this pane did, shown until dismissed. */
   const [tidyNote, setTidyNote] = useState<string | null>(null)
   const [zoneDialog, setZoneDialog] = useState<{
@@ -199,8 +203,12 @@ export function MapPane({ model, tracker, walkTo, onPopout, onClose }: MapPanePr
         <button className="map-btn" title="Waypoints" onClick={() => setShowWaypoints((s) => !s)}>
           ★
         </button>
-        <button className="map-btn" title="Find duplicate rooms" onClick={() => setShowDupes((s) => !s)}>
-          🧹
+        <button
+          className="map-btn"
+          title="Doubts and merges: rooms the mapper is unsure about, and what it has merged (each undoable)"
+          onClick={() => setShowDupes((s) => !s)}
+        >
+          🧹{doubts.length > 0 ? doubts.length : ''}
         </button>
         {onPopout && (
           <button className="map-btn" title="Open map in its own window" onClick={onPopout}>
@@ -360,6 +368,95 @@ export function MapPane({ model, tracker, walkTo, onPopout, onClose }: MapPanePr
 
       {showDupes && (
         <div className="map-waypoints">
+          {doubts.length > 0 && (
+            <>
+              <p className="field-hint">
+                Doubts — rooms the mapper had to create although an existing room might be the same
+                place. It keeps watching and merges on its own once the evidence is in; you can
+                settle it now.
+              </p>
+              {doubts.map((room) => {
+                const rivals = (room.rivals ?? []).map((id) => model.room(id)).filter((r): r is MapRoom => !!r)
+                return (
+                  <div key={room.id} className="map-waypoint-row">
+                    <span className="map-waypoint-name" title="Locate" onClick={() => locateRoom(room.id)}>
+                      {room.name}
+                    </span>
+                    <span className="field-hint">might be</span>
+                    {rivals.map((r, i) => (
+                      <button key={r.id} className="map-btn" title={`Locate the other "${r.name}"`} onClick={() => locateRoom(r.id)}>
+                        {i + 1}
+                      </button>
+                    ))}
+                    <button
+                      className="map-btn"
+                      title="It is that room: merge this copy into it"
+                      disabled={rivals.length === 0}
+                      onClick={() => {
+                        const keeper = [...rivals].sort(
+                          (a, b) => model.inboundLinkCount(b.id) - model.inboundLinkCount(a.id)
+                        )[0]
+                        model.mergeRooms(keeper.id, room.id, { auto: false, reason: 'merged by hand' })
+                        if (tracker.currentRoomId === room.id) tracker.setCurrentRoom(keeper.id)
+                        locateRoom(keeper.id)
+                      }}
+                    >
+                      Same
+                    </button>
+                    <button
+                      className="map-btn"
+                      title="It is a different room: drop the doubt"
+                      onClick={() => model.dismissDoubt(room.id)}
+                    >
+                      Different
+                    </button>
+                  </div>
+                )
+              })}
+            </>
+          )}
+          {(model.map.merges?.length ?? 0) > 0 && (
+            <>
+              <p className="field-hint">Merges, newest first. Undo puts the absorbed room back.</p>
+              {[...(model.map.merges ?? [])].reverse().map((rec) => {
+                const keeper = model.room(rec.keptId)
+                // A keeper that was itself merged later is not gone; it is
+                // behind a newer entry, which has to be undone first.
+                const later = (model.map.merges ?? []).find((m) => m.at > rec.at && m.dropped.id === rec.keptId)
+                const blocked = !keeper
+                  ? later
+                    ? `Undo the later merge of “${rec.keptName}” first`
+                    : 'Cannot undo: the room it was merged into is gone'
+                  : null
+                const when = new Date(rec.at).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
+                return (
+                  <div key={rec.id} className="map-waypoint-row" title={rec.reason ?? ''}>
+                    <span
+                      className="map-waypoint-name"
+                      style={{ cursor: keeper ? 'pointer' : 'default' }}
+                      title={keeper ? 'Locate' : 'The room it was merged into is gone'}
+                      onClick={() => keeper && locateRoom(keeper.id)}
+                    >
+                      {rec.auto ? '⚙' : '✋'} “{rec.dropped.name}” → “{rec.keptName}”
+                      {rec.reason ? <span className="field-hint"> · {rec.reason}</span> : null}
+                    </span>
+                    <span className="field-hint">{when}</span>
+                    <button
+                      className="map-btn"
+                      disabled={!keeper || !!model.room(rec.dropped.id)}
+                      title={blocked ?? 'Put the absorbed room back'}
+                      onClick={() => {
+                        const restored = model.undoMerge(rec.id)
+                        if (restored) locateRoom(restored.id)
+                      }}
+                    >
+                      Undo
+                    </button>
+                  </div>
+                )
+              })}
+            </>
+          )}
           {model.findDuplicateGroups().length === 0 ? (
             <p className="field-hint">No rooms share an identical name + exits. Map looks clean.</p>
           ) : (

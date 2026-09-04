@@ -15,6 +15,7 @@ import type { MapModel } from './MapModel.ts'
 import { RoomCapture, closedDoorName, isMoveFailure, isClosedDoorFailure } from './capture.ts'
 import {
   DIR_DELTA,
+  DIR_FULL,
   hashText,
   normalizeRoomName,
   OPPOSITE,
@@ -398,6 +399,7 @@ export class MapTracker implements TrackerControl {
         this.model.updateRoom(existing.id, { name: info.name })
       }
       this.applyServerDetail(existing.id, info)
+      this.applyServerExits(existing.id, info)
       this.notify()
       return
     }
@@ -411,6 +413,9 @@ export class MapTracker implements TrackerControl {
         serverId: info.serverId,
         ...(info.name ? { name: info.name } : {})
       })
+      this.applyServerDetail(roomId, info)
+      this.applyServerExits(roomId, info)
+      this.model.resolveServerLinks(info.serverId, roomId)
       this.currentRoomId = roomId
       this.lost = false
       this.notify()
@@ -464,17 +469,9 @@ export class MapTracker implements TrackerControl {
       ...pos
     })
     this.applyServerDetail(room.id, info)
-    if (info.exits) {
-      for (const [dirWord, destSid] of Object.entries(info.exits)) {
-        const dir = wordToDirection(dirWord)
-        if (!dir) continue
-        const exit = this.model.ensureExit(room.id, dir)
-        if (exit && destSid) {
-          const dest = this.model.findByServerId(String(destSid))
-          if (dest) exit.to = dest.id
-        }
-      }
-    }
+    this.applyServerExits(room.id, info)
+    // Rooms mapped earlier may already have said their exits lead here.
+    this.model.resolveServerLinks(info.serverId, room.id)
     if (from && move) this.linkMove(from, move, room.id, true)
     this.currentRoomId = room.id
     this.lost = false
@@ -485,6 +482,24 @@ export class MapTracker implements TrackerControl {
   private applyServerDetail(roomId: string, info: ServerRoomInfo): void {
     for (const dir of info.doors ?? []) this.model.setDoor(roomId, dir, true)
     if (info.description) this.model.addDescHash(roomId, hashText(info.description))
+  }
+
+  /**
+   * What the server says about where this room's exits lead, applied on
+   * every arrival and not just when the room is created. A room drawn from
+   * text before ids were available, or one revisited, gets its links filled
+   * in without anyone walking them -- and on MUDs like this the exits are
+   * what tell two same-named rooms apart, so this is also what feeds the
+   * reconciler.
+   */
+  private applyServerExits(roomId: string, info: ServerRoomInfo): void {
+    if (!info.exits) return
+    for (const [dirWord, destSid] of Object.entries(info.exits)) {
+      const dir = wordToDirection(dirWord)
+      if (!dir) continue
+      if (destSid) this.model.setServerLink(roomId, dir, String(destSid))
+      else this.model.ensureExit(roomId, dir)
+    }
   }
 
   // ---- text-based dead reckoning ------------------------------------------
@@ -858,57 +873,65 @@ export class MapTracker implements TrackerControl {
   private reconcile(): void {
     for (const room of this.model.provisionalRooms()) {
       const alive: MapRoom[] = []
-      let best: MapRoom | null = null
-      let bestScore = 0
+      let best: { rival: MapRoom; score: number; reasons: string[] } | null = null
       for (const id of room.rivals ?? []) {
         const rival = this.model.room(id)
         if (!rival) continue
-        const score = this.sameRoomScore(room, rival)
-        if (score === null) continue // ruled out for good
+        const evidence = this.sameRoomEvidence(room, rival)
+        if (evidence === null) continue // ruled out for good
         alive.push(rival)
-        if (score > bestScore) {
-          bestScore = score
-          best = rival
-        }
+        if (!best || evidence.score > best.score) best = { rival, ...evidence }
       }
       this.model.setRivals(
         room.id,
         alive.map((r) => r.id)
       )
-      if (alive.length !== 1 || !best || bestScore < MERGE_CONFIDENCE) continue
-      const name = best.name
+      if (alive.length !== 1 || !best || best.score < MERGE_CONFIDENCE) continue
+      const name = best.rival.name
       const standingHere = this.currentRoomId === room.id
       // The older room survives: it carries the links and history.
-      this.model.mergeRooms(best.id, room.id)
-      if (standingHere) this.currentRoomId = best.id
+      this.model.mergeRooms(best.rival.id, room.id, { auto: true, reason: best.reasons.join('; ') })
+      if (standingHere) this.currentRoomId = best.rival.id
       this.host.info(
-        `Mapper: "${name}" turned out to be a room already on the map — merged the copy away. #unmerge puts it back.`
+        `Mapper: "${name}" turned out to be a room already on the map — merged the copy away (${best.reasons.join(', ')}). #unmerge puts it back.`
       )
     }
   }
 
   /**
-   * How much says these two are the same room, or null once something says
-   * they cannot be. Descriptions rule out outright, because two rooms that
-   * genuinely look different are genuinely different; exits agreeing about
-   * where they lead is corroboration, exits disagreeing is a contradiction.
+   * How much says these two are the same room, in points and in words, or
+   * null once something says they cannot be. A server id is decisive either
+   * way. Descriptions rule out outright, because two rooms that genuinely
+   * look different are genuinely different; exits agreeing about where they
+   * lead is corroboration, exits disagreeing is a contradiction.
    */
-  private sameRoomScore(a: MapRoom, b: MapRoom): number | null {
+  private sameRoomEvidence(a: MapRoom, b: MapRoom): { score: number; reasons: string[] } | null {
+    const reasons: string[] = []
+    let score = 0
+    if (a.serverId && b.serverId) {
+      if (a.serverId !== b.serverId) return null
+      score += 10
+      reasons.push('same server id')
+    }
     const ah = a.descHashes ?? []
     const bh = b.descHashes ?? []
-    let score = 0
     if (ah.length > 0 && bh.length > 0) {
       if (!ah.some((h) => bh.includes(h))) return null
       score += 2
+      reasons.push('same description')
     }
+    const agreed: string[] = []
     for (const ea of a.exits) {
       if (!ea.dir || !ea.to) continue
       const eb = b.exits.find((e) => e.dir === ea.dir)
       if (!eb || !eb.to) continue
-      if (eb.to === ea.to) score += 2
-      else if (ea.to !== b.id && eb.to !== a.id) return null
+      if (eb.to === ea.to) {
+        score += 2
+        agreed.push(DIR_FULL[ea.dir] ?? ea.dir)
+      } else if (ea.to !== b.id && eb.to !== a.id) return null
     }
-    return score
+    if (agreed.length > 0) reasons.push(`${agreed.join(' and ')} lead${agreed.length === 1 ? 's' : ''} to the same room`)
+    return { score, reasons }
   }
 
   // ---- speculation --------------------------------------------------------
