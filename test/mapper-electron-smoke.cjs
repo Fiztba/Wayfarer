@@ -30,6 +30,7 @@ app.whenReady().then(async () => {
       const model = new MapModel(${JSON.stringify(map)}, () => {});
       const tracker = new MapTracker(model, {info: () => {}});
       window.tracker = tracker;
+      window.model = model;
       window.makeAmbiguous = () => {
         model.createRoom({...model.room('hall'), id: 'hall-copy', x: 5, y: 5});
         tracker.setCurrentRoom(null);
@@ -137,6 +138,26 @@ app.whenReady().then(async () => {
     assert.equal(await js('window.tracker.currentRoom.exits.length'), 2)
     assert.equal(await js('window.tracker.speculative'), false)
     console.log('ok add-and-locate menu captures a look in the new room while guesses were pending')
+    await js(`(() => {
+      const start = window.model.createRoom({name: 'Zone display anchor', zoneId: 'maze', x: 20, y: 20, z: 0});
+      for (const name of ['First repeated street', 'Second repeated street']) {
+        window.model.createRoom({name, zoneId: 'tower', x: 30, y: 30, z: 2,
+          exits: [{dir: 'e', to: null, door: false}, {dir: 'w', to: null, door: false}]});
+      }
+      window.tracker.setCurrentRoom(start.id);
+      window.seeStreet = (name) => {
+        window.tracker.onCommand('e'); window.tracker.onLine(name);
+        window.tracker.onLine('Houses line the cobblestone street.'); window.tracker.onLine('Exits: east west');
+      };
+      window.seeStreet('First repeated street');
+    })()`)
+    await waitFor(`document.querySelector('.map-zone-select').value === 'maze'`)
+    await js(`window.seeStreet('Second repeated street')`)
+    await waitFor(`document.querySelector('.map-confidence').textContent.includes('Provisional position: Second repeated street')`)
+    assert.equal(await js(`document.querySelector('.map-zone-select').value`), 'maze')
+    assert.ok(await js(`document.querySelector('.map-level').textContent.includes('L0')`))
+    assert.deepEqual(await js(`window.tracker.confidence.expectedPosition`), {x: 22, y: 20, z: 0, zoneId: 'maze'})
+    console.log('ok restarted recognition keeps the displayed zone and level despite a cross-zone candidate')
   }
   assert.deepEqual(errors, [])
   win.destroy()

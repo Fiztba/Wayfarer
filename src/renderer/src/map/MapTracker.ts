@@ -967,9 +967,11 @@ export class MapTracker implements TrackerControl {
     dir: Direction | null,
     det: RoomDetection,
     candidates: MapRoom[],
-    command?: string
+    command?: string,
+    approach?: Speculation['approach']
   ): void {
     this.speculation = {
+      approach,
       anchorRoomId: anchor?.id ?? null,
       rivals: candidates.map((c) => c.id),
       steps: [{ dir, command, det }],
@@ -1109,9 +1111,9 @@ export class MapTracker implements TrackerControl {
               steps: [...spec.approach.steps, ...spec.steps.slice(1)] }
           : anchor && spec.steps[0].dir && !this.model.exitOf(anchor, spec.steps[0].dir)?.to
             ? { anchorRoomId: anchor.id, steps: [...spec.steps] } : undefined
-        this.beginSpeculation(anchor, null, det, candidates)
-        if (this.speculation && approach && approach.steps.length <= SPECULATION_CAP) {
-          this.speculation.approach = approach
+        const retained = approach && approach.steps.length <= SPECULATION_CAP ? approach : undefined
+        this.beginSpeculation(anchor, null, det, candidates, undefined, retained)
+        if (this.speculation && retained) {
           if (this.mode === 'map' && this.approachConfirmsEndpoint(this.speculation)) {
             this.settleOn(this.speculation.hypotheses[0])
           }
@@ -1221,10 +1223,13 @@ export class MapTracker implements TrackerControl {
 
   /** Display dead reckoning separately from candidate identity until settled. */
   private expectedPosition(spec: Speculation): PositionConfidence['expectedPosition'] {
-    const anchor = this.model.room(spec.anchorRoomId)
-    if (!anchor || !spec.steps[0]?.dir) return undefined
+    const anchor = this.model.room(spec.approach?.anchorRoomId ?? spec.anchorRoomId)
+    // Recognition may restart while the observed path remains anchored. Its
+    // first reading overlaps the approach endpoint, so count that move once.
+    const steps = spec.approach ? [...spec.approach.steps, ...spec.steps.slice(1)] : spec.steps
+    if (!anchor || !steps[0]?.dir) return undefined
     let { x, y, z } = anchor
-    for (const step of spec.steps) {
+    for (const step of steps) {
       if (step.command) return undefined
       if (!step.dir) continue
       const [dx, dy, dz] = DIR_DELTA[step.dir]

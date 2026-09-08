@@ -32,6 +32,8 @@ for (const direction of ['e', 'w'] as const) {
         descHashes: [hashText(bodies[index])], exits: ['e', 'w'].map(dir => ({ dir: dir as 'e' | 'w', to: null, door: false })) })
       const west = add(0, 0), east = add(3, 3)
       const copies = [add(1, 10), add(2, 11)]
+      const otherZone = f.model.createZone('Other town')
+      for (const copy of copies) f.model.updateRoom(copy.id, { zoneId: otherZone, z: 2 })
       const endpoint = direction === 'e' ? east : west
       if (variant === 'displaced') f.model.updateRoom(endpoint.id, { y: 5 })
       if (variant === 'ambiguous') add(direction === 'e' ? 3 : 0, 20)
@@ -40,7 +42,17 @@ for (const direction of ['e', 'w'] as const) {
       f.tracker.setCurrentRoom(direction === 'e' ? west.id : east.id)
       const walk = (dir: 'e' | 'w') => {
         for (const index of dir === 'e' ? [1, 2, 3] : [2, 1, 0]) {
+          const positions: unknown[] = []
+          const unsubscribe = f.tracker.subscribe(() => {
+            if (f.tracker.speculative) positions.push(f.tracker.confidence.expectedPosition)
+          })
           f.tracker.onCommand(dir); f.see(names[index], bodies[index], 'east west')
+          unsubscribe()
+          if (variant === 'ordinary' && index > 0 && index < 3) {
+            assert.ok(positions.length > 0 || !f.tracker.speculative)
+            for (const position of positions) assert.deepEqual(position,
+              { x: index, y: 0, z: 0, zoneId: west.zoneId }, 'every notification retains the walked position, not a cross-zone guess')
+          }
         }
       }
       walk(direction)
