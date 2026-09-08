@@ -50,6 +50,7 @@ interface Props {
   zoneId: string
   z: number
   currentRoomId: string | null
+  candidateRoomIds?: string[]
   /** The position is a guess the mapper has not settled yet. */
   currentIsGuess?: boolean
   selectedRoomId: string | null
@@ -399,14 +400,15 @@ export function MapCanvas(props: Props) {
         ctx.strokeRect(sx - half - 4, sy - half - 4, half * 2 + 8, half * 2 + 8)
       }
 
-      if (room.id === currentRoomId) {
+      const candidate = propsRef.current.candidateRoomIds?.includes(room.id)
+      if (room.id === currentRoomId || candidate) {
         // A dashed ring means the mapper is holding a guess rather than a
         // settled position -- it may quietly move once the next room or two
         // rule the alternatives out. Without this, self-correction reads as
         // the map rewriting itself behind you.
-        ctx.strokeStyle = currentIsGuess ? '#c8a04a' : '#61afef'
+        ctx.strokeStyle = currentIsGuess || candidate ? '#c8a04a' : '#61afef'
         ctx.lineWidth = 2.5
-        if (currentIsGuess) ctx.setLineDash([4, 3])
+        if (currentIsGuess || candidate) ctx.setLineDash([4, 3])
         ctx.beginPath()
         ctx.roundRect(sx - half - 3, sy - half - 3, half * 2 + 6, half * 2 + 6, 6 * view.scale)
         ctx.stroke()

@@ -93,7 +93,9 @@ export function MapPane({ model, tracker, walkTo: startWalk, onPopout, onClose }
     [model]
   )
 
-  const current = tracker.currentRoom
+  const confidence = tracker.confidence
+  const ambiguous = tracker.speculative && confidence.candidates > 1
+  const current = ambiguous ? null : tracker.currentRoom
   const zoneId = viewZoneId ?? current?.zoneId ?? model.activeZoneId ?? ''
   const z = viewZ ?? current?.z ?? 0
   const inspectedRoom = model.room(selectedId) ?? current
@@ -269,7 +271,7 @@ export function MapPane({ model, tracker, walkTo: startWalk, onPopout, onClose }
         </div>
       )}
       <div className={`map-confidence map-confidence-${tracker.confidence.state}`} role="status" title="Evidence score, not a statistical probability">
-        <strong>{tracker.speculative ? 'Best guess' : tracker.lost ? 'Position unknown' : 'Position'}: {tracker.currentRoom?.name ?? 'Unknown'} · Confidence {tracker.confidence.score}/100</strong>
+        <strong>{ambiguous ? 'Ambiguous position' : tracker.speculative ? 'Best guess' : tracker.lost ? 'Position unknown' : 'Position'}: {confidence.observedName ?? tracker.currentRoom?.name ?? 'Unknown'} · Confidence {confidence.score}/100</strong>
         <span>{tracker.confidence.reason}{tracker.speculative ? ` Candidates: ${tracker.confidence.candidates} · Observations: ${tracker.confidence.observations}.` : ''}</span>
       </div>
       {(tracker.lost || (!tracker.currentRoomId && Object.keys(model.map.rooms).length > 0)) && (
@@ -550,7 +552,8 @@ export function MapPane({ model, tracker, walkTo: startWalk, onPopout, onClose }
           map={model.map}
           zoneId={zoneId}
           z={z}
-          currentRoomId={tracker.currentRoomId}
+          currentRoomId={current?.id ?? null}
+          candidateRoomIds={ambiguous ? confidence.candidateRoomIds : undefined}
           currentIsGuess={tracker.speculative}
           selectedRoomId={selectedId}
           selectedRoomIds={multiSel}

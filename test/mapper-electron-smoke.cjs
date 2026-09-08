@@ -30,6 +30,11 @@ app.whenReady().then(async () => {
       const model = new MapModel(${JSON.stringify(map)}, () => {});
       const tracker = new MapTracker(model, {info: () => {}});
       window.tracker = tracker;
+      window.makeAmbiguous = () => {
+        model.createRoom({...model.room('hall'), id: 'hall-copy', x: 5, y: 5});
+        tracker.setCurrentRoom(null);
+        tracker.onLine('Hall of Mirrors'); tracker.onLine('Exits: north east south west up northwest');
+      };
       window.walks = []; window.graph = () => JSON.stringify(model.map);
       createRoot(document.getElementById('root')).render(<MapPane model={model} tracker={tracker} walkTo={(id) => window.walks.push(id)} />);
     ` } })
@@ -101,6 +106,12 @@ app.whenReady().then(async () => {
     assert.ok(await js(`document.querySelector('.map-confidence').scrollWidth <= document.querySelector('.map-confidence').clientWidth`))
     if (process.env.WAYFARER_CONFIDENCE_CAPTURE) fs.writeFileSync(process.env.WAYFARER_CONFIDENCE_CAPTURE, (await win.webContents.capturePage()).toPNG())
     console.log('ok tentative confidence is visible, fits a narrow pane, and prevents starting a route')
+    await js('window.makeAmbiguous()')
+    await waitFor(`document.querySelector('.map-confidence').textContent.includes('Ambiguous position: Hall of Mirrors')`)
+    assert.ok(await js(`document.querySelector('.map-confidence').textContent.includes('Candidates: 2')`))
+    assert.ok(await js(`document.querySelector('.map-confidence').textContent.includes('may also be a new room')`))
+    assert.equal(await js(`document.querySelector('.map-confidence').textContent.includes('Best guess')`), false)
+    console.log('ok equally plausible rooms are shown as alternatives, not a ranked best guess')
   }
   assert.deepEqual(errors, [])
   win.destroy()

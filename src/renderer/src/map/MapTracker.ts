@@ -82,6 +82,9 @@ interface Speculation {
 }
 
 export interface PositionConfidence {
+  /** Mapped alternatives, with no ordering by likelihood. */
+  candidateRoomIds?: string[]
+  observedName?: string
   score: number
   state: 'confirmed' | 'tentative' | 'unknown'
   candidates: number
@@ -271,7 +274,9 @@ export class MapTracker implements TrackerControl {
       const evidence = Math.min(...spec.hypotheses.map((h) => h.corroborations))
       return { score: Math.min(90, (spec.hypotheses.length === 1 ? 55 : 30) + evidence * 15),
         state: 'tentative', candidates: spec.hypotheses.length, observations: spec.steps.length,
-        reason: 'Checking later rooms against mapped exits. No guessed links saved.' }
+        candidateRoomIds: [...new Set(spec.hypotheses.map((h) => h.path[h.path.length - 1]))],
+        observedName: spec.steps[spec.steps.length - 1]?.det.name,
+        reason: 'Checking later rooms against mapped exits. This may also be a new room. No guessed links saved.' }
     }
     if (this.lost || !this.currentRoomId) return { score: 0, state: 'unknown', candidates: 0, observations: 0, reason: 'Waiting for a recognizable room or a manual position.' }
     return { score: 100, state: 'confirmed', candidates: 1, observations: 0,
@@ -340,7 +345,7 @@ export class MapTracker implements TrackerControl {
       const openDir = wordToDirection(open[1])
       if (openDir) {
         this.lastOpenDir = openDir
-        if (this.currentRoomId && !this.lost) {
+        if (this.currentRoomId && !this.lost && !this.speculative) {
           this.model.setDoor(this.currentRoomId, openDir, true)
         }
       }
@@ -371,7 +376,7 @@ export class MapTracker implements TrackerControl {
       if (failed && failed.dir) {
         const closedDoor = isClosedDoorFailure(plain)
         const named = closedDoor ? closedDoorName(plain) : null
-        if (closedDoor && this.currentRoomId && !this.lost) {
+        if (closedDoor && this.currentRoomId && !this.lost && !this.speculative) {
           // Door in the way: record it (and a stub exit) without moving. The
           // refusal usually names the thing, and that name is what has to be
           // opened -- "grate", not "door".
