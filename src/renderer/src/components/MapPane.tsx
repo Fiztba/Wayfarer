@@ -95,9 +95,10 @@ export function MapPane({ model, tracker, walkTo: startWalk, onPopout, onClose }
 
   const confidence = tracker.confidence
   const ambiguous = tracker.speculative && confidence.candidates > 1
-  const current = ambiguous || tracker.lost ? null : tracker.currentRoom
-  const zoneId = viewZoneId ?? current?.zoneId ?? model.activeZoneId ?? ''
-  const z = viewZ ?? current?.z ?? 0
+  const expected = confidence.expectedPosition
+  const current = expected || ambiguous || tracker.lost ? null : tracker.currentRoom
+  const zoneId = viewZoneId ?? expected?.zoneId ?? current?.zoneId ?? model.activeZoneId ?? ''
+  const z = viewZ ?? expected?.z ?? current?.z ?? 0
   const inspectedRoom = model.room(selectedId) ?? current
   const visibleInspection = inspectedRoom?.zoneId === zoneId && inspectedRoom?.z === z ? inspectedRoom : null
   const activeExitFocus = showExits && visibleInspection?.id === exitFocus?.roomId ? exitFocus : null
@@ -105,14 +106,14 @@ export function MapPane({ model, tracker, walkTo: startWalk, onPopout, onClose }
 
   // Auto-follow: when the player moves, snap the view to their zone/level.
   useEffect(() => {
-    if (current) {
+    if (current || expected) {
       setViewZoneId(null)
       setViewZ(null)
       setCenterRoomId(null)
       setCenterToken((t) => t + 1)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [current?.id])
+  }, [current?.id, expected?.x, expected?.y, expected?.z, expected?.zoneId])
 
   const closeMenu = useCallback(() => setMenu({ kind: 'closed' }), [])
 
@@ -271,7 +272,8 @@ export function MapPane({ model, tracker, walkTo: startWalk, onPopout, onClose }
         </div>
       )}
       <div className={`map-confidence map-confidence-${tracker.confidence.state}`} role="status" title="Evidence score, not a statistical probability">
-        <strong>{tracker.lost ? 'Position unknown' : `${ambiguous ? 'Ambiguous position' : tracker.speculative ? 'Best guess' : 'Position'}: ${confidence.observedName ?? tracker.currentRoom?.name ?? 'Unknown'}`} · Confidence {confidence.score}/100</strong>
+        <strong>{tracker.lost ? 'Position unknown' : `${expected ? 'Provisional position' : ambiguous ? 'Ambiguous position' : tracker.speculative ? 'Best guess' : 'Position'}: ${confidence.observedName ?? tracker.currentRoom?.name ?? 'Unknown'}`} · Confidence {confidence.score}/100</strong>
+        {expected && <span>Dashed ? marks your compass position; room identity is still unconfirmed.</span>}
         <span>{tracker.confidence.reason}{tracker.speculative ? ` Candidates: ${tracker.confidence.candidates} · Observations: ${tracker.confidence.observations}.` : ''}</span>
       </div>
       {(tracker.lost || (!tracker.currentRoomId && Object.keys(model.map.rooms).length > 0)) && (
@@ -553,7 +555,8 @@ export function MapPane({ model, tracker, walkTo: startWalk, onPopout, onClose }
           zoneId={zoneId}
           z={z}
           currentRoomId={current?.id ?? null}
-          candidateRoomIds={ambiguous ? confidence.candidateRoomIds : undefined}
+          candidateRoomIds={ambiguous && !expected ? confidence.candidateRoomIds : undefined}
+          expectedPosition={expected}
           currentIsGuess={tracker.speculative}
           selectedRoomId={selectedId}
           selectedRoomIds={multiSel}

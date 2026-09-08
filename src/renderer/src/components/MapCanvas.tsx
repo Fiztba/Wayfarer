@@ -51,6 +51,7 @@ interface Props {
   z: number
   currentRoomId: string | null
   candidateRoomIds?: string[]
+  expectedPosition?: { x: number; y: number; z: number; zoneId: string }
   /** The position is a guess the mapper has not settled yet. */
   currentIsGuess?: boolean
   selectedRoomId: string | null
@@ -373,6 +374,19 @@ export function MapCanvas(props: Props) {
     for (const link of connectors) if (isHighlighted(link)) drawLink(link, true)
 
     // ---- rooms ----
+    const provisional = propsRef.current.expectedPosition
+    if (provisional?.zoneId === zoneId && provisional.z === z) {
+      const [sx, sy] = toScreen(provisional.x, provisional.y)
+      ctx.strokeStyle = '#e3b75e'
+      ctx.lineWidth = 2
+      ctx.setLineDash([4, 3])
+      ctx.strokeRect(sx - half - 5, sy - half - 5, half * 2 + 10, half * 2 + 10)
+      ctx.setLineDash([])
+      ctx.fillStyle = '#e3b75e'
+      ctx.font = `${Math.max(10, 12 * view.scale)}px sans-serif`
+      ctx.textAlign = 'center'
+      ctx.fillText('?', sx, sy - half - 9)
+    }
     for (const room of rooms) {
       const [rx, ry] = roomPos(room)
       const [sx, sy] = toScreen(rx, ry)
@@ -501,7 +515,7 @@ export function MapCanvas(props: Props) {
     if (props.centerToken === lastCenter.current) return
     lastCenter.current = props.centerToken
     const targetId = props.centerRoomId ?? props.currentRoomId
-    const target = targetId ? props.map.rooms[targetId] : null
+    const target = targetId ? props.map.rooms[targetId] : props.expectedPosition
     if (target) {
       const view = viewRef.current
       view.panX = -target.x * CELL * view.scale

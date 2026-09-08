@@ -116,6 +116,13 @@ app.whenReady().then(async () => {
     await waitFor(`document.querySelector('.map-confidence').textContent.includes('Position unknown')`)
     assert.equal(await js(`document.querySelector('.map-confidence').textContent.includes('Hall of Mirrors')`), false)
     console.log('ok lost tracking does not label the stale anchor as the current location')
+    await js(`window.tracker.setCurrentRoom('hall'); window.tracker.onCommand('n'); window.tracker.onLine('Gallery'); window.tracker.onLine('Exits: east south southeast')`)
+    await waitFor(`document.querySelector('.map-confidence').textContent.includes('Provisional position: Gallery')`)
+    assert.deepEqual(await js(`window.tracker.confidence.expectedPosition`), { x: 0, y: -1, z: 0, zoneId: 'maze' })
+    assert.ok(await js(`document.querySelector('.map-confidence').textContent.includes('Dashed ?')`))
+    await waitFor(`document.querySelector('.map-zone-select').value === 'maze'`)
+    if (process.env.WAYFARER_PROVISIONAL_CAPTURE) fs.writeFileSync(process.env.WAYFARER_PROVISIONAL_CAPTURE, (await win.webContents.capturePage()).toPNG())
+    console.log('ok provisional display follows compass movement without selecting the off-direction candidate')
   }
   assert.deepEqual(errors, [])
   win.destroy()

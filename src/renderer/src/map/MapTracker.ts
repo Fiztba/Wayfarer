@@ -82,6 +82,7 @@ interface Speculation {
 }
 
 export interface PositionConfidence {
+  expectedPosition?: { x: number; y: number; z: number; zoneId: string }
   /** Mapped alternatives, with no ordering by likelihood. */
   candidateRoomIds?: string[]
   observedName?: string
@@ -283,6 +284,7 @@ export class MapTracker implements TrackerControl {
     if (spec) {
       const evidence = Math.min(...spec.hypotheses.map((h) => h.corroborations))
       return { score: Math.min(90, (spec.hypotheses.length === 1 ? 55 : 30) + evidence * 15 + (this.hasArrivalPrior(spec) ? 20 : 0)),
+        expectedPosition: this.expectedPosition(spec),
         state: 'tentative', candidates: spec.hypotheses.length, observations: spec.steps.length,
         candidateRoomIds: [...new Set(spec.hypotheses.map((h) => h.path[h.path.length - 1]))],
         observedName: spec.steps[spec.steps.length - 1]?.det.name,
@@ -979,6 +981,22 @@ export class MapTracker implements TrackerControl {
     // next distinct arrival, provided no saved destination contradicts it.
     const held = spec.hypotheses.length === 1 ? spec.hypotheses[0] : null
     const from = held ? this.model.room(held.path[held.path.length - 1]) : null
+    const anchor = this.model.room(spec.anchorRoomId)
+    const returnTarget = from && move ? this.exitForMove(from, move)?.to : null
+    if (held && from && anchor && move?.dir && spec.steps[0].dir && this.hasArrivalPrior(spec) &&
+        held.path.every((id) => id === from.id) && move.dir === OPPOSITE[spec.steps[0].dir] &&
+        (!returnTarget || returnTarget === anchor.id) && det.descHash &&
+        anchor.descHashes?.includes(det.descHash) && this.couldBe(anchor, det) &&
+        this.candidatesFor(det).length === 1) {
+      // An observed out-and-back supplies the return evidence even when
+      // neither side was previously linked. Do not keep restarting the guess.
+      this.settleOn(held)
+      if (this.mode === 'map') this.recordObservedArrival(from, move, anchor)
+      this.refreshExits(anchor, det)
+      this.currentRoomId = anchor.id
+      this.notify()
+      return
+    }
     if (held && from && move && this.hasArrivalPrior(spec) &&
         !this.exitForMove(from, move)?.to && !this.cloneOfDoubt(spec, det) &&
         this.candidatesFor(det).length === 0) {
@@ -987,6 +1005,13 @@ export class MapTracker implements TrackerControl {
       else this.handleSpecialMove(from, move.command ?? '', det)
       return
     }
+    const disprovedClone = !!move && spec.hypotheses.length > 0 && this.cloneOfDoubt(spec, det) &&
+      spec.hypotheses.every((h) => {
+        const at = this.model.room(h.path[h.path.length - 1])
+        const destination = at ? this.exitForMove(at, move)?.to : null
+        const room = destination ? this.model.room(destination) : null
+        return !!room && !this.couldBe(room, det)
+      })
     spec.steps.push({ dir: move?.dir ?? null, command: move?.command, det })
 
     const survivors: Hypothesis[] = []
@@ -1017,6 +1042,10 @@ export class MapTracker implements TrackerControl {
       return
     }
     if (survivors.length === 0) {
+      if (disprovedClone && this.mode === 'map' && spec.steps[0].dir && spec.anchorRoomId) {
+        this.settleAsNew()
+        return
+      }
       // A route prediction broke, but the current room may still be familiar.
       // Restart from that observation without attaching it to an uncertain
       // origin. Do not "repair" a whole guessed path to make it fit.
@@ -1073,6 +1102,20 @@ export class MapTracker implements TrackerControl {
     const [dx, dy, dz] = DIR_DELTA[first.dir]
     return candidate.zoneId === anchor.zoneId && candidate.x === anchor.x + dx &&
       candidate.y === anchor.y + dy && candidate.z === anchor.z + dz
+  }
+
+  /** Display dead reckoning separately from candidate identity until settled. */
+  private expectedPosition(spec: Speculation): PositionConfidence['expectedPosition'] {
+    const anchor = this.model.room(spec.anchorRoomId)
+    if (!anchor || !spec.steps[0]?.dir) return undefined
+    let { x, y, z } = anchor
+    for (const step of spec.steps) {
+      if (step.command) return undefined
+      if (!step.dir) continue
+      const [dx, dy, dz] = DIR_DELTA[step.dir]
+      x += dx; y += dy; z += dz
+    }
+    return { x, y, z, zoneId: anchor.zoneId }
   }
 
   /** One reading left: write the path it describes, backfilling every room it

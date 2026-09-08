@@ -104,3 +104,61 @@ console.log('ok unexplored exits preserve supported re-entry; weak and contradic
     console.log('ok return from the bridge followed by south enters the shop, not the stale bridge anchor')
   } finally { f.close() }
 }
+
+// A cloned Crystal Street south of the intersection cannot make north look
+// like south. A second north that contradicts its mapped exit creates new rooms.
+{
+  const f = fixture()
+  try {
+    const body = 'Residential buildings lie east and the river lies west behind a wooden fence.'
+    const intersection = f.model.createRoom({ name: 'Intersection of Crystal Street and Main Street', x: 0, y: 0,
+      exits: [{ dir: 'n', to: null, door: false }, { dir: 's', to: null, door: false }] })
+    const old = f.model.createRoom({ name: 'Crystal Street', x: 0, y: 1, descHashes: [hashText(body)],
+      exits: [{ dir: 'n', to: null, door: false }, { dir: 's', to: null, door: false }] })
+    f.model.linkRooms(old.id, 'n', intersection.id, false)
+    f.tracker.setCurrentRoom(intersection.id)
+    f.tracker.onCommand('n'); f.see('Crystal Street', body, 'north south')
+    assert.deepEqual(f.tracker.confidence.expectedPosition, { x: 0, y: -1, z: 0, zoneId: intersection.zoneId })
+    assert.equal(f.model.exitOf(intersection, 'n')?.to, null)
+    f.tracker.onCommand('n'); f.see('Crystal Street', body, 'north south')
+    assert.equal(f.tracker.speculative, false)
+    assert.deepEqual([f.tracker.currentRoom?.x, f.tracker.currentRoom?.y], [0, -2])
+    const north = f.model.room(f.model.exitOf(intersection, 'n')?.to ?? '')!
+    assert.deepEqual([north.x, north.y], [0, -1])
+    assert.equal(f.model.exitOf(north, 'n')?.to, f.tracker.currentRoomId)
+    assert.equal(f.model.exitOf(old, 'n')?.to, intersection.id)
+    assert.equal(Object.keys(f.model.map.rooms).length, 4)
+    f.tracker.onCommand('n'); f.see('Crystal Street', body, 'north south')
+    f.tracker.onCommand('n'); f.see('Intersection of Crystal Street and Wyverns Way', 'Wyverns Way crosses Crystal Street at this cobbled intersection.', 'north east south west')
+    assert.equal(f.tracker.lost, false)
+    assert.equal(f.tracker.speculative, false)
+    assert.deepEqual([f.tracker.currentRoom?.x, f.tracker.currentRoom?.y], [0, -4])
+    assert.equal(Object.keys(f.model.map.rooms).length, 6)
+    let cursor = intersection
+    for (let y = -1; y >= -4; y--) {
+      cursor = f.model.room(f.model.exitOf(cursor, 'n')?.to ?? '')!
+      assert.ok(cursor, 'every northbound exit is fully linked')
+      assert.equal(cursor.y, y)
+    }
+    console.log('ok north displays north provisionally, then a disproved clone becomes two new connected rooms')
+  } finally { f.close() }
+}
+
+{
+  const f = fixture()
+  try {
+    const street = f.model.createRoom({ name: 'Main Street', x: 0, y: 0, descHashes: [hashText(descriptions.east)], exits: [{ dir: 'e', to: null, door: false }] })
+    const body = 'The gray cobblestone street crosses the river on a stone bridge.'
+    const bridge = f.model.createRoom({ name: 'Bridge on Main Street', x: 1, y: 0, descHashes: [hashText(body)], exits: [{ dir: 'w', to: null, door: false }] })
+    f.tracker.setCurrentRoom(street.id)
+    f.tracker.onCommand('e'); f.see(bridge.name, body, 'west')
+    assert.equal(f.tracker.speculative, true)
+    f.tracker.onCommand('w'); f.see(street.name, descriptions.east, 'east')
+    assert.equal(f.tracker.speculative, false)
+    assert.equal(f.model.exitOf(street, 'e')?.to, bridge.id)
+    assert.equal(f.model.exitOf(bridge, 'w')?.to, street.id)
+    assert.equal(f.tracker.currentRoomId, street.id)
+    assert.equal(Object.keys(f.model.map.rooms).length, 2)
+    console.log('ok walking east to the bridge and back completes both previously unexplored exits')
+  } finally { f.close() }
+}
