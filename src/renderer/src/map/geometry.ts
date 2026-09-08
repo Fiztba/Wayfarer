@@ -19,12 +19,10 @@
  *    and no coordinate assignment fixes all of them: some MUD geometry simply
  *    does not embed in a square grid.
  *
- * Both are handled by one cubic Bézier whose control points are the exit's
- * TRUE compass direction, pushed out from each end. The curve therefore leaves
- * its room along the real direction and arrives from the real opposite one,
- * whatever the rooms' coordinates happen to be — and when the coordinates are
- * already honest the controls land on the chord and it degenerates to exactly
- * the straight line it used to be.
+ * Ordinary, unobstructed links remain straight. Bent connections use
+ * routeDirectionalLink: a compass port at each end joined through the gutters,
+ * using the actual return direction rather than assuming it is opposite.
+ * A cubic bow remains the fallback if the gutter search cannot find a route.
  */
 
 /** Grid pitch and room box size, in screen px at scale 1. */
@@ -339,6 +337,28 @@ export function routeLink(
   }
   pts.push(raw[raw.length - 1])
   return forward ? pts : pts.reverse()
+}
+
+/** Route between compass ports, keeping a short, truthful departure/arrival
+ * segment outside each room. The gutter search treats both room centres as
+ * obstacles; otherwise it can turn straight back through its own endpoint.
+ * No opposite-direction assumption: north may genuinely return via east. */
+export function routeDirectionalLink(
+  from: Cell, to: Cell, direction: string, returnDirection: string,
+  isOccupied: (x: number, y: number) => boolean
+): Cell[] | null {
+  const dx = Math.sign(to.x - from.x), dy = Math.sign(to.y - from.y)
+  const fallback: [number, number] = dx || dy ? [dx, dy] : [1, 0]
+  const out = DIR_STEP[direction] ?? fallback
+  const back = DIR_STEP[returnDirection] ?? [-fallback[0], -fallback[1]]
+  const a = { x: from.x + out[0] / 2, y: from.y + out[1] / 2 }
+  const b = { x: to.x + back[0] / 2, y: to.y + back[1] / 2 }
+  const occupied = (x: number, y: number): boolean =>
+    (x === from.x && y === from.y) || (x === to.x && y === to.y) || isOccupied(x, y)
+  const wire = routeLink(a, b, occupied)
+  if (!wire) return null
+  return [from, ...wire, to].filter((p, i, points) =>
+    i === 0 || p.x !== points[i - 1].x || p.y !== points[i - 1].y)
 }
 
 /** Length of a polyline. */

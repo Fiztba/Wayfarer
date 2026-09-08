@@ -45,6 +45,10 @@ From the Mapper stage:
   rooms), with "I am here" re-sync
 - **All 10 directions** drawn distinctly, plus named special exits
   ("enter portal") as first-class pathfinding edges
+- **Exit tracing** — inspect every command and its destination, highlight one
+  connection through a dense zone, and locate exits on other floors without
+  walking. Bent links use compass departure/return ports; long passages and
+  one-way connections have distinct markers
 - **Doors** — auto-detected from closed-door bumps and open commands, manual
   toggle per exit with custom open-name; auto-walks open them en route
 - **Walking** — double-click-to-walk with confirmed stepping (verify each

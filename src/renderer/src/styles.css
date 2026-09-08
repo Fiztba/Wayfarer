@@ -1317,6 +1317,23 @@ body,
   cursor: default;
 }
 
+.map-exit-inspector { flex: none; min-width: 0; border-top: 1px solid var(--border); background: #111820; }
+.map-exit-heading { display: flex; gap: 10px; justify-content: space-between; padding: 8px 10px 6px; font-size: 12px; }
+.map-exit-heading strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.map-exit-heading > span { flex: none; color: #8b949e; }
+.map-exit-list { max-height: 156px; overflow-y: auto; }
+.map-exit-row { display: flex; border-left: 2px solid transparent; }
+.map-exit-row:hover { background: #1b2633; }
+.map-exit-active { border-left-color: #7ddfff; background: #173040; }
+.map-exit-trace { display: flex; align-items: center; gap: 10px; flex: 1; min-width: 0; border: 0; background: transparent; color: #d6e1eb; padding: 6px 8px; text-align: left; cursor: pointer; }
+.map-exit-command { flex: 0 1 92px; min-width: 26px; max-width: 110px; overflow-wrap: anywhere; color: #a9d7ed; font: 11px monospace; }
+.map-exit-target { display: flex; flex-direction: column; flex: 1; min-width: 0; gap: 2px; font-size: 12px; }
+.map-exit-target > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.map-exit-target small { font-size: 10px; color: #91a0b2; }
+.map-exit-locate { flex: none; border: 0; padding: 0 10px; color: #a9d7ed; background: transparent; cursor: pointer; font-size: 18px; }
+.map-exit-trace:focus-visible, .map-exit-locate:focus-visible { outline: 2px solid #7ddfff; outline-offset: -2px; }
+.map-exit-legend, .map-exit-empty { padding: 6px 10px; color: #91a0b2; font-size: 10px; line-height: 1.5; }
+
 .map-menu {
   z-index: 200;
   background: var(--bg-raised);

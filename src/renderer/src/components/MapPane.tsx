@@ -7,6 +7,8 @@
  */
 import React, { useCallback, useEffect, useMemo, useState } from 'react'
 import { MapCanvas, type MapContextInfo } from './MapCanvas'
+import { MapExitInspector } from './MapExitInspector'
+import type { ExitFocus } from '../map/displayLinks'
 import { ClampedMenu } from './ClampedMenu'
 import type { MapModel } from '../map/MapModel'
 import type { RelayoutResult } from '../map/relayout'
@@ -61,6 +63,8 @@ export function MapPane({ model, tracker, walkTo, onPopout, onClose }: MapPanePr
   const [menu, setMenu] = useState<MenuState>({ kind: 'closed' })
   const [showWaypoints, setShowWaypoints] = useState(false)
   const [showDupes, setShowDupes] = useState(false)
+  const [showExits, setShowExits] = useState(true)
+  const [exitFocus, setExitFocus] = useState<ExitFocus | null>(null)
   // Doubts are scanned once per map change, not once per render: the pane
   // re-renders on every room line, and a big map has a lot of rooms.
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -88,6 +92,10 @@ export function MapPane({ model, tracker, walkTo, onPopout, onClose }: MapPanePr
   const current = tracker.currentRoom
   const zoneId = viewZoneId ?? current?.zoneId ?? model.activeZoneId ?? ''
   const z = viewZ ?? current?.z ?? 0
+  const inspectedRoom = model.room(selectedId) ?? current
+  const visibleInspection = inspectedRoom?.zoneId === zoneId && inspectedRoom?.z === z ? inspectedRoom : null
+  const activeExitFocus = showExits && visibleInspection?.id === exitFocus?.roomId ? exitFocus : null
+  useEffect(() => setExitFocus(null), [inspectedRoom?.id, zoneId, z])
 
   // Auto-follow: when the player moves, snap the view to their zone/level.
   useEffect(() => {
@@ -203,6 +211,8 @@ export function MapPane({ model, tracker, walkTo, onPopout, onClose }: MapPanePr
         <button className="map-btn" title="Waypoints" onClick={() => setShowWaypoints((s) => !s)}>
           ★
         </button>
+        <button className="map-btn" title="Inspect and trace room exits" aria-pressed={showExits}
+          onClick={() => setShowExits((value) => !value)}>Exits</button>
         <button
           className="map-btn"
           title="Doubts and merges: rooms the mapper is unsure about, and what it has merged (each undoable)"
@@ -516,6 +526,7 @@ export function MapPane({ model, tracker, walkTo, onPopout, onClose }: MapPanePr
           currentIsGuess={tracker.speculative}
           selectedRoomId={selectedId}
           selectedRoomIds={multiSel}
+          exitFocus={activeExitFocus}
           centerToken={centerToken}
           centerRoomId={centerRoomId}
           onSelectRoom={(id) => {
@@ -720,6 +731,9 @@ export function MapPane({ model, tracker, walkTo, onPopout, onClose }: MapPanePr
           <ExitsEditor model={model} roomId={menu.roomId} selectedId={selectedId} onClose={closeMenu} />
         )}
       </div>
+
+      {showExits && visibleInspection && <MapExitInspector map={model.map} room={visibleInspection}
+        focus={activeExitFocus} onFocus={setExitFocus} onLocate={locateRoom} />}
 
       <div className="map-footer">
         {model.roomsInZone(zoneId).length} rooms in{' '}

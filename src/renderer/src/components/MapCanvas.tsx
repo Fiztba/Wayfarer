@@ -4,7 +4,8 @@
  * window (IPC mirror) can share it.
  */
 import React, { useCallback, useEffect, useRef } from 'react'
-import type { MapExit, MapRoom, MudMap } from '../map/types'
+import type { MapRoom, MudMap } from '../map/types'
+import { displayLinks, linkHasFocus, type DisplayLink, type ExitFocus } from '../map/displayLinks'
 import {
   BEARING_AT,
   CELL,
@@ -16,7 +17,7 @@ import {
   linkPath,
   polyPoint,
   polyTangent,
-  routeLink
+  routeDirectionalLink
 } from '../map/geometry'
 
 /** Trace a polyline with its corners rounded off, without stroking it. */
@@ -26,7 +27,10 @@ function traceWire(ctx: CanvasRenderingContext2D, pts: { x: number; y: number }[
     const a = pts[k - 1]
     const b = pts[k]
     const c = pts[k + 1]
-    const r = Math.min(radius, Math.hypot(b.x - a.x, b.y - a.y) / 2, Math.hypot(c.x - b.x, c.y - b.y) / 2)
+    // Preserve a visible straight compass stub at each room. A large rounded
+    // first corner can otherwise begin turning while still inside its box.
+    const cornerRadius = k === 1 || k === pts.length - 2 ? radius * 0.4 : radius
+    const r = Math.min(cornerRadius, Math.hypot(b.x - a.x, b.y - a.y) / 2, Math.hypot(c.x - b.x, c.y - b.y) / 2)
     ctx.arcTo(b.x, b.y, c.x, c.y, r)
   }
   const last = pts[pts.length - 1]
@@ -49,6 +53,7 @@ interface Props {
   /** The position is a guess the mapper has not settled yet. */
   currentIsGuess?: boolean
   selectedRoomId: string | null
+  exitFocus?: ExitFocus | null
   /** Additional multi-selection (shift-click / shift-drag marquee). */
   selectedRoomIds?: string[]
   onSelectRoom(id: string | null): void
@@ -93,7 +98,7 @@ export function MapCanvas(props: Props) {
   const draw = useCallback(() => {
     const canvas = canvasRef.current
     if (!canvas) return
-    const { map, zoneId, z, currentRoomId, currentIsGuess, selectedRoomId, selectedRoomIds } =
+    const { map, zoneId, z, currentRoomId, currentIsGuess, selectedRoomId, selectedRoomIds, exitFocus } =
       propsRef.current
     const multiSelected = new Set(selectedRoomIds ?? [])
     const view = viewRef.current
@@ -138,10 +143,24 @@ export function MapCanvas(props: Props) {
     }
     const isOccupied = (x: number, y: number): boolean => occupied.has(`${x},${y}`)
     const thin = Math.max(1, 1.4 * view.scale)
+    const connectors = displayLinks(rooms, map)
+    const highlighted = new Set(multiSelected)
+    if (selectedRoomId) highlighted.add(selectedRoomId)
+    const focusedLink = exitFocus ? connectors.find((link) => linkHasFocus(link, exitFocus)) : undefined
+    const focusedDestination = focusedLink && exitFocus
+      ? focusedLink.room.id === exitFocus.roomId ? focusedLink.destination?.id : focusedLink.room.id
+      : null
+    const isHighlighted = (link: DisplayLink): boolean => exitFocus
+      ? linkHasFocus(link, exitFocus)
+      : highlighted.has(link.room.id) || (!!link.returning.length && !!link.destination && highlighted.has(link.destination.id))
 
     /** Draw one exit, as owned by `room`. */
-    const drawLink = (room: MapRoom, exit: MapExit, highlight: boolean): void => {
-      const dest = exit.to ? map.rooms[exit.to] : null
+    const drawLink = (link: DisplayLink, highlight: boolean): void => {
+      const { room, destination: dest } = link
+      const exit = (exitFocus?.roomId === room.id
+        ? link.outgoing.find((ref) => ref.index === exitFocus.exitIndex)?.exit : null) ?? link.outgoing[0].exit
+      const returnExit = (exitFocus && exitFocus.roomId === dest?.id
+        ? link.returning.find((ref) => ref.index === exitFocus.exitIndex)?.exit : null) ?? link.returning[0]?.exit
       const vertical = exit.dir === 'u' || exit.dir === 'd'
       // Up and down are glyphs on the room -- unless both rooms sit on this
       // level, when the pair is drawn as a link (with the glyph riding it)
@@ -152,7 +171,7 @@ export function MapCanvas(props: Props) {
       let ex: number
       let ey: number
       let stub = false
-      let door = exit.door
+      const door = [...link.outgoing, ...link.returning].some((ref) => ref.exit.door)
       let curve: { c1: [number, number]; c2: [number, number]; span: number } | null = null
       // Screen-space wire around the rooms in the way, when the straight line
       // would cross one and a route exists; otherwise the curve bows.
@@ -168,8 +187,10 @@ export function MapCanvas(props: Props) {
           c2: toScreen(path.c2.x, path.c2.y),
           span: path.span
         }
-        if (path.bowed) {
-          const wire = routeLink({ x: rx, y: ry }, { x: dx, y: dy }, isOccupied)
+        const needsPorts = (exit.dir && !drawnAsClaimed({ x: rx, y: ry }, destCell, exit.dir)) ||
+          (returnExit?.dir && !drawnAsClaimed(destCell, { x: rx, y: ry }, returnExit.dir))
+        if (path.bowed || needsPorts || dest.id === room.id) {
+          const wire = routeDirectionalLink({ x: rx, y: ry }, { x: dx, y: dy }, exit.dir ?? '', returnExit?.dir ?? '', isOccupied)
           if (wire) {
             route = wire.map((p) => {
               const [wx, wy] = toScreen(p.x, p.y)
@@ -177,9 +198,6 @@ export function MapCanvas(props: Props) {
             })
           }
         }
-        // This face may be the only one carrying the door if the pair was
-        // linked one-way, and it is the only face drawn (see dedupe below).
-        if (dest.exits.find((e) => e.to === room.id)?.door) door = true
       } else if (exit.dir) {
         const d = DIR_UNIT[exit.dir] ?? [0, 0]
         ex = sx + d[0] * cell * 0.55
@@ -209,13 +227,18 @@ export function MapCanvas(props: Props) {
             ? cubicTangent(P0, C1, C2, P3, t)
             : { x: ex - sx, y: ey - sy }
 
+      const folded = !!destCell && (
+        link.outgoing.some((r) => r.exit.dir && !drawnAsClaimed({ x: rx, y: ry }, destCell!, r.exit.dir)) ||
+        link.returning.some((r) => r.exit.dir && !drawnAsClaimed(destCell!, { x: rx, y: ry }, r.exit.dir))
+      )
       const base = highlight
-        ? '#ffffff'
+        ? exitFocus ? '#7ddfff' : '#cbd9e8'
+        : exitFocus ? '#303c4c'
         : stub
           ? dest
             ? '#8b6f47' // leads off-view (other zone/level)
             : '#4a5568' // unexplored stub
-          : '#5c6370'
+          : folded ? '#ac8cce' : '#647183'
       ctx.strokeStyle = base
       ctx.lineWidth = highlight ? Math.max(2, 2.4 * view.scale) : thin
       ctx.setLineDash(exit.to === null ? [3, 3] : [])
@@ -227,6 +250,14 @@ export function MapCanvas(props: Props) {
         if (curve) ctx.bezierCurveTo(curve.c1[0], curve.c1[1], curve.c2[0], curve.c2[1], ex, ey)
         else ctx.lineTo(ex, ey)
       }
+      // A dark under-stroke separates crossings instead of suggesting a
+      // junction. The graph only connects at a room, never at a line crossing.
+      const width = ctx.lineWidth
+      ctx.strokeStyle = '#0d1117'
+      ctx.lineWidth = width + Math.max(2, 3 * view.scale)
+      ctx.stroke()
+      ctx.strokeStyle = base
+      ctx.lineWidth = width
       ctx.stroke()
       ctx.setLineDash([])
 
@@ -236,16 +267,19 @@ export function MapCanvas(props: Props) {
       // carry that direction, so a small arrow just outside each room points
       // the way its own exit really goes. Only the liars get marked: on a real
       // 859-room map that was 44 links of 1870.
-      if (curve && dest && destCell && exit.dir) {
+      if (curve && dest && destCell) {
         const here = { x: rx, y: ry }
-        const back = dest.exits.find((e) => e.to === room.id)
         const marks: Array<[number, number, string]> = []
-        if (!drawnAsClaimed(here, destCell, exit.dir)) marks.push([sx, sy, exit.dir])
-        if (back?.dir && !drawnAsClaimed(destCell, here, back.dir)) {
-          marks.push([ex, ey, back.dir])
+        const outgoingMarks = highlight && exitFocus?.roomId === room.id ? [{ exit }] : link.outgoing
+        const returningMarks = highlight && exitFocus?.roomId === dest.id && returnExit ? [{ exit: returnExit }] : link.returning
+        for (const { exit: out } of outgoingMarks) {
+          if (out.dir && !drawnAsClaimed(here, destCell, out.dir)) marks.push([sx, sy, out.dir])
+        }
+        for (const { exit: back } of returningMarks) {
+          if (back.dir && !drawnAsClaimed(destCell, here, back.dir)) marks.push([ex, ey, back.dir])
         }
         if (marks.length > 0) {
-          ctx.strokeStyle = highlight ? '#ffffff' : '#8b949e'
+          ctx.strokeStyle = base
           ctx.lineWidth = Math.max(1, 1.3 * view.scale)
           for (const [cx, cy, d] of marks) {
             const u = DIR_UNIT[d]
@@ -259,35 +293,56 @@ export function MapCanvas(props: Props) {
             ctx.lineTo(tipX, tipY)
             ctx.lineTo(tipX - Math.cos(a + 0.5) * len, tipY - Math.sin(a + 0.5) * len)
             ctx.stroke()
+            if (view.scale >= 0.8 && (!exitFocus || highlight)) {
+              ctx.font = `${Math.max(8, 9 * view.scale)}px sans-serif`
+              ctx.textAlign = 'center'
+              ctx.fillStyle = base
+              ctx.fillText(d.toUpperCase(), tipX + u[0] * 10 * view.scale, tipY + u[1] * 10 * view.scale + 3 * view.scale)
+            }
           }
           ctx.strokeStyle = base
         }
       }
 
+      const oneWay = !!dest && dest.id !== room.id && !stub && link.returning.length === 0
       if (curve && curve.span > 1) {
-        // Direct-connection chevrons. A link drawn longer than one grid step is
-        // still a single passage, but the map's own grammar reads empty space
-        // as unmapped ground, so the length has to be marked as layout rather
-        // than distance. Placed off-centre to leave the midpoint to the door.
+        // Paired slash marks denote a long drawing of ONE exit. Unlike the
+        // old chevrons these cannot be mistaken for permission to travel only
+        // in the arbitrary direction used to paint a bidirectional connector.
         ctx.lineWidth = Math.max(1, 1.2 * view.scale)
-        for (const t of [0.34, 0.66]) {
-          const p = at(t)
-          const g = dirAt(t)
+        {
+          const p = at(door || oneWay ? 0.3 : 0.5)
+          const g = dirAt(door || oneWay ? 0.3 : 0.5)
           const a = Math.atan2(g.y, g.x)
           const len = 4 * view.scale
-          ctx.beginPath()
-          ctx.moveTo(p.x - Math.cos(a - 0.6) * len, p.y - Math.sin(a - 0.6) * len)
-          ctx.lineTo(p.x, p.y)
-          ctx.lineTo(p.x - Math.cos(a + 0.6) * len, p.y - Math.sin(a + 0.6) * len)
-          ctx.stroke()
+          for (const offset of [-2, 2]) {
+            const x = p.x + Math.cos(a) * offset * view.scale
+            const y = p.y + Math.sin(a) * offset * view.scale
+            ctx.beginPath()
+            ctx.moveTo(x - Math.cos(a + 1.0) * len, y - Math.sin(a + 1.0) * len)
+            ctx.lineTo(x + Math.cos(a + 1.0) * len, y + Math.sin(a + 1.0) * len)
+            ctx.stroke()
+          }
         }
+      }
+
+      if (oneWay) {
+        const p = at(0.5), g = dirAt(0.5)
+        const a = Math.atan2(g.y, g.x), size = Math.max(4, 5 * view.scale)
+        ctx.fillStyle = base
+        ctx.beginPath()
+        ctx.moveTo(p.x + Math.cos(a) * size, p.y + Math.sin(a) * size)
+        ctx.lineTo(p.x - Math.cos(a - 0.7) * size, p.y - Math.sin(a - 0.7) * size)
+        ctx.lineTo(p.x - Math.cos(a + 0.7) * size, p.y - Math.sin(a + 0.7) * size)
+        ctx.closePath()
+        ctx.fill()
       }
 
       if (door) {
         // Door tick: short bar across the path at its midpoint, perpendicular
         // to the direction the path is actually travelling there.
-        const mid = at(0.5)
-        const g = dirAt(0.5)
+        const mid = at(oneWay ? 0.7 : 0.5)
+        const g = dirAt(oneWay ? 0.7 : 0.5)
         const angle = Math.atan2(g.y, g.x) + Math.PI / 2
         const t = 5 * view.scale
         ctx.strokeStyle = '#e5c07b'
@@ -311,18 +366,10 @@ export function MapCanvas(props: Props) {
       }
     }
 
-    for (const room of rooms) {
-      for (const exit of room.exits) {
-        // A two-way link is drawn once, by the lower room id. Drawing both
-        // faces was invisible while links were straight (they coincided);
-        // bowed, they would arc to opposite sides and render as a lens.
-        const dest = exit.to ? map.rooms[exit.to] : null
-        if (dest && visibleById.has(dest.id) && room.id > dest.id) {
-          if (dest.exits.some((e) => e.to === room.id)) continue
-        }
-        drawLink(room, exit, false)
-      }
-    }
+    for (const link of connectors) if (!isHighlighted(link)) drawLink(link, false)
+    // Selected connections cross over context lines, but stay underneath room
+    // boxes so highlighting never paints a false route through another room.
+    for (const link of connectors) if (isHighlighted(link)) drawLink(link, true)
 
     // ---- rooms ----
     for (const room of rooms) {
@@ -345,6 +392,12 @@ export function MapCanvas(props: Props) {
       ctx.fill()
       ctx.stroke()
       ctx.setLineDash([])
+
+      if (room.id === focusedDestination) {
+        ctx.strokeStyle = '#7ddfff'
+        ctx.lineWidth = 2
+        ctx.strokeRect(sx - half - 4, sy - half - 4, half * 2 + 8, half * 2 + 8)
+      }
 
       if (room.id === currentRoomId) {
         // A dashed ring means the mapper is holding a guess rather than a
@@ -377,19 +430,6 @@ export function MapCanvas(props: Props) {
       if (waypointIds.has(room.id)) {
         ctx.fillStyle = '#ffd68a'
         ctx.fillText('★', sx, sy - half - 3)
-      }
-    }
-
-    // ---- selected rooms' own exits, on top ----
-    // Drawn after the boxes, and without the two-way dedupe, so that selecting
-    // a room answers "is it really connected that way?" at a glance: only the
-    // exits this room actually owns light up, however dense the region is.
-    const highlighted = new Set(multiSelected)
-    if (selectedRoomId) highlighted.add(selectedRoomId)
-    if (highlighted.size > 0) {
-      for (const room of rooms) {
-        if (!highlighted.has(room.id)) continue
-        for (const exit of room.exits) drawLink(room, exit, true)
       }
     }
 
