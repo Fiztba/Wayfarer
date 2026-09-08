@@ -19,6 +19,27 @@ function fixture() {
 {
   const f = fixture()
   try {
+    f.model.linkRooms(f.old.id, 'e', f.room.id, true)
+    f.tracker.setCurrentRoom(f.old.id)
+    f.tracker.onCommand('e')
+    f.look('Abaris Street')
+    assert.equal(f.tracker.currentRoomId, f.room.id)
+    assert.equal(f.tracker.lost, false)
+    assert.equal(f.tracker.speculative, false)
+    assert.equal(f.room.name, 'Abaris Street')
+    assert.ok(f.room.descHashes?.length)
+    assert.equal(f.model.exitOf(f.old, 'e')?.inferred, false)
+    f.tracker.onCommand('look')
+    f.look('Abaris Street')
+    assert.equal(f.tracker.currentRoomId, f.room.id)
+    assert.equal(Object.keys(f.model.map.rooms).length, 2)
+    console.log('ok walking into a manually linked placeholder captures its data without guessing or duplication')
+  } finally { f.close() }
+}
+
+{
+  const f = fixture()
+  try {
     f.model.setRivals(f.room.id, [f.old.id])
     assert.equal(f.model.provisionalRooms().length, 1)
     f.tracker.setCurrentRoom(f.old.id)

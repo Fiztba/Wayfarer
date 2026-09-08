@@ -666,7 +666,9 @@ export function MapPane({ model, tracker, walkTo: startWalk, onPopout, onClose }
                 </button>
               </>
             ) : (
-              <button
+              <>{[false, true].map((locate) => <button
+                key={String(locate)}
+                title={locate ? 'Add a room at this spot, set your position, then type look to fill in its details.' : 'Add a room to the drawing without changing your position.'}
                 onClick={() => {
                   const room = model.createRoom({
                     name: 'New room',
@@ -676,11 +678,12 @@ export function MapPane({ model, tracker, walkTo: startWalk, onPopout, onClose }
                     z
                   })
                   setSelectedId(room.id)
+                  if (locate) tracker.setCurrentRoom(room.id)
                   closeMenu()
                 }}
               >
-                ＋ Add room here
-              </button>
+                {locate ? '＋ Add room here and set my position' : '＋ Add room here'}
+              </button>)}</>
             )}
           </ClampedMenu>
         )}

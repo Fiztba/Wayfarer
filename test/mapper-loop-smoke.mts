@@ -18,6 +18,46 @@ function fixture() {
   }
   return { model, tracker, see, close() { tracker.dispose(); model.flush() } }
 }
+
+// Separately drawn sections need not have matching layout coordinates.
+// Identification at the far end must retain the actual approach through the gap.
+{
+  const f = fixture()
+  try {
+    const start = f.model.createRoom({ name: 'Western Gate', x: 0, y: 0 })
+    const clone = f.model.createRoom({ name: 'Abaris Street', x: 30, y: 10,
+      descHashes: [hashText('A gray street runs east and west.')], exits: [] })
+    const landmark = f.model.createRoom({ name: 'Chromatic Intersection', x: 40, y: 10,
+      descHashes: [hashText('Chromatic Road crosses Abaris Street.')], exits: [] })
+    const east = f.model.createRoom({ name: 'Eastern Arch', x: 41, y: 10, exits: [] })
+    const far = f.model.createRoom({ name: 'Eastern Gate', x: 42, y: 10, exits: [] })
+    f.model.linkRooms(landmark.id, 'e', east.id, true)
+    f.model.linkRooms(east.id, 'e', far.id, true)
+    f.tracker.setCurrentRoom(start.id)
+    f.tracker.onCommand('e'); f.see(clone.name, 'A gray street runs east and west.', 'east west')
+    f.tracker.onCommand('e'); f.see(landmark.name, 'Chromatic Road crosses Abaris Street.', 'north east south west')
+    assert.equal(f.model.exitOf(start, 'e')?.to ?? null, null, 'the approach is still uncommitted')
+    f.tracker.onCommand('e'); f.see(east.name, 'A tall arch spans the road.', 'east west')
+    f.tracker.onCommand('e'); f.see(far.name, 'An iron gate faces the road.', 'east west')
+    assert.equal(f.tracker.speculative, false)
+    assert.equal(f.tracker.currentRoomId, far.id)
+    const gap = f.model.room(f.model.exitOf(start, 'e')?.to ?? null)!
+    assert.ok(gap, 'the observed approach was retained')
+    assert.notEqual(gap.id, clone.id)
+    assert.equal(f.model.exitOf(gap, 'e')?.to, landmark.id, 'confirmed landmark joins the sections despite displaced layout')
+    assert.equal(Object.keys(f.model.map.rooms).length, 6)
+    f.tracker.onCommand('w'); f.see(east.name, 'A tall arch spans the road.', 'east west')
+    f.tracker.onCommand('w'); f.see(landmark.name, 'Chromatic Road crosses Abaris Street.', 'north east south west')
+    f.tracker.onCommand('w'); f.see(clone.name, 'A gray street runs east and west.', 'east west')
+    f.tracker.onCommand('w'); f.see(start.name, 'The western city gate stands here.', 'east')
+    assert.equal(f.tracker.speculative, false, 'retracing the joined approach confirms the return')
+    assert.equal(f.tracker.currentRoomId, start.id)
+    assert.equal(f.model.exitOf(landmark, 'w')?.to, gap.id)
+    assert.equal(f.model.exitOf(gap, 'w')?.to, start.id)
+    assert.equal(Object.keys(f.model.map.rooms).length, 6, 'backtracking must not add duplicates')
+    console.log('ok corroborated landmark joins separately drawn sections and preserves the approach')
+  } finally { f.close() }
+}
 {
   const f = fixture()
   try {

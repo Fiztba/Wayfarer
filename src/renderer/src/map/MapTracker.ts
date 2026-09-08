@@ -71,6 +71,8 @@ interface Hypothesis {
  * resolves: a duplicate is recoverable, but a wrong link actively misleads.
  */
 interface Speculation {
+  /** Uncommitted approach retained when recognition restarts at a landmark. */
+  approach?: { anchorRoomId: string; steps: Speculation['steps'] }
   /** Last room we were certain of. */
   anchorRoomId: string | null
   /** Rooms that also explained the first step, carried onto the room it
@@ -595,6 +597,14 @@ export class MapTracker implements TrackerControl {
     const exit = this.model.exitOf(current, dir)
     if (exit?.to) {
       const dest = this.model.room(exit.to)
+      if (dest && this.isPlaceholder(dest)) {
+        this.model.updateRoom(dest.id, { name: det.name })
+        this.currentRoomId = dest.id
+        this.refreshExits(dest, det)
+        if (this.mode === 'map') this.recordObservedArrival(current, { dir }, dest)
+        this.notify()
+        return
+      }
       if (dest && (this.couldBe(dest, det) || this.canLearn(dest, det))) {
         if (this.mode === 'map' && exit.inferred) this.model.setExitAt(current.id, current.exits.indexOf(exit), { inferred: false })
         this.currentRoomId = dest.id
@@ -1040,7 +1050,9 @@ export class MapTracker implements TrackerControl {
       if (!exit || exit.to === null) continue
       const dest = this.model.room(exit.to)
       if (!dest || !this.couldBe(dest, det)) continue
-      const evidence = !exit.inferred && !h.path.includes(dest.id) && !this.cloneOfDoubt(spec, det)
+      const back = move.dir ? this.model.exitOf(dest, OPPOSITE[move.dir]) : null
+      const observedReturn = back?.to === at.id && back.inferred === false
+      const evidence = (!exit.inferred || observedReturn) && !h.path.includes(dest.id) && !this.cloneOfDoubt(spec, det)
       survivors.push({ path: [...h.path, dest.id], corroborations: h.corroborations + (evidence ? 1 : 0) })
     }
     spec.hypotheses = survivors
@@ -1070,15 +1082,23 @@ export class MapTracker implements TrackerControl {
         return
       }
       // A route prediction broke, but the current room may still be familiar.
-      // Restart from that observation without attaching it to an uncertain
-      // origin. Do not "repair" a whole guessed path to make it fit.
+      // Restart identity recognition, retaining a bounded approach for later
+      // replay if the new reading is corroborated. No links are written yet.
       const candidates = this.candidatesFor(det)
       if (candidates.length > 0) {
         const anchor = this.model.room(spec.anchorRoomId)
+        const approach = spec.approach
+          ? { anchorRoomId: spec.approach.anchorRoomId,
+              steps: [...spec.approach.steps, ...spec.steps.slice(1)] }
+          : anchor && spec.steps[0].dir && !this.model.exitOf(anchor, spec.steps[0].dir)?.to
+            ? { anchorRoomId: anchor.id, steps: [...spec.steps] } : undefined
         this.beginSpeculation(anchor, null, det, candidates)
+        if (this.speculation && approach && approach.steps.length <= SPECULATION_CAP) {
+          this.speculation.approach = approach
+        }
         return
       }
-      if (this.mode !== 'map' || !move || (spec.steps[0].dir === null && !spec.steps[0].command)) {
+      if (this.mode !== 'map' || !move || (!spec.approach && spec.steps[0].dir === null && !spec.steps[0].command)) {
         this.markLost('the provisional route reached unknown territory; no guessed links were saved.')
         return
       }
@@ -1114,7 +1134,7 @@ export class MapTracker implements TrackerControl {
 
   /** Geometry strengthens a unique prose match, but never rules out folds. */
   private hasArrivalPrior(spec: Speculation): boolean {
-    if (spec.rivals.length !== 1 || spec.hypotheses.length !== 1) return false
+    if (spec.hypotheses.length !== 1) return false
     const first = spec.steps[0]
     const anchor = this.model.room(spec.anchorRoomId)
     const candidate = this.model.room(spec.hypotheses[0].path[0])
@@ -1122,6 +1142,15 @@ export class MapTracker implements TrackerControl {
         !first.det.descHash || !candidate.descHashes?.includes(first.det.descHash)) return false
     const existing = this.model.exitOf(anchor, first.dir)?.to
     if (existing && existing !== candidate.id) return false
+    // Retracing a confirmed traversal is useful evidence even if separately
+    // drawn sections are stretched apart. Another arrival must still agree.
+    const returns = spec.rivals.filter((id) => {
+      const room = this.model.room(id)
+      const back = room ? this.model.exitOf(room, OPPOSITE[first.dir!]) : null
+      return back?.to === anchor.id && back.inferred === false
+    })
+    if (returns.length === 1 && returns[0] === candidate.id) return true
+    if (spec.rivals.length !== 1) return false
     const [dx, dy, dz] = DIR_DELTA[first.dir]
     return candidate.zoneId === anchor.zoneId && candidate.x === anchor.x + dx &&
       candidate.y === anchor.y + dy && candidate.z === anchor.z + dz
@@ -1159,6 +1188,25 @@ export class MapTracker implements TrackerControl {
     const spec = this.speculation
     if (!spec) return
     this.speculation = null
+    if (spec.approach && this.mode === 'map') {
+      // Identity at the far end is now corroborated. Replay the retained
+      // approach and attach its final observed move to that confirmed room.
+      this.currentRoomId = spec.approach.anchorRoomId
+      this.replaying = true
+      try {
+        for (let i = 0; i < spec.approach.steps.length; i++) {
+          const step = spec.approach.steps[i]
+          const at = this.currentRoom
+          if (!at || this.lost) break
+          const endpoint = i === spec.approach.steps.length - 1 ? this.model.room(h.path[0]) : null
+          if (endpoint) {
+            this.recordObservedArrival(at, step, endpoint)
+            this.currentRoomId = endpoint.id
+          } else if (step.dir) this.handleMove(at, step.dir, step.det)
+          else if (step.command) this.handleSpecialMove(at, step.command, step.det)
+        }
+      } finally { this.replaying = false }
+    }
     let from = this.model.room(spec.anchorRoomId)
     for (let i = 0; i < spec.steps.length; i++) {
       const step = spec.steps[i]
@@ -1182,8 +1230,13 @@ export class MapTracker implements TrackerControl {
   /** No mapped route survived: preserve the observed path by replaying the
    *  held moves as ordinary mapping. */
   private settleAsNew(): void {
-    const spec = this.speculation
+    let spec = this.speculation
     if (!spec) return
+    if (spec.approach) {
+      const steps = [...spec.approach.steps, ...spec.steps.slice(1)]
+      spec = { ...spec, anchorRoomId: spec.approach.anchorRoomId, steps,
+        rivals: this.candidatesFor(steps[0].det).map((room) => room.id), approach: undefined }
+    }
     this.speculation = null
     const anchor = this.model.room(spec.anchorRoomId)
     if (!anchor) return
@@ -1311,6 +1364,10 @@ export class MapTracker implements TrackerControl {
     return !Object.values(this.map.rooms).some(
       (r) => r.id !== room.id && this.roomMatches(r, det)
     )
+  }
+
+  private isPlaceholder(room: MapRoom): boolean {
+    return room.name === 'New room' && !room.serverId && !room.descHashes?.length
   }
 
   /** Loose match: same name; exits may differ (doors, hidden exits).

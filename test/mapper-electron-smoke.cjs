@@ -123,6 +123,20 @@ app.whenReady().then(async () => {
     await waitFor(`document.querySelector('.map-zone-select').value === 'maze'`)
     if (process.env.WAYFARER_PROVISIONAL_CAPTURE) fs.writeFileSync(process.env.WAYFARER_PROVISIONAL_CAPTURE, (await win.webContents.capturePage()).toPNG())
     console.log('ok provisional display follows compass movement without selecting the off-direction candidate')
+    await js(`(() => {
+      const canvas = document.querySelector('.map-canvas');
+      const rect = canvas.getBoundingClientRect();
+      canvas.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, clientX: rect.left + 10, clientY: rect.top + 10 }));
+    })()`)
+    await waitFor(`!!Array.from(document.querySelectorAll('button')).find(b => b.textContent.includes('Add room here and set my position'))`)
+    await js(`Array.from(document.querySelectorAll('button')).find(b => b.textContent.includes('Add room here and set my position')).click()`)
+    const manualId = await js('window.tracker.currentRoomId')
+    await js(`window.tracker.onCommand('look'); window.tracker.onLine('Abaris Street'); window.tracker.onLine('A gray street stretches east and west.'); window.tracker.onLine('Exits: east west')`)
+    assert.equal(await js('window.tracker.currentRoomId'), manualId)
+    assert.equal(await js('window.tracker.currentRoom.name'), 'Abaris Street')
+    assert.equal(await js('window.tracker.currentRoom.exits.length'), 2)
+    assert.equal(await js('window.tracker.speculative'), false)
+    console.log('ok add-and-locate menu captures a look in the new room while guesses were pending')
   }
   assert.deepEqual(errors, [])
   win.destroy()
