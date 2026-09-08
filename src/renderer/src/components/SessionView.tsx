@@ -102,7 +102,8 @@ export function SessionView({
   const [windowStartId, setWindowStartId] = useState<number | null>(null)
   const windowStartRef = useRef<number | null>(null)
   const expandRef = useRef<{ prevHeight: number } | null>(null)
-  const [input, setInput] = useState('')
+  const [input, setInput] = useState(store.draft)
+  useEffect(() => { store.draft = input }, [store, input])
   const historyPos = useRef<number | null>(null)
   const draft = useRef('')
   const [mapWidth, setMapWidth] = useState(() =>
@@ -828,7 +829,7 @@ export function SessionView({
           {pendingUpdate && (
             <button
               className="status-btn status-btn-update"
-              title={`Version ${pendingUpdate} is downloaded. Click to restart and install it now — otherwise it installs the next time you quit.`}
+              title={`Version ${pendingUpdate} is downloaded. Update while keeping compatible sessions connected; otherwise it installs when you quit.`}
               onClick={() => void window.mud.installUpdate()}
             >
               ⬆ Update to {pendingUpdate}

@@ -45,6 +45,21 @@ type CompiledScript = (
 ) => void
 
 export class ScriptRuntime {
+  snapshot(): Record<string, unknown> {
+    if (this.lua || this.luaInit || this.timerHandles.size > 0) {
+      throw new Error('This session has a live Lua runtime or pending script callbacks that cannot be copied safely. Finish those scripts or close the client to install normally.')
+    }
+    const seen = new Set<object>()
+    const check = (value: unknown): void => {
+      if (value === null || typeof value === 'string' || typeof value === 'boolean' || (typeof value === 'number' && Number.isFinite(value))) return
+      if (typeof value !== 'object' || seen.has(value)) throw new Error('Script globals contain functions or circular state. Close the client to install normally.')
+      if (!Array.isArray(value) && Object.getPrototypeOf(value) !== Object.prototype) throw new Error('Script globals contain live objects. Close the client to install normally.')
+      seen.add(value); for (const child of Object.values(value)) check(child); seen.delete(value)
+    }
+    check(this.globalsObj)
+    return JSON.parse(JSON.stringify(this.globalsObj))
+  }
+  restore(globals: Record<string, unknown>): void { this.globalsObj = globals }
   private host: ScriptApiHost
   private luaWasmUrl?: string
 

@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from 'react'
+import React, { useCallback, useEffect, useRef, useState } from 'react'
 import { SessionStore, sessionStores } from './SessionStore'
 import { SessionView } from './components/SessionView'
 import { ConnectScreen } from './components/ConnectScreen'
@@ -10,6 +10,7 @@ import { uiState } from './uiState'
 import { settingsManager } from './SettingsManager'
 import type { Encoding } from '../../shared/types'
 import type { PopoutBounds } from './map/types.ts'
+import { COPYOVER_PROTOCOL } from '../../shared/copyover'
 
 interface TabInfo {
   id: string
@@ -28,6 +29,9 @@ export interface ConnectRequest {
 export default function App() {
   const [tabs, setTabs] = useState<TabInfo[]>([])
   const [activeId, setActiveId] = useState<string | null>(null) // null → connect screen
+  const [copying, setCopying] = useState(true)
+  const [restoreError, setRestoreError] = useState('')
+  const restoring = useRef(false)
   const [settingsFor, setSettingsFor] = useState<string | null>(null)
   /** A line of output to build a trigger from, when Settings was opened for that. */
   const [settingsSeedLine, setSettingsSeedLine] = useState<string | null>(null)
@@ -103,6 +107,54 @@ export default function App() {
     sessionStores.set(id, store)
     setTabs((t) => [...t, { id, name: opts.name }])
     setActiveId(id)
+    await store.ready
+    await window.mud.copyover.resume()
+  }, [])
+
+  useEffect(() => {
+    const off = window.mud.copyover.onPrepare(() => {
+      setCopying(true)
+      void (async () => {
+        try {
+          const stores = tabs.map((tab) => sessionStores.get(tab.id)).filter((s): s is SessionStore => !!s)
+          for (const store of stores) store.scripts.snapshot()
+          const saved = []
+          for (const store of stores) saved.push(await store.snapshot())
+          await window.mud.copyover.prepared({ snapshot: { tabs, activeId, stores: saved } })
+        } catch (error) { await window.mud.copyover.prepared({ error: String(error) }) }
+      })()
+    })
+    const cancel = window.mud.copyover.onCancel(() => {
+      for (const store of sessionStores.values()) store.resumeCopyover()
+      setCopying(false)
+    })
+    return () => { off(); cancel() }
+  }, [tabs, activeId])
+
+  useEffect(() => {
+    if (restoring.current) return // StrictMode must not restore or replay twice.
+    restoring.current = true
+    void (async () => {
+      const bundle = await window.mud.copyover.restore()
+      if (!bundle) { setCopying(false); return }
+      setCopying(true)
+      if (bundle.protocol !== COPYOVER_PROTOCOL) throw new Error('This build cannot restore the saved session format.')
+      const saved = bundle.snapshot as { tabs: TabInfo[]; activeId: string | null;
+        stores: Awaited<ReturnType<SessionStore['snapshot']>>[] }
+      for (const snapshot of saved.stores) {
+        const data = snapshot.state
+        await settingsManager.ensure(data.profileId as string | null)
+        const store = new SessionStore(snapshot.id, data.name as string, data.host as string,
+          data.port as number, (data.profileId as string) ?? undefined)
+        store.onCharName = () => forceRender((n) => n + 1)
+        await store.restore(snapshot)
+        sessionStores.set(store.id, store)
+      }
+      setTabs(saved.tabs); setActiveId(saved.activeId)
+      for (const store of sessionStores.values()) store.resumeCopyover()
+      await window.mud.copyover.resume()
+      setCopying(false)
+    })().catch((error) => { setCopying(false); setRestoreError(String(error)) })
   }, [])
 
   const closeTab = useCallback(async (id: string) => {
@@ -168,8 +220,14 @@ export default function App() {
     return () => window.removeEventListener('keydown', handler)
   }, [activeId, tabs, moveTab])
 
+  if (restoreError) return <div className="app" role="alert">
+    <p>Session restoration failed: {restoreError}. Connections are held for up to 30 minutes.</p>
+    <button onClick={() => window.location.reload()}>Retry restoration</button>
+  </div>
+
   return (
     <div className="app">
+      {copying && <div role="status" style={{ position: 'fixed', inset: 0, zIndex: 10000, background: '#0d1117ee', display: 'grid', placeItems: 'center' }}>Preparing sessions — keeping existing connections open…</div>}
       <div className="tab-bar">
         <button className="tab" onClick={() => setTool('worlds')}>Worlds</button>
         <button className="tab" onClick={() => setTool('history')}>History</button>

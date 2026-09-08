@@ -47,6 +47,8 @@ export function looksLikeName(word: string): boolean {
 }
 
 export class LoginGuesser {
+  snapshot() { return { candidate: this.candidate, confirmed: this.confirmed } }
+  restore(state: ReturnType<LoginGuesser['snapshot']>) { this.candidate = state.candidate; this.confirmed = state.confirmed }
   private candidate: string | null = null
   private confirmed = false
 

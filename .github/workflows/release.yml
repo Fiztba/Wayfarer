@@ -24,7 +24,7 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: 24.18.0
           cache: npm
 
       - run: npm ci
@@ -32,6 +32,8 @@ jobs:
       - run: npm run typecheck
 
       - run: npm run build
+      - run: npm test
+      - run: npm run test:electron
 
       # electron-builder creates the release when it cannot find one for the
       # tag, and it uploads artifacts concurrently, so two uploads can race

@@ -197,7 +197,11 @@ export function getClientVersion(): string {
   return clientVersion
 }
 
+import { saveFields, restoreFields } from '../../shared/copyover.ts'
+const ANSI_STATE = ['attrs', 'escBuf', 'cachedStyle', 'lastWasCR', 'lastWasLF', 'mxpEnabled', 'mxpMode', 'mxpDefault', 'mxpLink', 'mxpColorStack']
 export class AnsiParser {
+  snapshot() { return saveFields(this, ANSI_STATE) }
+  restore(state: Record<string, unknown>) { restoreFields(this, ANSI_STATE, state) }
   private attrs: Attrs = { ...DEFAULT_ATTRS }
   private escBuf = '' // holds a partial escape sequence across chunks
   private cachedStyle: SpanStyle | null = null

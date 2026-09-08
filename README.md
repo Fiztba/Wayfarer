@@ -4,6 +4,16 @@
 
 Working today:
 
+- **Connection copyover** — compatible updates replace the client while a
+  separate connection keeper preserves TCP/TLS, Telnet negotiation and MCCP.
+  Tabs, scrollback, partial output, variables and mapper observations restore
+  before buffered events resume. Timed sends pause; walks and paced batches
+  stop. Live Lua state and non-serializable script state block copyover with
+  an explanation. The initial upgrade to a copyover-capable build still
+  needs a normal restart. See the in-app Updates & Connection Copyover help.
+  Development and packaging use Node 24.18.0; the standalone runtime ships
+  with its license notices in `out/keeper/node-LICENSE`.
+
 - **World library** — the Worlds button exports/imports a world's connection,
   automation, variables and map. Preview imports before creating a separate
   world or replacing one. Create complete snapshots and restore existing

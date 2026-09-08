@@ -19,6 +19,14 @@ export interface HelpTopic {
 
 export const HELP_TOPICS: HelpTopic[] = [
   {
+    id: 'copyover', title: 'Updates & Connection Copyover', blocks: [
+      { p: 'Check For Update in the bottom-right corner checks immediately and downloads a new release. Click Update to install it. Compatible sessions stay connected while the window closes and reopens; incoming output waits and is processed once after restoration.' },
+      { p: 'Tabs, scrollback, command drafts, variables, captures and mapper tracking are restored. Password drafts are not retained. Auto-walking and paced command batches stop for the update. Regular timers pause and resume afterward; completed one-shot timers and login scripts are not run again.' },
+      { p: 'JavaScript globals containing ordinary JSON data can be preserved. Live Lua runtimes, pending script callbacks, functions or other live objects cannot currently be copied: the update stays paused and explains why. Close the client normally to install without preserving those sessions.' },
+      { p: 'The first update from a version without copyover still disconnects. Copyover applies to subsequent compatible updates. Normal Quit closes connections. If relaunch fails, reopen Wayfarer within 30 minutes; the keeper retains the handoff during that window. Excessive buffered output (128 MB) closes connections with an error instead of silently losing output.' }
+    ]
+  },
+  {
     id: 'world-library', title: 'World Export, Import & Recovery', blocks: [
       { p: 'Open Worlds in the tab bar. Export world saves the selected world’s connection, automation, variables and complete map in one .wayfarer.json file. Global automation and app options are separate; they are not transferred.' },
       { p: 'Import world opens a preview with the server address and content counts. Import as a new world creates a separate profile even if that server is already saved. You can instead choose a destination world to replace. Imported scripts retain their saved enablement and run when you connect.' },

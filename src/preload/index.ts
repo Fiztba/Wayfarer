@@ -10,6 +10,13 @@ import type {
 } from '../shared/types'
 
 export interface MudApi {
+  copyover: {
+    restore(): Promise<{ protocol: number; snapshot: unknown } | null>
+    resume(): Promise<void>
+    prepared(result: { snapshot?: unknown; error?: string }): Promise<void>
+    onPrepare(cb: () => void): () => void
+    onCancel(cb: () => void): () => void
+  }
   worlds: {
     export(id: string): Promise<boolean>
     chooseImport(): Promise<WorldPreview | null>
@@ -86,6 +93,13 @@ const appVersion =
   process.argv.find((a) => a.startsWith(VERSION_FLAG))?.slice(VERSION_FLAG.length) || '0.0.0-dev'
 
 const api: MudApi = {
+  copyover: {
+    restore: () => ipcRenderer.invoke('copyover:restore'),
+    resume: () => ipcRenderer.invoke('copyover:resume'),
+    prepared: (result) => ipcRenderer.invoke('copyover:prepared', result),
+    onPrepare: (cb) => { ipcRenderer.on('copyover:prepare', cb); return () => { ipcRenderer.removeListener('copyover:prepare', cb) } },
+    onCancel: (cb) => { ipcRenderer.on('copyover:cancel', cb); return () => { ipcRenderer.removeListener('copyover:cancel', cb) } }
+  },
   worlds: {
     export: (id) => ipcRenderer.invoke('worlds:export', id),
     chooseImport: () => ipcRenderer.invoke('worlds:choose-import'),

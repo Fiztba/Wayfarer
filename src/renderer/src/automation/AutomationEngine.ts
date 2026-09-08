@@ -233,6 +233,16 @@ export class AutomationEngine {
    * the host so a busy prompt can't hammer the disk.
    */
   private runtimeVars: Record<string, string> = {}
+  private completedOneShots = new Set<string>()
+  resetTimerHistory(): void { this.completedOneShots.clear() }
+  snapshot() {
+    return { runtimeVars: this.runtimeVars, persisted: [...this.persistedVarNames],
+      completed: [...this.completedOneShots], config: this.timerConfig }
+  }
+  restore(state: ReturnType<AutomationEngine['snapshot']>) {
+    this.runtimeVars = state.runtimeVars; this.persistedVarNames = new Set(state.persisted)
+    this.completedOneShots = new Set(state.completed); this.timerConfig = state.config
+  }
   /** Overlay names that were also sent to persistence (settings own them). */
   private persistedVarNames = new Set<string>()
 
@@ -560,9 +570,11 @@ export class AutomationEngine {
     // resurrect one-shot timers that already ran on this connection.
     if (this.timersRunning && config === this.timerConfig) return
     this.stopTimers()
+    if (config !== this.timerConfig) this.completedOneShots.clear()
     this.timersRunning = true
     this.timerConfig = config
     for (const timer of timers) {
+      if (timer.oneShot && this.completedOneShots.has(timer.id)) continue
       const lang = timer.language ?? 'commands'
       const run =
         lang !== 'commands'
@@ -572,7 +584,7 @@ export class AutomationEngine {
               this.runCommandString(timer.commands, 1)
             }
       const handle = timer.oneShot
-        ? setTimeout(run, timer.intervalMs)
+        ? setTimeout(() => { this.completedOneShots.add(timer.id); run() }, timer.intervalMs)
         : setInterval(run, timer.intervalMs)
       this.timerHandles.push(handle)
     }

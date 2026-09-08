@@ -3,7 +3,8 @@ import { autoUpdater } from 'electron-updater'
 import path from 'node:path'
 import fs from 'node:fs'
 import { pathToFileURL } from 'node:url'
-import { SessionManager } from './SessionManager'
+import { KeeperClient } from './KeeperClient'
+import { COPYOVER_PROTOCOL, COPYOVER_LIMIT } from '../shared/copyover'
 import { ProfileStore } from './ProfileStore'
 import { MudDirectory } from './MudDirectory'
 import { SettingsStore } from './SettingsStore'
@@ -44,7 +45,12 @@ protocol.registerSchemesAsPrivileged([
   { scheme: 'msp-sound', privileges: { stream: true } }
 ])
 
-const sessions = new SessionManager(() => mainWindow?.webContents ?? null)
+const keeperRoot = app.isPackaged
+  ? path.join(process.resourcesPath, 'app.asar.unpacked/out/keeper') : path.join(__dirname, '../keeper')
+const sessions = new KeeperClient(app.getPath('userData'),
+  path.join(keeperRoot, process.platform === 'win32' ? 'WayfarerConnection.exe' : 'wayfarer-connection'),
+  path.join(keeperRoot, 'keeper.cjs'), app.getVersion(),
+  (id, event) => mainWindow?.webContents.send('session:event', id, event))
 let profiles: ProfileStore
 
 // Windows toasts are delivered by AppUserModelID, and Electron's runtime
@@ -115,6 +121,8 @@ function createWindow(): void {
 }
 
 app.whenReady().then(async () => {
+  await sessions.initialize()
+  const restoringCopyover = await sessions.restore()
   const soundsDir = path.join(app.getPath('userData'), 'sounds')
   fs.mkdirSync(soundsDir, { recursive: true })
   protocol.handle('msp-sound', (request) => {
@@ -176,11 +184,41 @@ app.whenReady().then(async () => {
     })()
     return manualUpdateCheck
   })
-  ipcMain.handle('app:install-update', () => {
+  let preparingUpdate = false
+  let prepared: ((result: { snapshot?: unknown; error?: string }) => void) | null = null
+  ipcMain.handle('copyover:prepared', (event, result) => {
+    if (event.sender === mainWindow?.webContents) prepared?.(result)
+  })
+  ipcMain.handle('copyover:restore', () => sessions.restore())
+  ipcMain.handle('copyover:resume', () => sessions.resume())
+  ipcMain.handle('app:install-update', async () => {
     if (!updateReady) return false
+    if (preparingUpdate) return false
+    preparingUpdate = true
+    try {
+      if (sessions.count > 0) {
+        await sessions.pause()
+        const result = await new Promise<{ snapshot?: unknown; error?: string }>((resolve, reject) => {
+          const timeout = setTimeout(() => { prepared = null; reject(new Error('The client did not finish saving its sessions.')) }, 30_000)
+          prepared = (value) => { clearTimeout(timeout); prepared = null; resolve(value) }
+          mainWindow?.webContents.send('copyover:prepare')
+        })
+        if (result.error) throw new Error(result.error)
+        if (!result.snapshot || Buffer.byteLength(JSON.stringify(result.snapshot)) > COPYOVER_LIMIT) {
+          throw new Error('The session snapshot is too large to preserve. Close sessions before installing this update.')
+        }
+        await sessions.checkpoint({ protocol: COPYOVER_PROTOCOL, snapshot: result.snapshot })
+        sessions.preserve()
+      }
     // isSilent=true, isForceRunAfter=true: reinstall and come straight back.
-    autoUpdater.quitAndInstall(true, true)
-    return true
+      autoUpdater.quitAndInstall(true, true)
+      return true
+    } catch (error) {
+      mainWindow?.webContents.send('copyover:cancel')
+      await sessions.resume().catch(() => {})
+      dialog.showErrorBox('Update paused — sessions are still open', String(error))
+      return false
+    } finally { preparingUpdate = false }
   })
   ipcMain.handle('app:open-updater-log', async () => {
     if (!updaterLogPath || !fs.existsSync(updaterLogPath)) return false
@@ -206,8 +244,8 @@ app.whenReady().then(async () => {
     'session:resize',
     fenced('session:resize', (id: string, cols: number, rows: number) => sessions.resize(id, cols, rows))
   )
-  ipcMain.handle('session:disconnect', (_e, id: string) => {
-    sessions.disconnect(id)
+  ipcMain.handle('session:disconnect', async (_e, id: string) => {
+    await sessions.disconnect(id)
     logs.stop(id)
     for (const win of popouts.get(id) ?? []) {
       if (!win.isDestroyed()) win.close()
@@ -267,6 +305,13 @@ app.whenReady().then(async () => {
   // quitting must NOT be, or a map left open on a second monitor comes back
   // closed next launch.
   let quitting = false
+  let connectionsClosed = false
+  app.on('before-quit', (event) => {
+    if (connectionsClosed || sessions.isPreserving) return
+    event.preventDefault()
+    connectionsClosed = true
+    void sessions.shutdown().catch(() => {}).finally(() => app.quit())
+  })
   app.on('before-quit', () => {
     quitting = true
   })
@@ -534,7 +579,7 @@ app.whenReady().then(async () => {
         })
       })
 
-    const installing = await updateBeforeLaunch()
+    const installing = restoringCopyover ? false : await updateBeforeLaunch()
     if (installing) return // the app is restarting into the new version
     createWindow()
 

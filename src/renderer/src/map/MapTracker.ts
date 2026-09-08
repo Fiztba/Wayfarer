@@ -11,6 +11,7 @@
  * "I am here" or walks somewhere recognizable). It never guesses into the map.
  */
 import type { CaptureRule } from '../../../shared/types'
+import { saveFields, restoreFields } from '../../../shared/copyover.ts'
 import type { MapModel } from './MapModel.ts'
 import { RoomCapture, closedDoorName, isMoveFailure, isClosedDoorFailure } from './capture.ts'
 import {
@@ -189,6 +190,22 @@ export class MapTracker implements TrackerControl {
   dispose(): void {
     this.unsubscribeModel()
     this.subs.clear()
+  }
+
+  snapshot() {
+    return { at: Date.now(), capture: this.capture.snapshot(), state: saveFields(this,
+      ['currentRoomId', 'lost', 'mode', 'speculation', 'serverDriven', 'pending', 'lastOpenDir',
+        'serverSettledAt', 'heldDetection', 'manualCaptureRoomId', 'recentConfirmedRooms']) }
+  }
+  restore(snapshot: ReturnType<MapTracker['snapshot']>): void {
+    restoreFields(this, ['currentRoomId', 'lost', 'mode', 'speculation', 'serverDriven', 'pending',
+      'lastOpenDir', 'serverSettledAt', 'heldDetection', 'manualCaptureRoomId', 'recentConfirmedRooms'], snapshot.state)
+    const elapsed = Math.max(0, Date.now() - snapshot.at)
+    for (const move of this.pending) move.at += elapsed
+    if (this.serverSettledAt) this.serverSettledAt += elapsed
+    if (this.heldDetection) this.heldDetection.at += elapsed
+    this.capture.restore(snapshot.capture)
+    this.notify()
   }
 
   /**

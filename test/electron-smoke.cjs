@@ -24,6 +24,7 @@ app.whenReady().then(async () => {
     'profiles:list': [{ id: 'test', name: 'Test World', host: 'localhost', port: 4000, tls: false, encoding: 'utf8' }],
     'directory:list': { entries: [], source: 'cache' },
     'settings:get': settings, 'map:load': null, 'app:update-state': null,
+    'copyover:restore': null, 'copyover:resume': null,
     'session:connect': 'session-1', 'session:disconnect': null
   })) ipcMain.handle(channel, () => value)
   ipcMain.handle('settings:save', (_e, _scope, set) => set)

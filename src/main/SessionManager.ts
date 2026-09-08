@@ -1,5 +1,4 @@
 import crypto from 'node:crypto'
-import { app, type WebContents } from 'electron'
 import { TelnetSocket } from './telnet/TelnetSocket'
 import type { ConnectOptions, SessionEvent } from '../shared/types'
 
@@ -22,7 +21,12 @@ interface SessionEntry {
 export class SessionManager {
   private sessions = new Map<string, SessionEntry>()
 
-  constructor(private getWebContents: () => WebContents | null) {}
+  constructor(private getWebContents: () => { send(channel: string, id: string, event: SessionEvent): void } | null,
+    private clientVersion = '0.0.0') {}
+
+  list(): Array<{ id: string; opts: ConnectOptions }> {
+    return [...this.sessions].map(([id, entry]) => ({ id, opts: entry.opts }))
+  }
 
   hasProfile(id: string): boolean { return [...this.sessions.values()].some((s) => s.opts.profileId === id) }
 
@@ -116,7 +120,7 @@ export class SessionManager {
     })
     telnet.on('compression', (enabled) => emit({ type: 'compression', enabled }))
     telnet.on('gmcpEnabled', () => {
-      telnet.sendGmcp('Core.Hello', { client: 'Wayfarer', version: app.getVersion() })
+      telnet.sendGmcp('Core.Hello', { client: 'Wayfarer', version: this.clientVersion })
       telnet.sendGmcp('Core.Supports.Set', GMCP_SUPPORTS)
       emit({ type: 'gmcpEnabled' })
     })

@@ -31,6 +31,10 @@ import {
 } from './map/types.ts'
 import type { ScriptDef, SessionEvent } from '../../shared/types'
 import luaWasmUrl from 'wasmoon/dist/glue.wasm?url'
+import { saveFields, restoreFields } from '../../shared/copyover'
+const SESSION_STATE = ['name', 'host', 'port', 'profileId', 'charName', 'charNameFromGmcp',
+  'lines', 'openSpans', 'status', 'serverEchoes', 'mccp', 'gmcp', 'msdp', 'mxp', 'msp',
+  'lastMssp', 'msdpRoom', 'showCaptures', 'history', 'showMap', 'nextLineId', 'automationReady', 'draft']
 
 export interface Line {
   character?: string | null
@@ -87,6 +91,9 @@ function msdpExits(raw: unknown): ServerRoomInfo['exits'] | undefined {
 export type SessionStatus = 'connecting' | 'connected' | 'disconnected'
 
 export class SessionStore {
+  readonly ready: Promise<void>
+  draft = ''
+  copyoverPaused = false
   readonly id: string
   name: string
   host: string
@@ -214,7 +221,7 @@ export class SessionStore {
       if (!this.disposed) this.addSystemLine(`Could not load settings: ${String(err)}`, 'error')
     })
     this.mapKey = this.profileId ?? `adhoc_${host}_${port}`
-    void this.initMap()
+    this.ready = this.initMap()
     // MXP <VERSION>/<SUPPORT> replies go straight to the wire (not the
     // command pipeline — they are protocol, not player input).
     this.parser.onMxpReply = (text) => window.mud.send(this.id, text)
@@ -222,6 +229,7 @@ export class SessionStore {
 
   /** All outgoing traffic funnels through here so the mapper sees it. */
   private transmitRaw(command: string): void {
+    if (this.copyoverPaused) return
     window.mud.send(this.id, command)
     this.tracker?.onCommand(command)
   }
@@ -735,6 +743,7 @@ export class SessionStore {
   }
 
   private startAutomation(): void {
+    this.engine.resetTimerHistory()
     const generation = ++this.connectionGeneration
     const start = (): void => {
       if (this.disposed || this.status !== 'connected' || generation !== this.connectionGeneration) return
@@ -895,6 +904,7 @@ export class SessionStore {
 
   /** Send user input through the automation pipeline (or raw when masked). */
   sendInput(input: string, masked: boolean): void {
+    if (this.copyoverPaused) return
     if (masked) {
       window.mud.send(this.id, input)
       return
@@ -1091,6 +1101,43 @@ export class SessionStore {
     if (settingsManager.isLoaded(this.profileId)) await this.flushVariables()
     this.mapModel?.flush()
     if (this.mapModel) await window.mud.map.persist(this.mapKey, this.mapModel.map)
+  }
+
+  async snapshot() {
+    const scripts = this.scripts.snapshot() // Check compatibility before stopping work.
+    this.copyoverPaused = true
+    this.engine.stopTimers()
+    this.engine.cancelPacedRepeats()
+    this.cancelBlock()
+    this.walker?.cancel(false)
+    await this.ready
+    // Let a pending MSDP batch finish before capturing tracker state.
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    await this.flushWorld()
+    const state = saveFields(this, SESSION_STATE)
+    if (this.serverEchoes) state.draft = ''
+    return { id: this.id, state, parser: this.parser.snapshot(), login: this.loginGuess.snapshot(),
+      engine: this.engine.snapshot(), scripts, tracker: this.tracker?.snapshot(),
+      captures: [...this.captureWindows], logging: this.logging }
+  }
+  async restore(snapshot: Awaited<ReturnType<SessionStore['snapshot']>>) {
+    await this.ready
+    restoreFields(this, SESSION_STATE, snapshot.state)
+    this.parser.restore(snapshot.parser)
+    this.loginGuess.restore(snapshot.login)
+    this.engine.restore(snapshot.engine)
+    this.scripts.restore(snapshot.scripts)
+    this.captureWindows = new Map(snapshot.captures)
+    if (snapshot.tracker) this.tracker?.restore(snapshot.tracker)
+    this.copyoverPaused = true
+    // Restart logging without reprocessing historical lines or login scripts.
+    if (snapshot.logging) await this.toggleLogging()
+    this.notify()
+  }
+  resumeCopyover(): void {
+    this.copyoverPaused = false
+    if (this.status === 'connected' && this.automationReady) this.engine.startTimers()
+    this.notify()
   }
 
   private logLine(text: string, channel?: string): void {

@@ -234,6 +234,10 @@ function looksLikeTitle(line: string): boolean {
  * exits line is recognized, using recent lines to find the title.
  */
 export class RoomCapture {
+  snapshot() { return { recent: [...this.recent], listing: this.listing, rule: this.ruleSource } }
+  restore(state: ReturnType<RoomCapture['snapshot']>) {
+    this.recent = state.recent; this.listing = state.listing; this.useRule(state.rule)
+  }
   private recent: string[] = []
   /** How far back to look for the title. Has to clear the longest description
    *  a MUD prints in one go -- an introductory room can run past twenty lines,
