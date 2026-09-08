@@ -171,6 +171,7 @@ export class MapTracker implements TrackerControl {
   private heldDetection: { det: RoomDetection; at: number } | null = null
   /** Explicit placement binds the next look to this room, regardless of its placeholder name. */
   private manualCaptureRoomId: string | null = null
+  private recentConfirmedRooms: string[] = []
 
   constructor(model: MapModel, host: TrackerHost) {
     this.model = model
@@ -212,6 +213,7 @@ export class MapTracker implements TrackerControl {
    * known to be discontinuous: a reconnect, a map swapped underneath us.
    */
   reset(): void {
+    this.recentConfirmedRooms = []
     this.manualCaptureRoomId = null
     this.pending = []
     this.abandonSpeculation()
@@ -227,6 +229,11 @@ export class MapTracker implements TrackerControl {
   }
 
   private notify(): void {
+    if (!this.speculation && !this.lost && this.currentRoomId &&
+        this.recentConfirmedRooms.at(-1) !== this.currentRoomId) {
+      this.recentConfirmedRooms.push(this.currentRoomId)
+      if (this.recentConfirmedRooms.length > 12) this.recentConfirmedRooms.shift()
+    }
     // Doubt is only worth revisiting once the position is settled; mid-guess
     // the evidence is not written down yet anyway.
     if (!this.reconciling && !this.speculation && this.mode === 'map') {
@@ -275,7 +282,7 @@ export class MapTracker implements TrackerControl {
     const spec = this.speculation
     if (spec) {
       const evidence = Math.min(...spec.hypotheses.map((h) => h.corroborations))
-      return { score: Math.min(90, (spec.hypotheses.length === 1 ? 55 : 30) + evidence * 15),
+      return { score: Math.min(90, (spec.hypotheses.length === 1 ? 55 : 30) + evidence * 15 + (this.hasArrivalPrior(spec) ? 20 : 0)),
         state: 'tentative', candidates: spec.hypotheses.length, observations: spec.steps.length,
         candidateRoomIds: [...new Set(spec.hypotheses.map((h) => h.path[h.path.length - 1]))],
         observedName: spec.steps[spec.steps.length - 1]?.det.name,
@@ -294,6 +301,7 @@ export class MapTracker implements TrackerControl {
   }
 
   setMode(mode: TrackerMode): void {
+    this.recentConfirmedRooms = []
     this.manualCaptureRoomId = null
     this.mode = mode
     this.abandonSpeculation()
@@ -302,6 +310,7 @@ export class MapTracker implements TrackerControl {
 
   /** Manual re-sync: "I am here". Clears lost. */
   setCurrentRoom(roomId: string | null): void {
+    this.recentConfirmedRooms = []
     this.abandonSpeculation()
     this.currentRoomId = roomId
     this.manualCaptureRoomId = roomId
@@ -314,6 +323,7 @@ export class MapTracker implements TrackerControl {
   }
 
   private markLost(reason: string): void {
+    this.recentConfirmedRooms = []
     this.manualCaptureRoomId = null
     this.abandonSpeculation()
     if (!this.lost) {
@@ -933,6 +943,18 @@ export class MapTracker implements TrackerControl {
     const bet = candidates.find((c) => c.id === expected) ?? candidates[0]
     if (bet) this.currentRoomId = bet.id
     this.lost = false
+    // Closing a recently walked loop supplies several observations already:
+    // unique prose, expected coordinates, and the actual intervening route.
+    const earlier = bet ? this.recentConfirmedRooms.lastIndexOf(bet.id) : -1
+    const walked = this.recentConfirmedRooms.slice(Math.max(0, earlier))
+    const continuous = walked.slice(1).every((id, index) =>
+      this.model.room(walked[index])?.exits.some((exit) => exit.to === id && exit.inferred === false))
+    if (this.hasArrivalPrior(this.speculation) && earlier >= 0 &&
+        this.recentConfirmedRooms.length - earlier >= 3 &&
+        continuous && this.recentConfirmedRooms.at(-1) === anchor?.id) {
+      this.settleOn(this.speculation.hypotheses[0])
+      return
+    }
     this.notify()
   }
 
@@ -952,6 +974,19 @@ export class MapTracker implements TrackerControl {
   private advanceSpeculation(move: PendingMove | undefined, det: RoomDetection): void {
     const spec = this.speculation
     if (!spec) return
+    // An unexplored exit is missing data, not a failed prediction. A unique
+    // description match at the expected position can be accepted after the
+    // next distinct arrival, provided no saved destination contradicts it.
+    const held = spec.hypotheses.length === 1 ? spec.hypotheses[0] : null
+    const from = held ? this.model.room(held.path[held.path.length - 1]) : null
+    if (held && from && move && this.hasArrivalPrior(spec) &&
+        !this.exitForMove(from, move)?.to && !this.cloneOfDoubt(spec, det) &&
+        this.candidatesFor(det).length === 0) {
+      this.settleOn(held)
+      if (move.dir) this.handleMove(from, move.dir, det)
+      else this.handleSpecialMove(from, move.command ?? '', det)
+      return
+    }
     spec.steps.push({ dir: move?.dir ?? null, command: move?.command, det })
 
     const survivors: Hypothesis[] = []
@@ -1021,6 +1056,21 @@ export class MapTracker implements TrackerControl {
     }
     if (first.descHash && det.descHash && first.descHash !== det.descHash) return false
     return true
+  }
+
+  /** Geometry strengthens a unique prose match, but never rules out folds. */
+  private hasArrivalPrior(spec: Speculation): boolean {
+    if (spec.rivals.length !== 1 || spec.hypotheses.length !== 1) return false
+    const first = spec.steps[0]
+    const anchor = this.model.room(spec.anchorRoomId)
+    const candidate = this.model.room(spec.hypotheses[0].path[0])
+    if (!anchor || !candidate || candidate.id === anchor.id || !first.dir ||
+        !first.det.descHash || !candidate.descHashes?.includes(first.det.descHash)) return false
+    const existing = this.model.exitOf(anchor, first.dir)?.to
+    if (existing && existing !== candidate.id) return false
+    const [dx, dy, dz] = DIR_DELTA[first.dir]
+    return candidate.zoneId === anchor.zoneId && candidate.x === anchor.x + dx &&
+      candidate.y === anchor.y + dy && candidate.z === anchor.z + dz
   }
 
   /** One reading left: write the path it describes, backfilling every room it
