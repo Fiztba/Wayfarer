@@ -26,6 +26,7 @@ export interface MudApi {
   version: string
   /** Version of a downloaded update waiting to install, else null. */
   updateState(): Promise<string | null>
+  checkForUpdate(): Promise<string>
   /** Quit, install the staged update, and relaunch. */
   installUpdate(): Promise<boolean>
   /** Open updater.log in the system default editor. */
@@ -101,6 +102,7 @@ const api: MudApi = {
   updateState: () => ipcRenderer.invoke('app:update-state'),
   installUpdate: () => ipcRenderer.invoke('app:install-update'),
   openUpdaterLog: () => ipcRenderer.invoke('app:open-updater-log'),
+  checkForUpdate: () => ipcRenderer.invoke('app:check-update'),
   onUpdateReady: (cb) => {
     const handler = (_e: IpcRendererEvent, version: string) => cb(version)
     ipcRenderer.on('app:update-ready', handler)

@@ -45,6 +45,29 @@ const waitFor = async (test) => {
   const main = BrowserWindow.getAllWindows()[0]
   await waitFor(() => !main.webContents.isLoading())
   const call = (script) => main.webContents.executeJavaScript(script)
+  assert.match(await call('window.mud.checkForUpdate()'), /installed builds/)
+  const packaged = Object.getOwnPropertyDescriptor(app, 'isPackaged')
+  Object.defineProperty(app, 'isPackaged', { configurable: true, value: true })
+  const updater = require('electron-updater').autoUpdater
+  updater.checkForUpdates = async () => { throw new Error('offline test') }
+  assert.match(await call('window.mud.checkForUpdate()'), /offline test/)
+  updater.checkForUpdates = async () => ({ updateInfo: { version: app.getVersion() } })
+  assert.match(await call('window.mud.checkForUpdate()'), /up to date/)
+  let checks = 0, finish
+  updater.checkForUpdates = async () => {
+    checks++
+    return { updateInfo: { version: '99.0.0' }, downloadPromise: new Promise((resolve) => { finish = resolve }) }
+  }
+  const checking = call('Promise.all([window.mud.checkForUpdate(), window.mud.checkForUpdate()])')
+  await waitFor(() => !!finish)
+  finish([])
+  assert.deepEqual(await checking, ['Version 99.0.0 is ready to install.', 'Version 99.0.0 is ready to install.'])
+  assert.equal(checks, 1)
+  assert.equal(await call('window.mud.updateState()'), '99.0.0')
+  assert.equal(quitRequests, 0, 'checking must not restart a live session')
+  if (packaged) Object.defineProperty(app, 'isPackaged', packaged)
+  else delete app.isPackaged
+  console.log('ok manual update IPC handles failure, current version, shared download and ready state without restarting')
   await assert.rejects(call(`window.mud.profiles.save({host:'localhost',port:99999})`), /Port must/)
   await assert.rejects(call(`window.mud.profiles.save({host:'localhost',port:1.5})`), /Port must/)
   await assert.rejects(call(`window.mud.profiles.save({host:'',port:4000})`), /host name/)

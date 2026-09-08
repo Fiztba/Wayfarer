@@ -18,6 +18,8 @@ app.whenReady().then(async () => {
   new Function('module', 'exports', bundled.outputFiles[0].text)(mod, mod.exports)
   const settings = mod.exports.defaultSettings()
   const sent = [], errors = []
+  let finishUpdate
+  ipcMain.handle('app:check-update', () => new Promise(resolve => { finishUpdate = resolve }))
   for (const [channel, value] of Object.entries({
     'profiles:list': [{ id: 'test', name: 'Test World', host: 'localhost', port: 4000, tls: false, encoding: 'utf8' }],
     'directory:list': { entries: [], source: 'cache' },
@@ -49,6 +51,13 @@ app.whenReady().then(async () => {
   await waitFor(`!!document.querySelector('.command-input')`)
   event({ type: 'connected' })
   await waitFor(`document.body.textContent.includes('Connected to')`)
+  await js(`Array.from(document.querySelectorAll('.status-btn')).find(b => b.textContent.trim() === 'Check For Update').click()`)
+  await waitFor(`!!Array.from(document.querySelectorAll('.status-btn')).find(b => b.disabled && b.textContent.includes('Checking'))`)
+  finishUpdate('You are up to date (test).')
+  await waitFor(`document.querySelector('.status-actions').textContent.includes('You are up to date')`)
+  assert.ok(await js(`!!Array.from(document.querySelectorAll('.status-btn')).find(b => !b.disabled && b.textContent.trim() === 'Check For Update')`))
+  assert.deepEqual(sent, [])
+  console.log('ok Check For Update button uses real preload, shows progress and result, and sends no game commands')
   await setInput('look')
   await key('Enter')
   await new Promise((r) => setTimeout(r, 30))

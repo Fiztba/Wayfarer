@@ -77,6 +77,15 @@ export function SessionView({
 }) {
   useSyncExternalStore(store.subscribe, store.getVersion)
   const pendingUpdate = useSyncExternalStore(updateState.subscribe, updateState.get)
+  const [checkingUpdate, setCheckingUpdate] = useState(false)
+  const [updateMessage, setUpdateMessage] = useState('')
+  const checkForUpdate = async () => {
+    setCheckingUpdate(true)
+    setUpdateMessage('Checking for updates; any available update will download in the background.')
+    try { setUpdateMessage(await window.mud.checkForUpdate()) }
+    catch (error) { setUpdateMessage(`Update check failed: ${String(error)}`) }
+    finally { setCheckingUpdate(false) }
+  }
 
   // Re-render when app-wide options (timestamps, input behavior) change.
   const [, forceOptions] = useState(0)
@@ -812,6 +821,10 @@ export function SessionView({
       <div className="status-bar">
         <span className="status-text">{statusBits.join('  ·  ')}</span>
         <span className="status-actions">
+          {updateMessage && <span role="status" title={updateMessage} style={{ maxWidth: 300, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{updateMessage}</span>}
+          <button className="status-btn" disabled={checkingUpdate} onClick={() => void checkForUpdate()} title="Check now and download an available update without interrupting your session.">
+            {checkingUpdate ? 'Checking…' : 'Check For Update'}
+          </button>
           {pendingUpdate && (
             <button
               className="status-btn status-btn-update"

@@ -149,6 +149,33 @@ app.whenReady().then(async () => {
   // A window that mounts after 'update-downloaded' fired would never hear the
   // event, so the current state is also pullable.
   ipcMain.handle('app:update-state', () => updateReady)
+  let manualUpdateCheck: Promise<string> | null = null
+  // The manual check is available even when scheduled updates are disabled.
+  autoUpdater.on('error', () => {}) // Request errors are returned to the button below.
+  ipcMain.handle('app:check-update', () => {
+    if (updateReady) return `Version ${updateReady} is ready to install.`
+    if (!app.isPackaged) return 'Update checks are available in installed builds.'
+    if (manualUpdateCheck) return manualUpdateCheck
+    manualUpdateCheck = (async () => {
+      try {
+        autoUpdater.autoDownload = true
+        const result = await autoUpdater.checkForUpdates()
+        if (!result) return 'Unable to check for updates right now.'
+        if (result.downloadPromise) {
+          await result.downloadPromise
+          updateReady = result.updateInfo.version
+          mainWindow?.webContents.send('app:update-ready', updateReady)
+          return `Version ${updateReady} is ready to install.`
+        }
+        return `You are up to date (v${app.getVersion()}).`
+      } catch (error) {
+        return `Update check failed: ${String(error)}`
+      } finally {
+        manualUpdateCheck = null
+      }
+    })()
+    return manualUpdateCheck
+  })
   ipcMain.handle('app:install-update', () => {
     if (!updateReady) return false
     // isSilent=true, isForceRunAfter=true: reinstall and come straight back.
