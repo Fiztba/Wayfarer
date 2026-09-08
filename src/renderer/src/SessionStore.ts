@@ -254,6 +254,7 @@ export class SessionStore {
       this.addSystemLine(`Mapper: ${model.loadWarning}`, 'error')
     }
     const tracker = new MapTracker(model, {
+      characterName: () => this.charName,
       info: (text) => this.addSystemLine(text, 'system'),
       // Profile set first, then global: a MUD-specific rule wins, and a
       // global one can still act as a default across worlds.
@@ -372,8 +373,8 @@ export class SessionStore {
   /** Pathfind + walk to a room; reports problems as session lines. */
   walkTo(roomId: string, fast = false): void {
     if (!this.mapModel || !this.tracker || !this.walker) return
-    if (!this.tracker.currentRoomId || this.tracker.lost) {
-      this.addSystemLine('Cannot walk: the mapper does not know where you are (#lost to fix).', 'error')
+    if (!this.tracker.currentRoomId || this.tracker.lost || this.tracker.speculative) {
+      this.addSystemLine('Cannot auto-walk until the mapper confirms your position. Keep exploring manually or use “I am here”.', 'error')
       return
     }
     const path = findPath(this.mapModel, this.tracker.currentRoomId, roomId)
@@ -401,6 +402,7 @@ export class SessionStore {
         currentRoomId: this.tracker.currentRoomId,
         lost: this.tracker.lost,
         speculative: this.tracker.speculative,
+        confidence: this.tracker.confidence,
         serverDriven: this.tracker.serverDriven,
         mode: this.tracker.mode,
         name: this.name

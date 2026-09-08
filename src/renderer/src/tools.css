@@ -28,3 +28,6 @@
 .route-steps li { margin:5px 0; overflow-wrap:anywhere; }
 .route-steps code { color:#79c0ff; }
 .map-exit-row { flex-wrap:wrap; }
+.map-confidence { flex:none; display:flex; flex-direction:column; gap:3px; padding:7px 10px; font-size:11px; border-bottom:1px solid #30363d; color:#8b949e; }
+.map-confidence-tentative { background:#302716; color:#e3b75e; }
+.map-confidence-unknown { color:#f08080; }

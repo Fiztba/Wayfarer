@@ -268,6 +268,10 @@ export function MapPane({ model, tracker, walkTo: startWalk, onPopout, onClose }
           </button>
         </div>
       )}
+      <div className={`map-confidence map-confidence-${tracker.confidence.state}`} role="status" title="Evidence score, not a statistical probability">
+        <strong>{tracker.speculative ? 'Best guess' : tracker.lost ? 'Position unknown' : 'Position'}: {tracker.currentRoom?.name ?? 'Unknown'} · Confidence {tracker.confidence.score}/100</strong>
+        <span>{tracker.confidence.reason}{tracker.speculative ? ` Candidates: ${tracker.confidence.candidates} · Observations: ${tracker.confidence.observations}.` : ''}</span>
+      </div>
       {(tracker.lost || (!tracker.currentRoomId && Object.keys(model.map.rooms).length > 0)) && (
         <div className="map-lost">Position unknown — right-click your room → “I am here”.</div>
       )}
@@ -538,7 +542,7 @@ export function MapPane({ model, tracker, walkTo: startWalk, onPopout, onClose }
           </div>)}
         </details>
       </section>}
-      {routeTarget && <RoutePreview model={model} from={tracker.currentRoomId} lost={tracker.lost}
+      {routeTarget && <RoutePreview model={model} from={tracker.currentRoomId} lost={tracker.lost || tracker.speculative}
         destination={routeTarget.id} fast={routeTarget.fast} onClose={() => setRouteTarget(null)} onLocate={locateRoom}
         onWalk={() => { startWalk(routeTarget.id, routeTarget.fast); setRouteTarget(null) }} />}
       <div className="map-canvas-wrap">

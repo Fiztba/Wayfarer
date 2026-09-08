@@ -72,13 +72,21 @@ interface Hypothesis {
  */
 interface Speculation {
   /** Last room we were certain of. */
-  anchorRoomId: string
+  anchorRoomId: string | null
   /** Rooms that also explained the first step, carried onto the room it
    *  creates if none of them turn out to be right. */
   rivals: string[]
   /** Observations since the anchor, replayed on commit. */
-  steps: Array<{ dir: Direction | null; det: RoomDetection }>
+  steps: Array<{ dir: Direction | null; command?: string; det: RoomDetection }>
   hypotheses: Hypothesis[]
+}
+
+export interface PositionConfidence {
+  score: number
+  state: 'confirmed' | 'tentative' | 'unknown'
+  candidates: number
+  observations: number
+  reason: string
 }
 
 /**
@@ -110,6 +118,7 @@ const SPECIAL_TTL_MS = 90_000
 const SERVER_TEXT_WINDOW_MS = 3_000
 
 export interface TrackerHost {
+  characterName?(): string | null | undefined
   /** This MUD's capture rule, read fresh so edits take effect immediately. */
   captureRule?(): CaptureRule | undefined
   /** Informational output to the session (system-style line). */
@@ -226,7 +235,7 @@ export class MapTracker implements TrackerControl {
     // session would hand it the confidence it never earned.
     if (!this.speculation) this.model.setLastRoom(this.currentRoomId)
     // An armed #zone is fulfilled once we're standing in that zone.
-    if (this.model.pendingZoneId && this.currentRoom?.zoneId === this.model.pendingZoneId) {
+    if (!this.speculation && this.model.pendingZoneId && this.currentRoom?.zoneId === this.model.pendingZoneId) {
       this.model.pendingZoneId = null
     }
     for (const fn of this.subs) fn()
@@ -256,9 +265,23 @@ export class MapTracker implements TrackerControl {
     return this.speculation !== null
   }
 
+  get confidence(): PositionConfidence {
+    const spec = this.speculation
+    if (spec) {
+      const evidence = Math.min(...spec.hypotheses.map((h) => h.corroborations))
+      return { score: Math.min(90, (spec.hypotheses.length === 1 ? 55 : 30) + evidence * 15),
+        state: 'tentative', candidates: spec.hypotheses.length, observations: spec.steps.length,
+        reason: 'Checking later rooms against mapped exits. No guessed links saved.' }
+    }
+    if (this.lost || !this.currentRoomId) return { score: 0, state: 'unknown', candidates: 0, observations: 0, reason: 'Waiting for a recognizable room or a manual position.' }
+    return { score: 100, state: 'confirmed', candidates: 1, observations: 0,
+      reason: this.serverDriven ? 'Room identified by the server.' : 'Position accepted from a known route, a confirmed sequence, or your selection.' }
+  }
+
   /** Drop a run of unwritten moves. Used whenever something authoritative
    *  overrides the guess -- a server room id, "I am here", a mode change. */
   private abandonSpeculation(): void {
+    if (this.speculation) this.currentRoomId = this.speculation.anchorRoomId
     this.speculation = null
   }
 
@@ -330,6 +353,18 @@ export class MapTracker implements TrackerControl {
     this.capture.useRule(this.host.captureRule?.())
     this.expirePending()
 
+    // A forced departure can omit the destination room entirely. Discard the
+    // origin before consuming another command; otherwise its next arrival
+    // would incorrectly rewrite an exit of the room we were pushed out of.
+    const forcedName = /\bforcing (\S+) to flee\b/i.exec(plain)?.[1]
+    const character = this.host.characterName?.()
+    if ((forcedName && (forcedName.toLowerCase() === 'you' || (character && forcedName.toLowerCase() === character.toLowerCase()))) || /^You flee\b|^You are (?:swept|thrown|teleported|transported)\b/i.test(plain.trim())) {
+      this.capture.reset()
+      this.pending = []
+      this.markLost('forced movement interrupted tracking; look or keep moving to identify your position.')
+      return
+    }
+
     if (isMoveFailure(plain)) {
       const failed = this.pending.shift()
       // A special exit that failed has no direction to hang a door on.
@@ -387,13 +422,15 @@ export class MapTracker implements TrackerControl {
     // An authoritative id settles identity outright, so any run of guesses is
     // moot. Only reachable on MUDs that report room ids, which are exactly the
     // MUDs that never had to guess in the first place.
+    const wasSpeculating = this.speculative
     this.abandonSpeculation()
     this.serverDriven = true
     this.expirePending()
     const existing = this.model.findByServerId(info.serverId)
     // One arrival answers one move. The rest of the queue stays: a speedwalk
     // has several in flight, and each id that comes back pairs with the next.
-    const move = this.pending.shift()
+    const queuedMove = this.pending.shift()
+    const move = wasSpeculating ? undefined : queuedMove
     this.serverSettledAt = Date.now()
 
     if (existing) {
@@ -528,27 +565,18 @@ export class MapTracker implements TrackerControl {
     if (exit?.to) {
       const dest = this.model.room(exit.to)
       if (dest && (this.couldBe(dest, det) || this.canLearn(dest, det))) {
+        if (this.mode === 'map' && exit.inferred) this.model.setExitAt(current.id, current.exits.indexOf(exit), { inferred: false })
         this.currentRoomId = dest.id
         this.refreshExits(dest, det)
         this.syncName(dest, det)
         this.notify()
         return
       }
-      // The link may be a wrong guess (reverse links are heuristic, and MUD
-      // geometry is often asymmetric). On solid evidence, correct the exit
-      // and follow the player instead of going lost. The model has the last
-      // word on whether the corrected link is even possible; a refusal there
-      // is a contradiction we must not paper over by moving anyway.
+      // A reverse assumption or a prior identification may be wrong. Hold
+      // possible replacements until later observations corroborate the path.
       const fixes = this.candidatesFor(det)
-      const fixed = this.pickArrival(fixes, current, dir)
-      if (fixed && this.model.canLink(current.id, dir, fixed.id)) {
-        this.model.linkRooms(current.id, dir, fixed.id, false)
-        this.currentRoomId = fixed.id
-        this.refreshExits(fixed, det)
-        this.host.info(
-          `Mapper corrected the ${dir} exit of "${current.name}" → "${fixed.name}".`
-        )
-        this.notify()
+      if (fixes.length > 0 && !this.replaying) {
+        this.beginSpeculation(current, dir, det, fixes)
         return
       }
       this.markLost(
@@ -567,20 +595,8 @@ export class MapTracker implements TrackerControl {
     // states. Follow mode used to go lost here without even looking, on
     // rooms it knew perfectly well.
     const candidates = this.candidatesFor(det)
-    const known = this.pickArrival(candidates, current, dir)
-    if (known) {
-      if (this.mode === 'map') {
-        // The reverse link is only added when the return path is unclaimed
-        // or already ours: `s` from A landing in B does NOT imply `n` from
-        // B returns to A.
-        const back = this.model.exitOf(known, OPPOSITE[dir])
-        const twoWay = back !== undefined && (back.to === null || back.to === current.id)
-        this.model.linkRooms(current.id, dir, known.id, twoWay)
-        this.refreshExits(known, det)
-        this.syncName(known, det)
-      }
-      this.currentRoomId = known.id
-      this.notify()
+    if (candidates.length > 0 && !this.replaying) {
+      this.beginSpeculation(current, dir, det, candidates)
       return
     }
     if (this.mode !== 'map') {
@@ -588,13 +604,6 @@ export class MapTracker implements TrackerControl {
       return
     }
     const others = candidates.filter((c) => c.id !== current.id)
-    if (others.length > 0 && !this.replaying) {
-      // Several rooms could be this one and nothing corroborates yet. Rather
-      // than mint a twin on the spot, hold the move unwritten and let the next
-      // few steps decide which reading survives.
-      this.beginSpeculation(current, dir, det, others)
-      return
-    }
     if (others.length > 0) {
       this.host.info(MSG_DUPE(det.name, others.length + 1))
     }
@@ -636,11 +645,8 @@ export class MapTracker implements TrackerControl {
     if (this.lost) {
       // While lost we only re-anchor on an unambiguous fingerprint.
       const matches = this.candidatesFor(det)
-      if (matches.length === 1) {
-        this.currentRoomId = matches[0].id
-        this.lost = false
-        this.host.info(`Mapper re-synced at "${matches[0].name}".`)
-        this.notify()
+      if (matches.length > 0) {
+        this.beginSpeculation(null, null, det, matches)
         return
       }
       // An empty map has no room to re-anchor onto, so being lost on one is a
@@ -668,9 +674,8 @@ export class MapTracker implements TrackerControl {
       } else {
         // Teleport/recall/death: try unambiguous snap, else flag.
         const matches = this.candidatesFor(det)
-        if (matches.length === 1) {
-          this.currentRoomId = matches[0].id
-          this.notify()
+        if (matches.length > 0) {
+          this.beginSpeculation(null, null, det, matches)
         } else {
           this.markLost(`arrived somewhere unrecognized ("${det.name}").`)
         }
@@ -680,9 +685,8 @@ export class MapTracker implements TrackerControl {
 
     // No current room at all (fresh session).
     const matches = this.candidatesFor(det)
-    if (matches.length === 1) {
-      this.currentRoomId = matches[0].id
-      this.notify()
+    if (matches.length > 0) {
+      this.beginSpeculation(null, null, det, matches)
     } else if (matches.length === 0 && this.mode === 'map' && this.isMapEmpty()) {
       this.seedFirstRoom(det)
     }
@@ -757,14 +761,13 @@ export class MapTracker implements TrackerControl {
       this.syncName(room, det)
       this.notify()
     }
-    if (expected && this.roomMatches(expected, det)) {
+    if (expected && (this.couldBe(expected, det) || this.canLearn(expected, det))) {
       arrive(expected)
       return
     }
     const matches = this.candidatesFor(det).filter((r) => r.id !== current.id)
-    if (matches.length === 1) {
-      if (exit && this.mode === 'map') this.model.setExitAt(current.id, idx, { to: matches[0].id })
-      arrive(matches[0])
+    if (matches.length > 0) {
+      this.beginSpeculation(current, null, det, matches, command)
       return
     }
     if (matches.length === 0 && exit && this.mode === 'map') {
@@ -803,72 +806,6 @@ export class MapTracker implements TrackerControl {
 
   private get map() {
     return this.model.map
-  }
-
-  /**
-   * Choose which fingerprint candidate we actually arrived in, given that we
-   * walked `dir` out of `current`. MUDs reuse room names freely (a courtyard
-   * wall can be three identical "Southern Outer Courtyard"s), so a name match
-   * ALONE — even a unique one — is never trusted. Positive corroboration is
-   * required:
-   *   1. exactly one candidate whose return exit already points at us, else
-   *   2. exactly one candidate sitting along `dir` nearby (same zone/level).
-   * Returns null otherwise — creating a (mergeable) duplicate is recoverable;
-   * a wrong link actively misleads.
-   */
-  private pickArrival(candidates: MapRoom[], current: MapRoom, dir: Direction): MapRoom | null {
-    const others = candidates.filter((c) => c.id !== current.id)
-    if (others.length === 0) return null
-
-    const backLinked = others.filter(
-      (c) => this.model.exitOf(c, OPPOSITE[dir])?.to === current.id
-    )
-    if (backLinked.length === 1) return backLinked[0]
-
-    // Exact grid adjacency only: one step in `dir`. Anything further away is
-    // NOT adjacent — a visible gap on a grid map means a room in between that
-    // simply hasn't been mapped yet, and a twin across the gap must not
-    // capture the arrival.
-    const [dx, dy, dz] = DIR_DELTA[dir]
-    const adjacent = others.filter(
-      (c) =>
-        c.zoneId === current.zoneId &&
-        c.x === current.x + dx &&
-        c.y === current.y + dy &&
-        c.z === current.z + dz
-    )
-    if (adjacent.length === 1) return adjacent[0]
-
-    // 3. exactly one NEIGHBOURING candidate, on the side we moved toward,
-    //    holding an unclaimed exit back the way we came. A passage first
-    //    walked from its far side has no back-link yet, and greedy placement
-    //    may have drawn its room a cell off the one `dir` points at, so
-    //    neither test above can fire -- that is how walking `nw` out of "A
-    //    Moldy Tunnel" into the already-mapped "A Bright Tunnel" minted a twin
-    //    instead of recognising it.
-    //
-    //    Both guards are load-bearing, and each has a test. Requiring the
-    //    candidate to sit on the side we walked toward stops a twin BEHIND us
-    //    capturing the arrival. Requiring it to be adjacent stops a twin
-    //    further along our own heading capturing it -- that is the gap case,
-    //    where the honest reading is an unmapped room in between, so it must
-    //    still create. Horizontal moves only; up/down displacement has no
-    //    equivalent and exact adjacency already covers it.
-    const facing =
-      dz !== 0
-        ? []
-        : others.filter((c) => {
-            if (c.zoneId !== current.zoneId || c.z !== current.z) return false
-            const ox = c.x - current.x
-            const oy = c.y - current.y
-            if (Math.max(Math.abs(ox), Math.abs(oy)) !== 1) return false
-            if (ox * dx + oy * dy <= 0) return false
-            const back = this.model.exitOf(c, OPPOSITE[dir])
-            return back !== undefined && back.to === null
-          })
-    if (facing.length === 1) return facing[0]
-
-    return null
   }
 
   // ---- reconciliation -----------------------------------------------------
@@ -951,46 +888,25 @@ export class MapTracker implements TrackerControl {
 
   /** Start holding moves back because more than one room explains this one. */
   private beginSpeculation(
-    anchor: MapRoom,
-    dir: Direction,
+    anchor: MapRoom | null,
+    dir: Direction | null,
     det: RoomDetection,
-    candidates: MapRoom[]
+    candidates: MapRoom[],
+    command?: string
   ): void {
     this.speculation = {
-      anchorRoomId: anchor.id,
+      anchorRoomId: anchor?.id ?? null,
       rivals: candidates.map((c) => c.id),
-      steps: [{ dir, det }],
+      steps: [{ dir, command, det }],
       hypotheses: candidates.map((c) => ({ path: [c.id], corroborations: 0 }))
     }
-    // Show a bet only where one is genuinely plausible; otherwise hold at the
-    // anchor. A wrong bet draws the player teleporting, which is worse than
-    // admitting we are unsure.
-    const bet = this.plausibleBet(candidates, anchor, dir)
+    // The drawing is not evidence. Prefer a matching already-linked target
+    // for display only; keep every other matching location as a hypothesis.
+    const expected = dir && anchor ? this.model.exitOf(anchor, dir)?.to : null
+    const bet = candidates.find((c) => c.id === expected) ?? candidates[0]
     if (bet) this.currentRoomId = bet.id
+    this.lost = false
     this.notify()
-  }
-
-  /**
-   * Which candidate is worth showing while unsure. Deliberately narrow: a
-   * neighbour on the side we actually walked toward. A twin behind us would
-   * draw the player moving backwards, and one further along our own heading is
-   * the gap case, where the honest reading is an unmapped room in between.
-   */
-  private plausibleBet(candidates: MapRoom[], from: MapRoom, dir: Direction): MapRoom | null {
-    const [dx, dy, dz] = DIR_DELTA[dir]
-    for (const c of candidates) {
-      if (c.zoneId !== from.zoneId) continue
-      if (dz !== 0) {
-        if (c.z === from.z + dz) return c
-        continue
-      }
-      if (c.z !== from.z) continue
-      const ox = c.x - from.x
-      const oy = c.y - from.y
-      if (Math.max(Math.abs(ox), Math.abs(oy)) !== 1) continue
-      if (ox * dx + oy * dy > 0) return c
-    }
-    return null
   }
 
   /**
@@ -1009,7 +925,7 @@ export class MapTracker implements TrackerControl {
   private advanceSpeculation(move: PendingMove | undefined, det: RoomDetection): void {
     const spec = this.speculation
     if (!spec) return
-    spec.steps.push({ dir: move?.dir ?? null, det })
+    spec.steps.push({ dir: move?.dir ?? null, command: move?.command, det })
 
     const survivors: Hypothesis[] = []
     for (const h of spec.hypotheses) {
@@ -1019,7 +935,7 @@ export class MapTracker implements TrackerControl {
         // A look rather than a move: this reading has to describe the room it
         // claims we are standing in.
         if (this.couldBe(at, det)) {
-          survivors.push({ path: [...h.path, at.id], corroborations: h.corroborations + 1 })
+          survivors.push({ path: [...h.path, at.id], corroborations: h.corroborations })
         }
         continue
       }
@@ -1027,16 +943,35 @@ export class MapTracker implements TrackerControl {
       if (!exit || exit.to === null) continue
       const dest = this.model.room(exit.to)
       if (!dest || !this.couldBe(dest, det)) continue
-      survivors.push({ path: [...h.path, dest.id], corroborations: h.corroborations + 1 })
+      const evidence = !exit.inferred && !h.path.includes(dest.id) && !this.cloneOfDoubt(spec, det)
+      survivors.push({ path: [...h.path, dest.id], corroborations: h.corroborations + (evidence ? 1 : 0) })
     }
     spec.hypotheses = survivors
 
-    if (survivors.length === 1 && !this.cloneOfDoubt(spec, det)) {
+    if (survivors.length === 1 && survivors[0].corroborations >= 2 && !this.cloneOfDoubt(spec, det)) {
       this.settleOn(survivors[0])
       return
     }
-    if (survivors.length === 0 || spec.steps.length >= SPECULATION_CAP) {
+    if (survivors.length === 0) {
+      // A route prediction broke, but the current room may still be familiar.
+      // Restart from that observation without attaching it to an uncertain
+      // origin. Do not "repair" a whole guessed path to make it fit.
+      const candidates = this.candidatesFor(det)
+      if (candidates.length > 0) {
+        const anchor = this.model.room(spec.anchorRoomId)
+        this.beginSpeculation(anchor, null, det, candidates)
+        return
+      }
+      if (this.mode !== 'map' || !move || (spec.steps[0].dir === null && !spec.steps[0].command)) {
+        this.markLost('the provisional route reached unknown territory; no guessed links were saved.')
+        return
+      }
       this.settleAsNew()
+      return
+    }
+    if (spec.steps.length >= SPECULATION_CAP) {
+      // Repeated rooms alone must never force a guess into permanent data.
+      this.markLost('the room sequence remains ambiguous; no guessed links were saved.')
       return
     }
     this.currentRoomId = survivors[0].path[survivors[0].path.length - 1]
@@ -1054,8 +989,7 @@ export class MapTracker implements TrackerControl {
   private cloneOfDoubt(spec: Speculation, det: RoomDetection): boolean {
     const first = spec.steps[0]?.det
     if (!first) return false
-    const dirs = (d: RoomDetection): Direction[] => d.exits.map((e) => e.dir)
-    if (fingerprintOf(first.name, dirs(first)) !== fingerprintOf(det.name, dirs(det))) {
+    if (normalizeRoomName(first.name) !== normalizeRoomName(det.name)) {
       return false
     }
     if (first.descHash && det.descHash && first.descHash !== det.descHash) return false
@@ -1073,11 +1007,9 @@ export class MapTracker implements TrackerControl {
       const step = spec.steps[i]
       const room = this.model.room(h.path[i])
       if (!room) continue
-      if (from && step.dir) this.adoptArrival(from, step.dir, room, step.det)
-      else {
-        this.refreshExits(room, step.det)
-        this.syncName(room, step.det)
-      }
+      if (from && (step.dir || step.command) && this.mode === 'map') this.recordObservedArrival(from, step, room)
+      this.refreshExits(room, step.det)
+      this.syncName(room, step.det)
       from = room
     }
     this.currentRoomId = h.path[h.path.length - 1]
@@ -1109,6 +1041,11 @@ export class MapTracker implements TrackerControl {
       const made = this.createArrival(anchor, first.dir, first.det)
       this.model.setRivals(made.id, spec.rivals)
       this.currentRoomId = made.id
+    } else if (first.command) {
+      const made = this.model.createRoom({ name: first.det.name, zoneId: this.zoneForNewRoom(anchor), ...this.placeSpecial(anchor) })
+      this.applyDetectedExits(made, first.det)
+      this.recordObservedArrival(anchor, first, made)
+      this.currentRoomId = made.id
     } else {
       this.currentRoomId = anchor.id
     }
@@ -1118,6 +1055,7 @@ export class MapTracker implements TrackerControl {
         const at = this.model.room(this.currentRoomId)
         if (!at) break
         if (step.dir) this.handleMove(at, step.dir, step.det)
+        else if (step.command) this.handleSpecialMove(at, step.command, step.det)
         else {
           this.refreshExits(at, step.det)
           this.syncName(at, step.det)
@@ -1129,15 +1067,17 @@ export class MapTracker implements TrackerControl {
     this.notify()
   }
 
-  /** Adopt a room already on the map as the arrival, linking how we got here.
-   *  The reverse link is only added when the return path is unclaimed or
-   *  already ours: `s` from A landing in B does NOT imply `n` from B is A. */
-  private adoptArrival(from: MapRoom, dir: Direction, known: MapRoom, det: RoomDetection): void {
-    const back = this.model.exitOf(known, OPPOSITE[dir])
-    const twoWay = back !== undefined && (back.to === null || back.to === from.id)
-    this.model.linkRooms(from.id, dir, known.id, twoWay)
-    this.refreshExits(known, det)
-    this.syncName(known, det)
+  /** A corroborated traversal is directed evidence, even in a folded zone.
+   * No compass-opposite return is inferred and no layout restriction applies. */
+  private recordObservedArrival(from: MapRoom, step: { dir: Direction | null; command?: string }, room: MapRoom): void {
+    if (step.dir) {
+      this.model.ensureExit(from.id, step.dir)
+      const index = from.exits.findIndex((e) => e.dir === step.dir)
+      this.model.setExitAt(from.id, index, { to: room.id, inferred: false })
+    } else {
+      const index = specialExitIndex(from, step.command ?? '')
+      if (index >= 0) this.model.setExitAt(from.id, index, { to: room.id, inferred: false })
+    }
   }
 
   /** Create the room we just walked into and link it from where we came. */
@@ -1152,6 +1092,10 @@ export class MapTracker implements TrackerControl {
     // Two-way link only if the new room reports the return exit.
     const hasReturn = det.exits.some((e) => e.dir === OPPOSITE[dir])
     this.model.linkRooms(from.id, dir, room.id, hasReturn)
+    const forward = from.exits.findIndex((e) => e.dir === dir)
+    this.model.setExitAt(from.id, forward, { inferred: false })
+    const back = room.exits.findIndex((e) => e.dir === OPPOSITE[dir])
+    if (hasReturn && back >= 0) this.model.setExitAt(room.id, back, { inferred: true })
     return room
   }
 

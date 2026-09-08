@@ -97,7 +97,15 @@ function world() {
   tracker.onCommand('enter portal')
   seeRoom('Chapel', '[ Exits: s ]')
   check('corrected: standing in the chapel', tracker.currentRoom?.id, chapel.id)
-  check('corrected: the exit learned it', model.room(hub.id)!.exits.find((e) => e.dir === null)!.to, chapel.id)
+  check('corrected: no premature exit correction', model.room(hub.id)!.exits.find((e) => e.dir === null)!.to, wrong.id)
+  check('corrected: visibly tentative', tracker.speculative, true)
+  const garden = model.createRoom({ name: 'Chapel Garden', x: 20, y: 20, exits: [{ dir: 'e', to: null, door: false }] })
+  const fountain = model.createRoom({ name: 'Marble Fountain', x: -20, y: 10, exits: [] })
+  model.linkRooms(chapel.id, 'n', garden.id, false)
+  model.linkRooms(garden.id, 'e', fountain.id, false)
+  tracker.onCommand('n'); seeRoom('Chapel Garden', '[ Exits: e ]')
+  tracker.onCommand('e'); seeRoom('Marble Fountain', '[ Exits: none ]')
+  check('corrected: special exit committed after two landmarks', model.room(hub.id)!.exits.find((e) => e.dir === null)!.to, chapel.id)
 }
 {
   // Follow mode creates nothing: an unknown room beyond a special exit is lost.

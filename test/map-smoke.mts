@@ -352,8 +352,14 @@ function makeWorld() {
   seeRoom('Southern Courtyard', '[ Exits: n e ]')
   check('ring closed without duplicate', Object.keys(model.map.rooms).length, 4)
   check('ring: back at start', tracker.currentRoomId, r1.id)
+  check('ring: closure stays provisional', tracker.speculative, true)
+  check('ring: no premature loop link', model.exitOf(model.room(r4.id)!, 'w')?.to, null)
+  tracker.onCommand('n')
+  seeRoom('Northern Courtyard', '[ Exits: s e ]')
+  tracker.onCommand('e')
+  seeRoom('Northeast Courtyard', '[ Exits: s w ]')
   check('ring: loop link created', model.exitOf(model.room(r4.id)!, 'w')?.to, r1.id)
-  check('ring: reverse loop link', model.exitOf(model.room(r1.id)!, 'e')?.to, r4.id)
+  check('ring: reverse is not assumed from closure', model.exitOf(model.room(r1.id)!, 'e')?.to, null)
   check('ring: not lost', tracker.lost, false)
 
   // Maze safety: two identical rooms exist → ambiguous match must NOT link.
@@ -362,7 +368,7 @@ function makeWorld() {
   model.createRoom({ name: 'Twisty Passage', x: 12, y: 10, z: 0, exits: [{ dir: 'w', to: null, door: false }] })
   const before = Object.keys(model.map.rooms).length
   // Walk to R4 (mapped), then s through its unexplored stub into a "Twisty Passage".
-  tracker.onCommand('e')
+  tracker.onCommand('s')
   seeRoom('Southeast Courtyard', '[ Exits: n w s ]')
   check('maze setup: at R4', tracker.currentRoomId, r4.id)
   tracker.onCommand('s')
@@ -379,7 +385,7 @@ function makeWorld() {
   check('maze: not linked to either twin', tracker.currentRoom?.name, 'Dead End')
 }
 
-// ---- asymmetric exits on a grid: position corroborates, back exit doesn't ----
+// ---- asymmetric exits: neither grid position nor a backlink confirms identity ----
 {
   const { model, tracker, infos, seeRoom } = makeWorld()
   const southern = model.createRoom({
@@ -404,14 +410,13 @@ function makeWorld() {
   })
   const countBefore = Object.keys(model.map.rooms).length
 
-  // s from Northern: Southern is grid-adjacent (corroborated) even though its
-  // n exit belongs to the Gatehouse → link one-way, never touch Southern.n.
+  // Southern is adjacent, but its identity and the one-way link remain tentative.
   tracker.setCurrentRoom(northern.id)
   tracker.onCommand('s')
   seeRoom('Southern Outer Courtyard', '[ Exits: n e s w ]')
   check('asym: no duplicate created', Object.keys(model.map.rooms).length, countBefore)
   check('asym: arrived at real Southern', tracker.currentRoomId, southern.id)
-  check('asym: one-way link recorded', model.exitOf(model.room(northern.id)!, 's')?.to, southern.id)
+  check('asym: one-way link awaits evidence', model.exitOf(model.room(northern.id)!, 's')?.to, null)
   check('asym: Southern.n untouched', model.exitOf(model.room(southern.id)!, 'n')?.to, gatehouse.id)
   check('asym: not lost', tracker.lost, false)
 
@@ -420,13 +425,13 @@ function makeWorld() {
   tracker.setCurrentRoom(southern.id)
   tracker.onCommand('n')
   seeRoom('Main Gatehouse', '[ Exits: s ]')
-  check('heal: exit corrected (back-link evidence)', model.exitOf(model.room(southern.id)!, 'n')?.to, gatehouse.id)
+  check('heal: correction awaits further rooms', model.exitOf(model.room(southern.id)!, 'n')?.to, northern.id)
   check('heal: followed the player', tracker.currentRoomId, gatehouse.id)
   check('heal: not lost', tracker.lost, false)
-  check('heal: correction announced', infos.some((t) => t.includes('corrected the n exit')), true)
+  check('heal: visibly tentative', tracker.speculative, true)
 }
 
-// ---- name twin in the wrong direction must NOT capture the arrival ----
+// ---- a twin behind the drawing is a candidate, never an immediate commitment ----
 {
   const { model, tracker, seeRoom } = makeWorld()
   // An existing "Northern Outer Courtyard" (e,s,w) sits WEST of the player.
@@ -449,16 +454,13 @@ function makeWorld() {
   })
   const countBefore = Object.keys(model.map.rooms).length
 
-  // Walking EAST arrives at a room matching the west twin's fingerprint.
-  // A lone name match with no corroboration must create a new room east —
-  // never teleport the player into the western twin.
+  // Walking east may land west of the drawing in a non-Euclidean zone.
   tracker.setCurrentRoom(here.id)
   tracker.onCommand('e')
   seeRoom('Northern Outer Courtyard', '[ Exits: e s w ]')
   check('twin: held rather than duplicated', Object.keys(model.map.rooms).length, countBefore)
-  // The twin lies WEST while we walked east, so it is never worth showing as a
-  // bet either -- the position must not jump backwards.
-  check('twin: did not jump west', tracker.currentRoomId !== westTwin.id, true)
+  // Its coordinates do not disqualify it as a provisional candidate.
+  check('twin: western drawing does not exclude candidate', tracker.currentRoomId, westTwin.id)
   check('twin: flagged as a guess', tracker.speculative, true)
 
   tracker.onCommand('e')
@@ -488,14 +490,13 @@ function makeWorld() {
   const n1 = model.createRoom({ name: 'Northern Outer Courtyard', x: 1, y: 0, z: 0, exits: [] })
   const countBefore = Object.keys(model.map.rooms).length
 
-  // Walk s from the middle Northern room: three identical candidates, but only
-  // s1 sits along the ray → link to it, no new room.
+  // Retain every matching twin, irrespective of drawing position.
   tracker.setCurrentRoom(n1.id)
   tracker.onCommand('s')
   seeRoom('Southern Outer Courtyard', '[ Exits: n e s w ]')
   check('ambig: no room created', Object.keys(model.map.rooms).length, countBefore)
-  check('ambig: grid position picked the right twin', tracker.currentRoomId, s1.id)
-  check('ambig: link recorded', model.exitOf(model.room(n1.id)!, 's')?.to, s1.id)
+  check('ambig: all twins retained regardless of grid', tracker.confidence.candidates, 3)
+  check('ambig: no guessed link recorded', model.exitOf(model.room(n1.id)!, 's')?.to, undefined)
   check('ambig: not lost', tracker.lost, false)
 
   // Back-links outrank position: make s0 the ONLY room whose n → n1.
@@ -551,19 +552,14 @@ function makeWorld() {
   tracker.onCommand('w')
   seeRoom('Northern Outer Courtyard', '[ Exits: e s w ]')
   check('gap: held rather than duplicated', Object.keys(model.map.rooms).length, countBefore)
-  check('gap: did not jump to far twin', tracker.currentRoomId !== farTwin.id, true)
+  check('gap: distant twin remains a tentative candidate', tracker.currentRoomId, farTwin.id)
 
-  // Continuing west settles it. The far twin cannot explain a second step west
-  // -- its own w exit is unexplored -- so the run commits: the room that
-  // belongs in the gap is created, and the twin beyond it is then recognised
-  // by exact adjacency rather than duplicated a second time.
+  // Another identical room beyond an unexplored exit does not prove the gap.
   tracker.onCommand('w')
   seeRoom('Northern Outer Courtyard', '[ Exits: e s w ]')
-  check('gap: new room created', Object.keys(model.map.rooms).length, countBefore + 1)
-  const gapRoom = model.room(model.exitOf(model.room(northeast.id)!, 'w')?.to ?? '')!
-  check('gap: created in the gap', [gapRoom.x, gapRoom.y], [1, 0])
-  check('gap: adjacent twin still linked', tracker.currentRoomId, farTwin.id)
-  check('gap: no extra room', Object.keys(model.map.rooms).length, countBefore + 1)
+  check('gap: no rooms created from grid assumptions', Object.keys(model.map.rooms).length, countBefore)
+  check('gap: no guessed exit', model.exitOf(model.room(northeast.id)!, 'w')?.to, null)
+  check('gap: still uncertain after identical room', tracker.speculative, true)
 }
 
 // ---- polluted room names heal on contact ----
@@ -612,7 +608,7 @@ function makeWorld() {
   seeRoom('A Granite Passage with Murals', '[ Exits: n s w ]')
   check('hidden: no phantom created', Object.keys(model.map.rooms).length, 2)
   check('hidden: back at A', tracker.currentRoomId, a.id)
-  check('hidden: B.w learned', model.exitOf(model.room(b.id)!, 'w')?.to, a.id)
+  check('hidden: B.w awaits corroboration', model.exitOf(model.room(b.id)!, 'w')?.to, undefined)
   check('hidden: not lost', tracker.lost, false)
 
   // Round trip again — both hidden exits now known links.
@@ -924,7 +920,7 @@ function makeWorld() {
   seeRoom('A Bright Tunnel', '[ Exits: w nw se ]')
   check('displaced: recognised, no twin', Object.keys(model.map.rooms).length, before)
   check('displaced: standing in the known room', tracker.currentRoomId, bright.id)
-  check('displaced: link written', model.exitOf(model.room(moldy.id)!, 'nw')?.to, bright.id)
+  check('displaced: link awaits corroboration', model.exitOf(model.room(moldy.id)!, 'nw')?.to, null)
   check('displaced: not lost', tracker.lost, false)
 }
 
@@ -1083,17 +1079,16 @@ check('open cmd: no door, no command',
   seeRoom('A Mildew-Filled Tunnel', 'Exits: north south')
   check('mildew: nothing written yet', Object.keys(model.map.rooms).length, before)
   check('mildew: knows it is guessing', tracker.speculative, true)
-  check('mildew: no bet across the gap', tracker.currentRoomId, moldy.id)
+  check('mildew: a gap does not exclude a candidate', tracker.speculative, true)
 
   // One more step decides it: only the real Mildew has a south exit onto the
   // junction, so that reading is the last one standing.
   tracker.onCommand('s')
   seeRoom('A Sewer Junction', 'Exits: north')
   check('mildew: no duplicate created', Object.keys(model.map.rooms).length, before)
-  check('mildew: settled', tracker.speculative, false)
+  check('mildew: first landmark is still tentative', tracker.speculative, true)
   check('mildew: standing in the junction', tracker.currentRoomId, junction.id)
-  check('mildew: backfilled the link it held', model.exitOf(model.room(moldy.id)!, 's')?.to,
-    mildew.id)
+  check('mildew: origin remains unwritten', model.exitOf(model.room(moldy.id)!, 's')?.to, null)
   check('mildew: not lost', tracker.lost, false)
 }
 
@@ -1145,11 +1140,10 @@ check('open cmd: no door, no command',
 
   tracker.onCommand('n')
   seeRoom('the north tower', 'Exits: south')
-  check('parapet: resolved by the distinctive room', tracker.speculative, false)
+  check('parapet: first distinctive room stays tentative', tracker.speculative, true)
   check('parapet: not one room duplicated', Object.keys(model.map.rooms).length, before)
   check('parapet: standing in the tower', tracker.currentRoomId, tower.id)
-  check('parapet: backfilled where we came in', model.exitOf(model.room(bailey.id)!, 'w')?.to,
-    wall[0].id)
+  check('parapet: entry awaits a second landmark', model.exitOf(model.room(bailey.id)!, 'w')?.to, null)
   check('parapet: not lost', tracker.lost, false)
 }
 
@@ -1300,10 +1294,10 @@ check('open cmd: no door, no command',
   check('blackmoor-real: still hedging through the clone', tracker.speculative, true)
   tracker.onCommand('s')
   see('Main Street', DESC.main, 'Exits: north east')
-  check('blackmoor-real: distinctive room confirms', tracker.speculative, false)
+  check('blackmoor-real: first distinctive room stays tentative', tracker.speculative, true)
   check('blackmoor-real: no duplicate', Object.keys(model.map.rooms).length, before)
   check('blackmoor-real: standing on Main Street', tracker.currentRoomId, main.id)
-  check('blackmoor-real: backfilled the stretched entrance', model.exitOf(model.room(side.id)!, 'e')?.to, alleyN.id)
+  check('blackmoor-real: entrance awaits further evidence', model.exitOf(model.room(side.id)!, 'e')?.to, null)
   check('blackmoor-real: not lost', tracker.lost, false)
 }
 
@@ -1412,23 +1406,12 @@ check('open cmd: no door, no command',
   tracker.onCommand('s')
   see('An Outstretched Tunnel', DESC.tunnel, 'Exits: north east south west')
 
-  // That settles it. Both rooms now agree their north leads to the same dark
-  // corner, and they look identical -- two independent signals, so the copy is
-  // merged away without anyone being asked.
-  check('explore: the copy is gone', model.room(copy.id), null)
-  check('explore: back to the original count', Object.keys(model.map.rooms).length, before + 1)
-  check('explore: standing in the real room', tracker.currentRoomId, known.id)
-  check('explore: the message names both signals',
-    infos.some((t) => t.includes('same description, north leads to the same room')), true)
-  check('explore: told what happened',
-    infos.some((t) => t.includes('already on the map')), true)
-  check('explore: the way in was kept', model.exitOf(model.room(start.id)!, 'e')?.to, known.id)
-
-  // ...and it can be put back, because an automatic merge must be reversible.
-  const restored = model.undoLastMerge()
-  check('explore: undo restores the copy', restored?.id, copy.id)
-  check('explore: undo restores the count', Object.keys(model.map.rooms).length, before + 2)
-  check('explore: undo restores the way in', model.exitOf(model.room(start.id)!, 'e')?.to, copy.id)
+  // Revisiting the same two rooms is not independent evidence for a merge.
+  check('explore: no premature merge', model.room(copy.id)?.id, copy.id)
+  check('explore: original and copy preserved', Object.keys(model.map.rooms).length, before + 2)
+  check('explore: still tentative', tracker.speculative, true)
+  check('explore: entry remains unchanged', model.exitOf(model.room(start.id)!, 'e')?.to, copy.id)
+  check('explore: no automatic merge to undo', model.undoLastMerge(), null)
 }
 
 // ---- a direction cannot be reciprocal between two rooms ----
@@ -1842,7 +1825,7 @@ check('open cmd: no door, no command',
   tracker.onLine('[ Exits: s ]')
   check('learn: not while the name repeats',
     model.room(b.id)?.descHashes?.includes(hashText('Owned.')), false)
-  check('learn: the twin is not at the mapped exit, so we go lost', tracker.lost, true)
+  check('learn: mismatching linked room triggers tentative recovery', tracker.speculative, true)
   void c
   void seeRoom
 }

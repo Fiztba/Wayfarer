@@ -29,6 +29,7 @@ app.whenReady().then(async () => {
       import { MapTracker } from './src/renderer/src/map/MapTracker';
       const model = new MapModel(${JSON.stringify(map)}, () => {});
       const tracker = new MapTracker(model, {info: () => {}});
+      window.tracker = tracker;
       window.walks = []; window.graph = () => JSON.stringify(model.map);
       createRoot(document.getElementById('root')).render(<MapPane model={model} tracker={tracker} walkTo={(id) => window.walks.push(id)} />);
     ` } })
@@ -90,6 +91,16 @@ app.whenReady().then(async () => {
     await js(`Array.from(document.querySelectorAll('button')).find(b => b.textContent === 'Start walk').click()`)
     assert.equal((await js('window.walks')).length, 1)
     console.log('ok routing preview sends no movement until Start walk')
+    await js(`window.tracker.setCurrentRoom(null); window.tracker.onLine('Hall of Mirrors'); window.tracker.onLine('Exits: north east south west up northwest')`)
+    await waitFor(`document.querySelector('.map-confidence').textContent.includes('Best guess')`)
+    assert.ok(await js(`document.querySelector('.map-confidence').textContent.includes('55/100')`))
+    assert.ok(await js(`document.querySelector('.map-confidence').textContent.includes('No guessed links saved')`))
+    assert.equal(await js(`!!Array.from(document.querySelectorAll('button')).find(b => b.textContent === 'Start walk')`), false)
+    win.setSize(360, 620)
+    await new Promise((r) => setTimeout(r, 100))
+    assert.ok(await js(`document.querySelector('.map-confidence').scrollWidth <= document.querySelector('.map-confidence').clientWidth`))
+    if (process.env.WAYFARER_CONFIDENCE_CAPTURE) fs.writeFileSync(process.env.WAYFARER_CONFIDENCE_CAPTURE, (await win.webContents.capturePage()).toPNG())
+    console.log('ok tentative confidence is visible, fits a narrow pane, and prevents starting a route')
   }
   assert.deepEqual(errors, [])
   win.destroy()

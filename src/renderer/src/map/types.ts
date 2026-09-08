@@ -64,6 +64,8 @@ export function wordToDirection(word: string): Direction | null {
 }
 
 export interface MapExit {
+  /** Compass-opposite return suggested by mapping, not yet traversed. */
+  inferred?: boolean
   /** Excluded from automatic routes. Manual movement still works. */
   avoid?: boolean
   /** Traversal cost, default 1. */

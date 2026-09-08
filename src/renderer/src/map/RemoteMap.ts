@@ -8,6 +8,7 @@
  */
 import { MapModel } from './MapModel.ts'
 import type { TrackerMode } from './MapTracker.ts'
+import type { PositionConfidence } from './MapTracker.ts'
 import type { Direction, MapExit, MapRoom, MudMap } from './types.ts'
 
 export type MapAction =
@@ -190,6 +191,7 @@ export class RemoteMapModel extends MapModel {
 
 /** Minimal tracker facade for the pop-out (state mirrored, commands relayed). */
 export class RemoteTracker {
+  confidence: PositionConfidence = { score: 0, state: 'unknown', candidates: 0, observations: 0, reason: 'Waiting for position.' }
   currentRoomId: string | null = null
   lost = false
   mode: TrackerMode = 'map'
@@ -219,6 +221,7 @@ export class RemoteTracker {
   }
 
   update(state: {
+    confidence?: PositionConfidence
     currentRoomId: string | null
     lost: boolean
     mode: TrackerMode
@@ -226,6 +229,7 @@ export class RemoteTracker {
     serverDriven?: boolean
   }): void {
     this.currentRoomId = state.currentRoomId
+    this.confidence = state.confidence ?? this.confidence
     this.lost = state.lost
     this.mode = state.mode
     this.speculative = state.speculative ?? false
@@ -249,6 +253,7 @@ export class RemoteTracker {
 
 /** What MapPane needs from a tracker — satisfied by MapTracker and RemoteTracker. */
 export interface TrackerControl {
+  readonly confidence: PositionConfidence
   currentRoomId: string | null
   lost: boolean
   mode: TrackerMode

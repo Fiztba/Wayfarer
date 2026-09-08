@@ -8,9 +8,11 @@ import React, { useCallback, useEffect, useRef, useState } from 'react'
 import { MapPane } from './MapPane'
 import { RemoteMapModel, RemoteTracker, type MapAction } from '../map/RemoteMap'
 import type { TrackerMode } from '../map/MapTracker'
+import type { PositionConfidence } from '../map/MapTracker'
 import type { MudMap } from '../map/types'
 
 interface MirrorState {
+  confidence?: PositionConfidence
   map: MudMap
   activeZoneId: string
   currentRoomId: string | null
