@@ -9,6 +9,7 @@ import { MudDirectory } from './MudDirectory'
 import { SettingsStore } from './SettingsStore'
 import { LogWriter } from './LogWriter'
 import { MapStore } from './MapStore'
+import { isOwnPage } from './navigation'
 import type { ConnectOptions, Profile, SettingsSet } from '../shared/types'
 
 let mainWindow: BrowserWindow | null = null
@@ -76,19 +77,9 @@ function guardNavigation(win: BrowserWindow): void {
     return { action: 'deny' }
   })
   win.webContents.on('will-navigate', (event, url) => {
-    if (!isOwnPage(url)) event.preventDefault()
+    const ownPage = pathToFileURL(path.join(__dirname, '../renderer/index.html')).href
+    if (!isOwnPage(url, ownPage, process.env.ELECTRON_RENDERER_URL)) event.preventDefault()
   })
-}
-
-function isOwnPage(url: string): boolean {
-  if (url.startsWith('file:')) return true
-  const dev = process.env.ELECTRON_RENDERER_URL
-  if (!dev) return false
-  try {
-    return new URL(url).origin === new URL(dev).origin
-  } catch {
-    return false
-  }
 }
 
 function createWindow(): void {
@@ -105,6 +96,9 @@ function createWindow(): void {
 
   mainWindow.on('closed', () => {
     mainWindow = null
+    // Map windows belong to this client window. Leaving them open would
+    // keep sockets alive with no session renderer to receive their output.
+    app.quit()
   })
 
   guardNavigation(mainWindow)
@@ -181,7 +175,14 @@ app.whenReady().then(async () => {
     'session:resize',
     fenced('session:resize', (id: string, cols: number, rows: number) => sessions.resize(id, cols, rows))
   )
-  ipcMain.handle('session:disconnect', (_e, id: string) => sessions.disconnect(id))
+  ipcMain.handle('session:disconnect', (_e, id: string) => {
+    sessions.disconnect(id)
+    logs.stop(id)
+    for (const win of popouts.get(id) ?? []) {
+      if (!win.isDestroyed()) win.close()
+    }
+    popouts.delete(id)
+  })
   ipcMain.handle('session:reconnect', (_e, id: string) => sessions.reconnect(id))
 
   ipcMain.handle('profiles:list', () => {

@@ -59,6 +59,13 @@ function scrollbackCap(): number {
 function msdpExits(raw: unknown): ServerRoomInfo['exits'] | undefined {
   if (raw === null || raw === undefined || raw === '') return undefined
   const exits: NonNullable<ServerRoomInfo['exits']> = {}
+  if (Array.isArray(raw)) {
+    for (const value of raw) {
+      const dir = typeof value === 'string' ? wordToDirection(value) : null
+      if (dir) exits[dir] = null
+    }
+    return exits
+  }
   if (typeof raw === 'object') {
     for (const [k, v] of Object.entries(raw as Record<string, unknown>)) {
       const dir = wordToDirection(k)
@@ -107,7 +114,7 @@ export class SessionStore {
     // that one also reconciles variables against a settings save that did
     // not happen, and would blank live vitals); scripts scoped to this
     // character run now, since connect-time was too early to know it.
-    if (this.status === 'connected') {
+    if (this.status === 'connected' && this.automationReady) {
       this.engine.startTimers()
       if (name) this.runStartupScripts(true)
     }
@@ -140,6 +147,7 @@ export class SessionStore {
 
   logging = false
   logPath: string | null = null
+  private loggingPending = false
 
   /** Named capture windows (tells, channels, ...) fed by triggers. */
   captureWindows = new Map<string, Line[]>()
@@ -161,6 +169,9 @@ export class SessionStore {
   private nextLineId = 1
   private subs = new Set<() => void>()
   private flushScheduled = false
+  private disposed = false
+  private connectionGeneration = 0
+  private automationReady = false
 
   constructor(id: string, name: string, host: string, port: number, profileId?: string) {
     this.id = id
@@ -198,7 +209,9 @@ export class SessionStore {
       },
       () => settingsManager.getSets(this.profileId)
     )
-    void settingsManager.ensure(this.profileId)
+    void settingsManager.ensure(this.profileId).catch((err) => {
+      if (!this.disposed) this.addSystemLine(`Could not load settings: ${String(err)}`, 'error')
+    })
     this.mapKey = this.profileId ?? `adhoc_${host}_${port}`
     void this.initMap()
     // MXP <VERSION>/<SUPPORT> replies go straight to the wire (not the
@@ -235,6 +248,7 @@ export class SessionStore {
       this.addSystemLine(`Mapper: could not load the map (${String(err)}).`, 'error')
       return
     }
+    if (this.disposed) return
     if (model.loadWarning) {
       this.addSystemLine(`Mapper: ${model.loadWarning}`, 'error')
     }
@@ -627,16 +641,19 @@ export class SessionStore {
   }
 
   handleEvent(event: SessionEvent): void {
+    if (this.disposed) return
     switch (event.type) {
       case 'connected':
         this.status = 'connected'
         this.addSystemLine(`Connected to ${this.host}:${this.port}`, 'system')
-        this.engine.startTimers()
-        this.runStartupScripts()
-        if (this.mergedAutoLog() && !this.logging) void this.toggleLogging()
+        this.startAutomation()
         break
       case 'disconnected':
         this.status = 'disconnected'
+        this.connectionGeneration++
+        this.automationReady = false
+        if (this.msdpRoomFlush !== null) clearTimeout(this.msdpRoomFlush)
+        this.msdpRoomFlush = null
         this.engine.stopTimers()
         this.engine.cancelPacedRepeats()
         this.cancelBlock()
@@ -679,6 +696,7 @@ export class SessionStore {
         break
       case 'msdpEnabled':
         this.msdp = true
+        this.notify()
         break
       case 'gmcpEnabled':
         this.gmcp = true
@@ -711,6 +729,22 @@ export class SessionStore {
 
   private mergedAutoLog(): boolean {
     return settingsManager.getSets(this.profileId).some((s) => s.options.autoLog)
+  }
+
+  private startAutomation(): void {
+    const generation = ++this.connectionGeneration
+    const start = (): void => {
+      if (this.disposed || this.status !== 'connected' || generation !== this.connectionGeneration) return
+      this.automationReady = true
+      this.engine.startTimers()
+      this.runStartupScripts()
+      if (this.charName) this.runStartupScripts(true)
+      if (this.mergedAutoLog() && !this.logging) void this.toggleLogging()
+    }
+    if (settingsManager.isLoaded(null) && settingsManager.isLoaded(this.profileId)) start()
+    else void settingsManager.ensure(this.profileId).then(start).catch((err) => {
+      if (!this.disposed) this.addSystemLine(`Could not start automation: ${String(err)}`, 'error')
+    })
   }
 
   /** GMCP Char.Status / Char.Name → the character's name for the tab label. */
@@ -1066,7 +1100,7 @@ export class SessionStore {
     if (this.logging) window.mud.log.line(this.id, plain)
     if (directive.highlight) {
       const color = directive.highlight
-      spans = spans.map((s) => ({ text: s.text, style: { ...s.style, color } }))
+      spans = spans.map((s) => ({ ...s, style: { ...s.style, color } }))
     }
     if (directive.captures) {
       for (const windowName of directive.captures) {
@@ -1158,21 +1192,37 @@ export class SessionStore {
   // ---- logging ------------------------------------------------------------
 
   async toggleLogging(): Promise<void> {
-    if (this.logging) {
-      this.logging = false
-      await window.mud.log.stop(this.id)
-      this.addSystemLine('Logging stopped.', 'system')
-      this.logPath = null
-    } else {
-      const file = await window.mud.log.start(this.id, this.name)
-      this.logging = true
-      this.logPath = file
-      this.addSystemLine(`Logging to ${file}`, 'system')
+    if (this.disposed || this.loggingPending) return
+    this.loggingPending = true
+    const generation = this.connectionGeneration
+    try {
+      if (this.logging) {
+        this.logging = false
+        await window.mud.log.stop(this.id)
+        this.addSystemLine('Logging stopped.', 'system')
+        this.logPath = null
+      } else {
+        const file = await window.mud.log.start(this.id, this.name)
+        if (this.disposed || generation !== this.connectionGeneration) {
+          await window.mud.log.stop(this.id)
+          return
+        }
+        this.logging = true
+        this.logPath = file
+        this.addSystemLine(`Logging to ${file}`, 'system')
+      }
+    } catch (err) {
+      if (!this.disposed) this.addSystemLine(`Logging failed: ${String(err)}`, 'error')
+    } finally {
+      this.loggingPending = false
+      this.notify()
     }
-    this.notify()
   }
 
   dispose(): void {
+    if (this.disposed) return
+    this.disposed = true
+    this.connectionGeneration++
     this.engine.stopTimers()
     this.engine.cancelPacedRepeats()
     if (this.blockTimer !== null) clearTimeout(this.blockTimer)
@@ -1183,6 +1233,7 @@ export class SessionStore {
     this.walker?.cancel(false)
     for (const unsub of this.mapUnsubs) unsub()
     this.mapUnsubs = []
+    this.tracker?.dispose()
     this.sounds.stopAll()
     this.mapModel?.flush()
     this.scripts.dispose()
@@ -1196,11 +1247,10 @@ export const sessionStores = new Map<string, SessionStore>()
 /** One shared MapModel per map key (kept across reconnects and tab closes). */
 const mapModelRegistry = new Map<string, Promise<MapModel>>()
 
-// Map saves are debounced; a quit mid-walk would otherwise lose whatever the
-// last debounce window still held. Only settled models can flush -- one still
-// loading has nothing to save.
+// Flush debounced map and variable writes before the renderer disappears,
+// and stop session-owned work just as when closing an individual tab.
 if (typeof window !== 'undefined') {
   window.addEventListener('beforeunload', () => {
-    for (const store of sessionStores.values()) store.mapModel?.flush()
+    for (const store of sessionStores.values()) store.dispose()
   })
 }

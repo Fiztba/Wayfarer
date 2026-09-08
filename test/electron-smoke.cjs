@@ -1,0 +1,82 @@
+/** Real Windows/Electron renderer + preload, isolated IPC fixtures.
+ * Run after npm run build: npx electron test/electron-smoke.cjs
+ */
+const { app, BrowserWindow, ipcMain } = require('electron')
+const assert = require('node:assert/strict')
+const path = require('node:path')
+const fs = require('node:fs')
+const os = require('node:os')
+const { buildSync } = require('esbuild')
+const root = path.resolve(__dirname, '..')
+const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'wayfarer-ui-test-'))
+app.setPath('userData', scratch)
+app.disableHardwareAcceleration()
+const timeout = setTimeout(() => { console.error('Electron smoke timed out'); app.exit(1) }, 30000)
+app.whenReady().then(async () => {
+  const bundled = buildSync({ entryPoints: [path.join(root, 'src/shared/types.ts')], bundle: true, write: false, format: 'cjs', platform: 'node' })
+  const mod = { exports: {} }
+  new Function('module', 'exports', bundled.outputFiles[0].text)(mod, mod.exports)
+  const settings = mod.exports.defaultSettings()
+  const sent = [], errors = []
+  for (const [channel, value] of Object.entries({
+    'profiles:list': [{ id: 'test', name: 'Test World', host: 'localhost', port: 4000, tls: false, encoding: 'utf8' }],
+    'directory:list': { entries: [], source: 'cache' },
+    'settings:get': settings, 'map:load': null, 'app:update-state': null,
+    'session:connect': 'session-1', 'session:disconnect': null
+  })) ipcMain.handle(channel, () => value)
+  ipcMain.handle('settings:save', (_e, _scope, set) => set)
+  ipcMain.on('session:send', (_e, _id, text) => sent.push(text))
+  const win = new BrowserWindow({ show: false, width: 1280, height: 860,
+    webPreferences: { preload: path.join(root, 'out/preload/index.js'), contextIsolation: true, sandbox: false, backgroundThrottling: false, offscreen: true } })
+  win.webContents.on('console-message', (event) => { if (event.level === 'error') errors.push(event.message) })
+  const js = (code) => win.webContents.executeJavaScript(code)
+  const waitFor = async (code) => {
+    const until = Date.now() + 5000
+    while (!await js(code)) {
+      assert.ok(Date.now() < until, `Timed out: ${code}`)
+      await new Promise((r) => setTimeout(r, 20))
+    }
+  }
+  const event = (ev) => win.webContents.send('session:event', 'session-1', ev)
+  const setInput = async (value) => {
+    await js(`{ const el = document.querySelector('.command-input'); Object.getOwnPropertyDescriptor(Object.getPrototypeOf(el), 'value').set.call(el, ${JSON.stringify(value)}); el.dispatchEvent(new Event('input', {bubbles:true})); }`)
+    await new Promise((r) => setTimeout(r, 30))
+  }
+  const key = (name) => js(`document.querySelector('.command-input').dispatchEvent(new KeyboardEvent('keydown', {key:${JSON.stringify(name)}, bubbles:true}))`)
+  await win.loadFile(path.join(root, 'out/renderer/index.html'))
+  await waitFor(`!!document.querySelector('.profile-card')`)
+  await js(`document.querySelector('.profile-card').click()`)
+  await waitFor(`!!document.querySelector('.command-input')`)
+  event({ type: 'connected' })
+  await waitFor(`document.body.textContent.includes('Connected to')`)
+  await setInput('look')
+  await key('Enter')
+  await new Promise((r) => setTimeout(r, 30))
+  assert.deepEqual(sent, ['look'])
+  console.log('ok command input crosses the real preload bridge')
+  event({ type: 'echo', serverEchoes: true })
+  await waitFor(`!!document.querySelector('input.command-input[type=password]')`)
+  await setInput('secret-draft')
+  await key('ArrowUp')
+  assert.equal(await js(`document.querySelector('.command-input').value`), 'secret-draft')
+  event({ type: 'echo', serverEchoes: false })
+  await waitFor(`!!document.querySelector('textarea.command-input')`)
+  assert.equal(await js(`document.querySelector('.command-input').value`), '')
+  await key('ArrowDown')
+  assert.equal(await js(`document.querySelector('.command-input').value`), '')
+  console.log('ok password drafts cannot reappear in history or unmasked input')
+  event({ type: 'text', data: 'A searchable room description.\r\n' })
+  await waitFor(`document.body.textContent.includes('A searchable room description.')`)
+  await js(`Array.from(document.querySelectorAll('button')).find(b => b.textContent.includes('Settings')).click()`)
+  await waitFor(`!!document.querySelector('[role=dialog]')`)
+  await js(`document.querySelector('.panel-close').click()`)
+  await waitFor(`!document.querySelector('[role=dialog]')`)
+  console.log('ok output renders and settings opens/closes')
+  await js(`document.querySelector('.tab-close').click()`)
+  await waitFor(`!document.querySelector('.command-input')`)
+  assert.deepEqual(errors, [])
+  console.log('ok session closes without renderer errors')
+  win.destroy()
+}).then(() => { clearTimeout(timeout); app.exit(0) }, (err) => {
+  console.error(err); clearTimeout(timeout); app.exit(1)
+})

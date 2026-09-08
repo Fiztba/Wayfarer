@@ -101,7 +101,7 @@ export function ConnectScreen({ onConnect, onOpenHelp }: Props) {
     setEncoding('utf8')
   }, [])
 
-  const formValid = host.trim().length > 0 && Number(port) > 0
+  const formValid = host.trim().length > 0 && Number.isInteger(Number(port)) && Number(port) > 0 && Number(port) <= 65535
 
   const saveCurrent = useCallback(async (): Promise<Profile | null> => {
     if (!formValid) return null

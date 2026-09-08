@@ -145,6 +145,7 @@ export class MapTracker implements TrackerControl {
   private pending: PendingMove[] = []
   private lastOpenDir: Direction | null = null
   private subs = new Set<() => void>()
+  private unsubscribeModel: () => void
   /**
    * When a server id last settled an arrival. The room text that follows on
    * such a MUD describes that same room, so a detection hard on its heels is
@@ -164,7 +165,12 @@ export class MapTracker implements TrackerControl {
     // login re-verifies (mismatch → unique-fingerprint snap or lost flag).
     const last = model.map.lastRoomId
     if (last && model.room(last)) this.currentRoomId = last
-    model.subscribe(() => this.onModelChanged())
+    this.unsubscribeModel = model.subscribe(() => this.onModelChanged())
+  }
+
+  dispose(): void {
+    this.unsubscribeModel()
+    this.subs.clear()
   }
 
   /**

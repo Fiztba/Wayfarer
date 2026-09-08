@@ -90,5 +90,34 @@ function feed(t: TelnetSocket, ...parts: (number[] | string | Buffer)[]): void {
   })
 }
 
+// Escaped IAC bytes must count toward the same subnegotiation limit.
+{
+  const { t, events } = harness()
+  feed(t, [IAC, SB, GMCP], Buffer.alloc(140_000, IAC))
+  check('escaped overflow: error emitted', events.some((e) => e[0] === 'error'), true)
+  check('escaped overflow: buffer bounded', (t as any).sbBuf.length <= 65536, true)
+}
+// Nested MSDP is server input; it must not exhaust the main-process stack.
+{
+  const { t, events } = harness()
+  const deep = Buffer.concat([Buffer.from([1, 88, 2]), Buffer.from(Array.from({ length: 15000 }, () => [5, 2]).flat())])
+  let threw = false
+  try { feed(t, [IAC, SB, 69], deep, [IAC, SE], 'after') } catch { threw = true }
+  check('msdp depth: no uncaught exception', threw, false)
+  check('msdp depth: reported', events.some((e) => e[0] === 'error'), true)
+  check('msdp depth: following text survives', events.at(-1), ['text', 'after'])
+}
+{
+  const { t } = harness()
+  const writes: Buffer[] = []
+  ;(t as any).write = (b: Buffer) => writes.push(b)
+  feed(t, [IAC, 251, GMCP])
+  feed(t, [IAC, 252, GMCP])
+  writes.length = 0
+  t.sendGmcp('Core.Ping')
+  check('gmcp WONT: inactive', t.gmcpActive, false)
+  check('gmcp WONT: no subnegotiation sent', writes.length, 0)
+}
+
 console.log(failures === 0 ? '\nALL PASS' : `\n${failures} FAILURES`)
 process.exit(failures === 0 ? 0 : 1)

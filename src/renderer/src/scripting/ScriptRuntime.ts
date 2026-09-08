@@ -63,6 +63,7 @@ export class ScriptRuntime {
   }
 
   run(language: 'js' | 'lua', code: string, ctx: ScriptContext = {}): void {
+    if (this.disposed) return
     if (language === 'js') this.runJs(code, ctx)
     else this.runLua(code, ctx)
   }
@@ -171,6 +172,10 @@ export class ScriptRuntime {
       try {
         const factory = new LuaFactory(this.luaWasmUrl)
         const engine = await factory.createEngine()
+        if (this.disposed) {
+          engine.global.close()
+          return null
+        }
         engine.global.set('send', (t: unknown) => this.host.send(String(t)))
         engine.global.set('sendRaw', (t: unknown) => this.host.sendRaw(String(t)))
         engine.global.set('echo', (t: unknown) => this.host.echo(String(t)))

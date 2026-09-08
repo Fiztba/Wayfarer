@@ -125,6 +125,8 @@ npm run dev        # launch in dev mode
 npm run dist       # build the Windows installer (release/)
 npm run icon       # regenerate build/icon.{png,ico} from build/icon.svg
 npm run typecheck  # TypeScript check
+npm test           # all local headless regression suites (no external MUDs)
+npm run build && npm run test:electron  # hidden native Electron UI + local TCP/IPC checks
 node --experimental-strip-types test/smoke.mts <host> <port>   # headless telnet test
 node --experimental-strip-types test/automation-smoke.mts      # automation engine tests
 node --experimental-strip-types test/scripting-smoke.mts       # JS + Lua runtime tests

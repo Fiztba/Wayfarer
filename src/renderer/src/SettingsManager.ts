@@ -13,7 +13,7 @@ class SettingsManager {
   private global: SettingsSet = defaultSettings()
   private profiles = new Map<string, SettingsSet>()
   /** Scopes with a load in flight or finished — the dedup set. */
-  private loading = new Set<string>()
+  private loading = new Map<string, Promise<void>>()
   /** Scopes whose load has actually completed. */
   private ready = new Set<string>()
   private listeners = new Set<Listener>()
@@ -22,8 +22,8 @@ class SettingsManager {
 
   async ensure(profileId: string | null | undefined): Promise<void> {
     const jobs: Promise<void>[] = []
-    if (!this.loading.has(GLOBAL_KEY)) jobs.push(this.load(null))
-    if (profileId && !this.loading.has(profileId)) jobs.push(this.load(profileId))
+    jobs.push(this.loading.get(GLOBAL_KEY) ?? this.load(null))
+    if (profileId) jobs.push(this.loading.get(profileId) ?? this.load(profileId))
     if (jobs.length > 0) {
       await Promise.all(jobs)
       this.notify()
@@ -35,11 +35,13 @@ class SettingsManager {
     // Claim the scope before the await so concurrent ensure() calls dedup,
     // but release it on failure — otherwise one bad read leaves the scope
     // stuck on defaults for the rest of the session with no retry.
-    this.loading.add(key)
-    return window.mud.settings.get(profileId).then(
+    const seq = this.saveSeq.get(key) ?? 0
+    const job = window.mud.settings.get(profileId).then(
       (s) => {
-        if (profileId === null) this.global = s
-        else this.profiles.set(profileId, s)
+        if ((this.saveSeq.get(key) ?? 0) === seq) {
+          if (profileId === null) this.global = s
+          else this.profiles.set(profileId, s)
+        }
         this.ready.add(key)
       },
       (err) => {
@@ -47,6 +49,8 @@ class SettingsManager {
         throw err
       }
     )
+    this.loading.set(key, job)
+    return job
   }
 
   /**

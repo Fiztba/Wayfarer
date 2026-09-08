@@ -55,6 +55,11 @@ export class ProfileStore {
   }
 
   save(input: Partial<Profile>): Profile {
+    if (typeof input.host !== 'string' || !input.host.trim()) throw new Error('A host name is required')
+    const port = input.port === undefined ? 23 : Number(input.port)
+    if (!Number.isInteger(port) || port < 1 || port > 65535) {
+      throw new Error('Port must be a whole number from 1 to 65535')
+    }
     const now = new Date().toISOString()
     // No id given: reuse any existing profile for the same host:port instead
     // of minting a duplicate (duplicates orphan their maps/settings).
@@ -63,7 +68,7 @@ export class ProfileStore {
       const twin = this.list().find(
         (p) =>
           p.host.toLowerCase() === input.host!.trim().toLowerCase() &&
-          p.port === (Number(input.port) || 23)
+          p.port === port
       )
       if (twin) id = twin.id
     }
@@ -73,7 +78,7 @@ export class ProfileStore {
       id,
       name: input.name?.trim() || 'Unnamed',
       host: input.host?.trim() || '',
-      port: Number(input.port) || 23,
+      port,
       tls: Boolean(input.tls),
       encoding: input.encoding === 'latin1' ? 'latin1' : 'utf8',
       notes: input.notes,

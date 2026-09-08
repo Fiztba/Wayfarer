@@ -345,5 +345,21 @@ engine.processInput('jstest arg1 arg2')
 check('js alias dispatched', scriptCalls.length, 1)
 check('js alias matches', scriptCalls[0]?.matches, ['arg1 arg2', 'arg1', 'arg2'])
 
+// A save unrelated to timers must not restart a completed one-shot.
+settings.timers = [{ id: 'once', label: 'Once', enabled: true, intervalMs: 100, oneShot: true, commands: 'timer-once' }]
+sent.length = 0
+engine.startTimers()
+await new Promise((r) => setTimeout(r, 180))
+check('one-shot fires once', sent, ['timer-once'])
+settings.variables.unrelated = 'edited'
+engine.refreshTimers()
+await new Promise((r) => setTimeout(r, 180))
+check('unrelated save does not restart one-shot', sent, ['timer-once'])
+settings.timers[0].commands = 'timer-edited'
+engine.refreshTimers()
+await new Promise((r) => setTimeout(r, 180))
+check('timer edit takes effect', sent, ['timer-once', 'timer-edited'])
+engine.stopTimers()
+
 console.log(failures === 0 ? '\nALL PASS' : `\n${failures} FAILURES`)
 process.exit(failures === 0 ? 0 : 1)

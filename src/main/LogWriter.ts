@@ -4,6 +4,7 @@
  */
 import fs from 'node:fs'
 import path from 'node:path'
+import { randomUUID } from 'node:crypto'
 
 export class LogWriter {
   private dir: string
@@ -21,12 +22,14 @@ export class LogWriter {
   /** Begin logging a session; returns the log file path. */
   start(sessionId: string, name: string): string {
     this.stop(sessionId)
-    const safe = name.replace(/[^a-zA-Z0-9 _-]/g, '_').trim() || 'session'
+    const safe = name.replace(/[^a-zA-Z0-9 _-]/g, '_').trim().slice(0, 80) || 'session'
     const stamp = new Date()
       .toISOString()
       .replace(/:/g, '-')
       .replace(/\..+$/, '')
-    const file = path.join(this.dir, `${safe}_${stamp}.log`)
+    // Tabs on the same world often connect in the same second. Each start
+    // needs its own file or their output (and restart headers) gets interleaved.
+    const file = path.join(this.dir, `${safe}_${stamp}_${randomUUID()}.log`)
     const stream = fs.createWriteStream(file, { flags: 'a' })
     // A stream with no error listener turns a full disk into a crash. Only
     // drop this entry if it is still the session's current one — a restart

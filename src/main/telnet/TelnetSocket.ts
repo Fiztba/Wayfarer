@@ -268,6 +268,14 @@ export class TelnetSocket extends EventEmitter<TelnetEvents> {
     if (text.length > 0) this.emit('text', text)
   }
 
+  private appendSubBytes(...bytes: number[]): void {
+    if (this.sbBuf.length + bytes.length > SB_MAX) {
+      this.sbBuf = []
+      this.state = ST_DATA
+      this.emit('error', `Subnegotiation for option ${this.sbOption} exceeded ${SB_MAX} bytes`)
+    } else this.sbBuf.push(...bytes)
+  }
+
   private parse(buf: Buffer): void {
     for (let i = 0; i < buf.length; i++) {
       const b = buf[i]
@@ -310,13 +318,7 @@ export class TelnetSocket extends EventEmitter<TelnetEvents> {
 
         case ST_SB_DATA:
           if (b === IAC) this.state = ST_SB_IAC
-          else if (this.sbBuf.length >= SB_MAX) {
-            // Give up on this subnegotiation; the rest shows as text until the
-            // IAC SE finally arrives, which the ST_IAC path simply ignores.
-            this.sbBuf = []
-            this.state = ST_DATA
-            this.emit('error', `Subnegotiation for option ${this.sbOption} exceeded ${SB_MAX} bytes`)
-          } else this.sbBuf.push(b)
+          else this.appendSubBytes(b)
           break
 
         case ST_SB_IAC:
@@ -337,12 +339,12 @@ export class TelnetSocket extends EventEmitter<TelnetEvents> {
             this.flushText()
             this.handleSubnegotiation(opt, data)
           } else if (b === IAC) {
-            this.sbBuf.push(IAC)
             this.state = ST_SB_DATA
+            this.appendSubBytes(IAC)
           } else {
             // Malformed; be lenient.
-            this.sbBuf.push(IAC, b)
             this.state = ST_SB_DATA
+            this.appendSubBytes(IAC, b)
           }
           break
       }
@@ -378,6 +380,7 @@ export class TelnetSocket extends EventEmitter<TelnetEvents> {
       if (this.remoteOpts.delete(opt)) {
         this.sendCmd(DONT, opt)
         if (opt === OPT.ECHO) this.emit('echo', false)
+        if (opt === OPT.GMCP) this.gmcpActive = false
       }
     } else if (cmd === DO) {
       const accept =
@@ -524,8 +527,12 @@ export class TelnetSocket extends EventEmitter<TelnetEvents> {
   }
 
   private handleMsdp(data: Buffer): void {
-    const result = parseMsdpPairs(data, { i: 0 }, null)
-    if (Object.keys(result).length > 0) this.emit('msdp', result)
+    try {
+      const result = parseMsdpPairs(data, { i: 0 }, null)
+      if (Object.keys(result).length > 0) this.emit('msdp', result)
+    } catch (err) {
+      this.emit('error', `Invalid MSDP packet: ${err instanceof Error ? err.message : String(err)}`)
+    }
   }
 }
 
@@ -548,11 +555,12 @@ function msdpReadString(data: Buffer, cur: Cursor): string {
   return data.subarray(start, cur.i).toString('utf8')
 }
 
-function msdpReadValue(data: Buffer, cur: Cursor): unknown {
+function msdpReadValue(data: Buffer, cur: Cursor, depth: number): unknown {
+  if (depth > 64) throw new Error('nesting exceeds 64 levels')
   const b = data[cur.i]
   if (b === MSDP_TABLE_OPEN) {
     cur.i++
-    return parseMsdpPairs(data, cur, MSDP_TABLE_CLOSE)
+    return parseMsdpPairs(data, cur, MSDP_TABLE_CLOSE, depth + 1)
   }
   if (b === MSDP_ARRAY_OPEN) {
     cur.i++
@@ -560,7 +568,7 @@ function msdpReadValue(data: Buffer, cur: Cursor): unknown {
     while (cur.i < data.length && data[cur.i] !== MSDP_ARRAY_CLOSE) {
       if (data[cur.i] === MSDP_VAL) {
         cur.i++
-        arr.push(msdpReadValue(data, cur))
+        arr.push(msdpReadValue(data, cur, depth + 1))
       } else {
         cur.i++
       }
@@ -575,7 +583,8 @@ function msdpReadValue(data: Buffer, cur: Cursor): unknown {
 export function parseMsdpPairs(
   data: Buffer,
   cur: Cursor,
-  closeByte: number | null
+  closeByte: number | null,
+  depth = 0
 ): Record<string, unknown> {
   const result: Record<string, unknown> = {}
   while (cur.i < data.length) {
@@ -589,7 +598,7 @@ export function parseMsdpPairs(
       const name = msdpReadString(data, cur)
       if (cur.i < data.length && data[cur.i] === MSDP_VAL) {
         cur.i++
-        result[name] = msdpReadValue(data, cur)
+        result[name] = msdpReadValue(data, cur, depth)
       } else {
         result[name] = ''
       }

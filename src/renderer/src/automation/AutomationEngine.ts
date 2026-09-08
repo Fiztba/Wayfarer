@@ -215,6 +215,7 @@ export class AutomationEngine {
   private regexCache = new Map<string, RegExp | null>()
   private timerHandles: ReturnType<typeof setTimeout>[] = []
   private timersRunning = false
+  private timerConfig = ''
 
   constructor(host: EngineHost, getSets: () => SettingsSet[]) {
     this.host = host
@@ -548,24 +549,32 @@ export class AutomationEngine {
   // ---- timers -------------------------------------------------------------
 
   startTimers(): void {
+    const timers = this.getSets().flatMap((set) => set.timers.filter((timer) =>
+      timer.enabled && this.active(timer) && Number.isFinite(timer.intervalMs) &&
+      timer.intervalMs >= 100 && timer.intervalMs <= 2_147_483_647
+    ))
+    const config = JSON.stringify(timers.map((timer) => [
+      timer.id, timer.intervalMs, timer.commands, timer.language ?? 'commands', !!timer.oneShot
+    ]))
+    // Saving an alias or a variable must not postpone repeating timers or
+    // resurrect one-shot timers that already ran on this connection.
+    if (this.timersRunning && config === this.timerConfig) return
     this.stopTimers()
     this.timersRunning = true
-    for (const set of this.getSets()) {
-      for (const timer of set.timers) {
-        if (!timer.enabled || !this.active(timer) || timer.intervalMs < 100) continue
-        const lang = timer.language ?? 'commands'
-        const run =
-          lang !== 'commands'
-            ? () => this.host.runScript(lang, timer.commands, {})
-            : () => {
-                this.resetBurst()
-                this.runCommandString(timer.commands, 1)
-              }
-        const handle = timer.oneShot
-          ? setTimeout(run, timer.intervalMs)
-          : setInterval(run, timer.intervalMs)
-        this.timerHandles.push(handle)
-      }
+    this.timerConfig = config
+    for (const timer of timers) {
+      const lang = timer.language ?? 'commands'
+      const run =
+        lang !== 'commands'
+          ? () => this.host.runScript(lang, timer.commands, {})
+          : () => {
+              this.resetBurst()
+              this.runCommandString(timer.commands, 1)
+            }
+      const handle = timer.oneShot
+        ? setTimeout(run, timer.intervalMs)
+        : setInterval(run, timer.intervalMs)
+      this.timerHandles.push(handle)
     }
   }
 

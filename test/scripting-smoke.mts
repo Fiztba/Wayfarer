@@ -2,7 +2,7 @@
  * Headless tests for the JS + Lua script runtime.
  * Run with: node --experimental-strip-types test/scripting-smoke.mts
  */
-import { ScriptRuntime } from '../src/renderer/src/scripting/ScriptRuntime.ts'
+import { ScriptRuntime, type ScriptApiHost } from '../src/renderer/src/scripting/ScriptRuntime.ts'
 
 let failures = 0
 function check(name: string, actual: unknown, expected: unknown): void {
@@ -21,7 +21,7 @@ const errors: string[] = []
 const vars: Record<string, string> = { target: 'goblin' }
 
 const beeps: number[] = []
-const rt = new ScriptRuntime({
+const host: ScriptApiHost = {
   send: (t) => sent.push(t),
   sendRaw: (t) => sent.push('RAW:' + t),
   echo: (t) => echoed.push(t),
@@ -30,7 +30,8 @@ const rt = new ScriptRuntime({
   setVar: (n, v) => (vars[n] = v),
   beep: (times) => beeps.push(times),
   session: () => ({ name: 'Test', host: 'example.org', port: 4000, connected: true })
-})
+}
+const rt = new ScriptRuntime(host)
 
 // ---- JavaScript ----
 rt.run('js', 'client.send("kill " + client.getVar("target"))')
@@ -112,5 +113,17 @@ check('js session() is a function', (() => {
 })(), 'Test')
 
 rt.dispose()
+sent.length = 0
+rt.run('js', 'client.send("closed session")')
+rt.run('lua', 'send("closed session")')
+check('disposed runtimes do not execute scripts', sent, [])
+
+// Disposal while WASM is loading must close the engine once it arrives.
+const cold = new ScriptRuntime(host)
+cold.run('lua', 'send("late startup")')
+cold.dispose()
+await new Promise((r) => setTimeout(r, 500))
+check('disposed cold runtime does not retain a VM', (cold as any).lua, null)
+check('disposed cold runtime sends nothing', sent, [])
 console.log(failures === 0 ? '\nALL PASS' : `\n${failures} FAILURES`)
 process.exit(failures === 0 ? 0 : 1)

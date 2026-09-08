@@ -483,9 +483,10 @@ export function SessionView({
   // send name+password as the password, invisibly.
   const wasMasked = useRef(store.serverEchoes)
   useLayoutEffect(() => {
-    if (store.serverEchoes && !wasMasked.current) {
+    if (store.serverEchoes !== wasMasked.current) {
       setInput('')
       historyPos.current = null
+      draft.current = ''
     }
     wasMasked.current = store.serverEchoes
   }, [store.serverEchoes])
@@ -551,6 +552,7 @@ export function SessionView({
         if (e.repeat) return
         sendCommand()
       } else if (e.key === 'ArrowUp') {
+        if (store.serverEchoes) return
         // Inside a multi-line block the arrows walk the caret; history only
         // takes over at the top (↑) and bottom (↓) of the text.
         if (!caretOnFirstLine(el)) return
@@ -565,6 +567,7 @@ export function SessionView({
         }
         setInput(h[historyPos.current])
       } else if (e.key === 'ArrowDown') {
+        if (store.serverEchoes) return
         if (!caretOnLastLine(el)) return
         e.preventDefault()
         if (historyPos.current === null) return

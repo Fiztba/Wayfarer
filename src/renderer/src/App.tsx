@@ -5,6 +5,7 @@ import { ConnectScreen } from './components/ConnectScreen'
 import { SettingsPanel } from './components/SettingsPanel'
 import { HelpPanel } from './components/HelpPanel'
 import { uiState } from './uiState'
+import { settingsManager } from './SettingsManager'
 import type { Encoding } from '../../shared/types'
 import type { PopoutBounds } from './map/types.ts'
 
@@ -88,6 +89,8 @@ export default function App() {
   }, [])
 
   const connect = useCallback(async (opts: ConnectRequest) => {
+    // Have triggers, timers and startup scripts ready before any server text.
+    await settingsManager.ensure(opts.profileId)
     const id = await window.mud.connect(opts)
     const store = new SessionStore(id, opts.name, opts.host, opts.port, opts.profileId)
     // The tab label grows a character name once the MUD tells us one (GMCP).
