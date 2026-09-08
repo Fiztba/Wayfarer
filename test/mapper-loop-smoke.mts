@@ -69,3 +69,38 @@ for (const variant of ['supported', 'no-description', 'distant', 'duplicate', 'c
   } finally { f.close() }
 }
 console.log('ok unexplored exits preserve supported re-entry; weak and contradictory matches remain guarded')
+
+// Bridge -> two distinct Main Street rooms -> square -> back east -> shop.
+// The first street has an unexplored east exit; the second an unexplored east
+// exit too. Do not lose the anchored route before the player turns south.
+{
+  const f = fixture()
+  try {
+    const add = (id: string, name: string, x: number, body: string, dirs: string[]) => f.model.createRoom({
+      id, name, x, y: 0, descHashes: [hashText(body)],
+      exits: dirs.map(dir => ({ dir: dir as 'e' | 'w' | 's', to: null, door: false }))
+    })
+    const square = add('square', 'Blackmoor Square', 0, descriptions.square, ['e','w'])
+    const tavern = add('tavern', 'Main Street', 1, descriptions.east, ['e','w'])
+    const mounts = add('mounts', 'Main Street', 2, 'The inn is north and the animal shop is south.', ['e','w','s'])
+    const bridge = add('bridge', 'Bridge on Main Street', 3, 'A sturdy stone bridge crosses the river.', ['e','w'])
+    f.model.linkRooms(square.id, 'e', tavern.id, true)
+    f.model.linkRooms(mounts.id, 'w', tavern.id, false)
+    f.tracker.setCurrentRoom(bridge.id)
+    f.tracker.onCommand('w'); f.see(mounts.name, 'The inn is north and the animal shop is south.', 'east west south')
+    assert.equal(f.tracker.speculative, true)
+    f.tracker.onCommand('w'); f.see(tavern.name, descriptions.east, 'east west')
+    assert.equal(f.tracker.speculative, false, 'unique prose + expected location + predicted distinct room confirms')
+    f.tracker.onCommand('w'); f.see(square.name, descriptions.square, 'east west')
+    f.tracker.onCommand('e'); f.see(tavern.name, descriptions.east, 'east west')
+    f.tracker.onCommand('e'); f.see(mounts.name, 'The inn is north and the animal shop is south.', 'east west south')
+    f.tracker.onCommand('s'); f.see("Lothend's Companions and Mounts", 'Animals fill the cages behind the long wooden counter.', 'north')
+    assert.equal(f.tracker.lost, false)
+    assert.equal(f.tracker.speculative, false)
+    assert.equal(f.tracker.currentRoom?.name, "Lothend's Companions and Mounts")
+    assert.deepEqual([f.tracker.currentRoom?.x, f.tracker.currentRoom?.y], [2, 1])
+    assert.equal(f.model.exitOf(mounts, 's')?.to, f.tracker.currentRoomId)
+    assert.equal(Object.keys(f.model.map.rooms).length, 5)
+    console.log('ok return from the bridge followed by south enters the shop, not the stale bridge anchor')
+  } finally { f.close() }
+}

@@ -95,7 +95,7 @@ export function MapPane({ model, tracker, walkTo: startWalk, onPopout, onClose }
 
   const confidence = tracker.confidence
   const ambiguous = tracker.speculative && confidence.candidates > 1
-  const current = ambiguous ? null : tracker.currentRoom
+  const current = ambiguous || tracker.lost ? null : tracker.currentRoom
   const zoneId = viewZoneId ?? current?.zoneId ?? model.activeZoneId ?? ''
   const z = viewZ ?? current?.z ?? 0
   const inspectedRoom = model.room(selectedId) ?? current
@@ -271,7 +271,7 @@ export function MapPane({ model, tracker, walkTo: startWalk, onPopout, onClose }
         </div>
       )}
       <div className={`map-confidence map-confidence-${tracker.confidence.state}`} role="status" title="Evidence score, not a statistical probability">
-        <strong>{ambiguous ? 'Ambiguous position' : tracker.speculative ? 'Best guess' : tracker.lost ? 'Position unknown' : 'Position'}: {confidence.observedName ?? tracker.currentRoom?.name ?? 'Unknown'} · Confidence {confidence.score}/100</strong>
+        <strong>{tracker.lost ? 'Position unknown' : `${ambiguous ? 'Ambiguous position' : tracker.speculative ? 'Best guess' : 'Position'}: ${confidence.observedName ?? tracker.currentRoom?.name ?? 'Unknown'}`} · Confidence {confidence.score}/100</strong>
         <span>{tracker.confidence.reason}{tracker.speculative ? ` Candidates: ${tracker.confidence.candidates} · Observations: ${tracker.confidence.observations}.` : ''}</span>
       </div>
       {(tracker.lost || (!tracker.currentRoomId && Object.keys(model.map.rooms).length > 0)) && (

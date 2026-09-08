@@ -112,6 +112,10 @@ app.whenReady().then(async () => {
     assert.ok(await js(`document.querySelector('.map-confidence').textContent.includes('may also be a new room')`))
     assert.equal(await js(`document.querySelector('.map-confidence').textContent.includes('Best guess')`), false)
     console.log('ok equally plausible rooms are shown as alternatives, not a ranked best guess')
+    await js(`window.tracker.setCurrentRoom('hall'); window.tracker.onCommand('recall'); window.tracker.onLine('An Unknown Place'); window.tracker.onLine('Exits: north')`)
+    await waitFor(`document.querySelector('.map-confidence').textContent.includes('Position unknown')`)
+    assert.equal(await js(`document.querySelector('.map-confidence').textContent.includes('Hall of Mirrors')`), false)
+    console.log('ok lost tracking does not label the stale anchor as the current location')
   }
   assert.deepEqual(errors, [])
   win.destroy()

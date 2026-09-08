@@ -38,7 +38,7 @@ export function MapExitInspector({ map, room, focus, onFocus, onLocate }: {
         })}
         {room.exits.length === 0 && <p className="map-exit-empty">No exits recorded here yet.</p>}
       </div>
-      <div className="map-exit-legend">Click an exit to trace it · ⌖ locates without walking<br />Arrow: no mapped return · Double tick: one exit drawn long</div>
+      <div className="map-exit-legend">Click an exit to trace it · ⌖ locates without walking<br />Line arrow: no mapped return yet (not necessarily one-way)<br />Room arrow: exit direction differs from the drawing<br />Dashed stub: destination unmapped · Double slash: one exit drawn long</div>
     </section>
   )
 }

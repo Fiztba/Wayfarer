@@ -1010,7 +1010,9 @@ export class MapTracker implements TrackerControl {
     }
     spec.hypotheses = survivors
 
-    if (survivors.length === 1 && survivors[0].corroborations >= 2 && !this.cloneOfDoubt(spec, det)) {
+    const corroborated = survivors.length === 1 && (survivors[0].corroborations >= 2 ||
+      (survivors[0].corroborations >= 1 && this.hasArrivalPrior(spec)))
+    if (corroborated && !this.cloneOfDoubt(spec, det)) {
       this.settleOn(survivors[0])
       return
     }
