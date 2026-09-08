@@ -22,6 +22,7 @@ import {
   emptyMap,
   hashText,
   stripPromptPrefix,
+  type MapRoom,
   type MudMap
 } from '../src/renderer/src/map/types.ts'
 import { relayoutZone } from '../src/renderer/src/map/relayout.ts'
@@ -1128,7 +1129,9 @@ check('open cmd: no door, no command',
   check('parapet: nothing written on arrival', Object.keys(model.map.rooms).length, before)
 
   // Walking the wall prunes one reading per step: the one already at the top
-  // would have to see the tower, and does not.
+  // would have to see the tower, and does not. A unique survivor that is
+  // still another parapet is not confirmation -- another copy of the room
+  // that started the doubt never is -- so the hedge holds until the tower.
   tracker.onCommand('n')
   seeRoom('western keep parapet', 'Exits: north south')
   check('parapet: still unsure after one step', tracker.speculative, true)
@@ -1137,14 +1140,171 @@ check('open cmd: no door, no command',
   check('parapet: still unsure after two', tracker.speculative, true)
   tracker.onCommand('n')
   seeRoom('western keep parapet', 'Exits: north south')
+  check('parapet: clone chain does not confirm', tracker.speculative, true)
+  check('parapet: nothing written yet', Object.keys(model.map.rooms).length, before)
 
-  check('parapet: resolved by the walk', tracker.speculative, false)
+  tracker.onCommand('n')
+  seeRoom('the north tower', 'Exits: south')
+  check('parapet: resolved by the distinctive room', tracker.speculative, false)
   check('parapet: not one room duplicated', Object.keys(model.map.rooms).length, before)
-  check('parapet: standing at the top of the wall', tracker.currentRoomId, wall[3].id)
+  check('parapet: standing in the tower', tracker.currentRoomId, tower.id)
   check('parapet: backfilled where we came in', model.exitOf(model.room(bailey.id)!, 'w')?.to,
     wall[0].id)
   check('parapet: not lost', tracker.lost, false)
-  void tower
+}
+
+// ---- Blackmoor: a second cloned alley is not the first one ----
+// Town of Blackmoor has a Main Street alley (Deadend, Alley, Alley, Main Street)
+// of stock rooms, and a second alley south of Wyverns Way that uses the same
+// "Alley" name, exits and prose. Walking Alley then Alley used to uniquely
+// survive as the mapped chain and get committed -- then the next south
+// expected Main Street and the mapper went lost on the real deadend.
+// Coordinates may lie; the hedge has to wait for a room the guess uniquely
+// predicted, not another copy of the room that started the doubt.
+{
+  const { model, tracker, infos } = makeWorld()
+  const DESC = {
+    alley: 'This thin, winding alley, is dimly lit and filthy. The alleyway stretches from the north to the south.',
+    main: 'A greyish cobblestoned street. Lanterns hang from tall posts.',
+    deadend: 'The only exits are to the north, or through an open pothole that leads into the darkness.',
+    wyverns: 'This is a greyish cobblestoned street. A dark alley arrows off to the south here.'
+  }
+  const ns = (): MapRoom['exits'] => [
+    { dir: 'n', to: null, door: false },
+    { dir: 's', to: null, door: false }
+  ]
+  const see = (name: string, desc: string, exits: string): void => {
+    tracker.onLine(name)
+    tracker.onLine(desc)
+    tracker.onLine(exits)
+  }
+
+  const deadend = model.createRoom({
+    name: 'The Deadend of an Alley', x: -11, y: -3, z: 0,
+    descHashes: [hashText(DESC.deadend)],
+    exits: [{ dir: 's', to: null, door: false }]
+  })
+  const alleyN = model.createRoom({
+    name: 'Alley', x: -11, y: -2, z: 0,
+    descHashes: [hashText(DESC.alley)],
+    exits: ns()
+  })
+  const alleyS = model.createRoom({
+    name: 'Alley', x: -11, y: -1, z: 0,
+    descHashes: [hashText(DESC.alley)],
+    exits: ns()
+  })
+  const main = model.createRoom({
+    name: 'Main Street', x: -11, y: 0, z: 0,
+    descHashes: [hashText(DESC.main)],
+    exits: [
+      { dir: 'n', to: null, door: false },
+      { dir: 'e', to: null, door: false },
+      { dir: 's', to: null, door: false },
+      { dir: 'w', to: null, door: false }
+    ]
+  })
+  model.linkRooms(deadend.id, 's', alleyN.id, true)
+  model.linkRooms(alleyN.id, 's', alleyS.id, true)
+  model.linkRooms(alleyS.id, 's', main.id, true)
+  const wyverns = model.createRoom({
+    name: 'Wyverns Way, before an Alley', x: -12, y: -4, z: 0,
+    descHashes: [hashText(DESC.wyverns)],
+    exits: [
+      { dir: 'e', to: null, door: false },
+      { dir: 's', to: null, door: false },
+      { dir: 'w', to: null, door: false }
+    ]
+  })
+  const before = Object.keys(model.map.rooms).length
+
+  tracker.setCurrentRoom(wyverns.id)
+  tracker.onCommand('s')
+  see('Alley', DESC.alley, 'Exits: north south')
+  check('blackmoor: held on the first alley', Object.keys(model.map.rooms).length, before)
+  check('blackmoor: hedging', tracker.speculative, true)
+
+  // The mapped chain predicts another Alley here. That used to be enough to
+  // commit Wyverns Way south onto it. It must not be.
+  tracker.onCommand('s')
+  see('Alley', DESC.alley, 'Exits: north south')
+  check('blackmoor: second clone does not confirm', tracker.speculative, true)
+  check('blackmoor: still nothing written', Object.keys(model.map.rooms).length, before)
+  check('blackmoor: did not settle', infos.some((t) => t.startsWith('Mapper: settled on')), false)
+
+  tracker.onCommand('s')
+  see('Deadend of an Alley', DESC.deadend, 'Exits: north down')
+  check('blackmoor: not lost', tracker.lost, false)
+  check('blackmoor: no longer guessing', tracker.speculative, false)
+  check('blackmoor: original alley untouched', model.exitOf(model.room(wyverns.id)!, 's')?.to !== alleyN.id, true)
+  check('blackmoor: original alley still ends at Main Street', model.exitOf(model.room(alleyS.id)!, 's')?.to, main.id)
+  const newAlley = model.room(model.exitOf(model.room(wyverns.id)!, 's')?.to ?? '')
+  check('blackmoor: a new alley was created', newAlley?.name, 'Alley')
+  check('blackmoor: new alley is not a mapped twin', newAlley != null && newAlley.id !== alleyN.id && newAlley.id !== alleyS.id, true)
+  check('blackmoor: standing in the new deadend', tracker.currentRoom?.name, 'Deadend of an Alley')
+  check('blackmoor: new deadend is not the mapped one', tracker.currentRoomId !== deadend.id, true)
+}
+
+// ---- Blackmoor: the real alley still confirms once a distinctive room lands ----
+// Same mapped chain, but this time the walk really is that alley. Main Street
+// is not another clone of "Alley", so arriving there commits the guess -- even
+// though the entrance was two cells off the grid (layouts need not be Euclidean).
+{
+  const { model, tracker } = makeWorld()
+  const DESC = {
+    alley: 'This thin, winding alley, is dimly lit and filthy. The alleyway stretches from the north to the south.',
+    main: 'A greyish cobblestoned street. Lanterns hang from tall posts.'
+  }
+  const ns = (): MapRoom['exits'] => [
+    { dir: 'n', to: null, door: false },
+    { dir: 's', to: null, door: false }
+  ]
+  const see = (name: string, desc: string, exits: string): void => {
+    tracker.onLine(name)
+    tracker.onLine(desc)
+    tracker.onLine(exits)
+  }
+
+  const alleyN = model.createRoom({
+    name: 'Alley', x: -11, y: -2, z: 0,
+    descHashes: [hashText(DESC.alley)],
+    exits: ns()
+  })
+  const alleyS = model.createRoom({
+    name: 'Alley', x: -11, y: -1, z: 0,
+    descHashes: [hashText(DESC.alley)],
+    exits: ns()
+  })
+  const main = model.createRoom({
+    name: 'Main Street', x: -11, y: 0, z: 0,
+    descHashes: [hashText(DESC.main)],
+    exits: [
+      { dir: 'n', to: null, door: false },
+      { dir: 'e', to: null, door: false }
+    ]
+  })
+  model.linkRooms(alleyN.id, 's', alleyS.id, true)
+  model.linkRooms(alleyS.id, 's', main.id, true)
+  const side = model.createRoom({
+    name: 'A Side Lane', x: -13, y: -2, z: 0,
+    exits: [{ dir: 'e', to: null, door: false }]
+  })
+  const before = Object.keys(model.map.rooms).length
+
+  tracker.setCurrentRoom(side.id)
+  tracker.onCommand('e')
+  see('Alley', DESC.alley, 'Exits: north south')
+  check('blackmoor-real: held on arrival', tracker.speculative, true)
+  tracker.onCommand('s')
+  see('Alley', DESC.alley, 'Exits: north south')
+  check('blackmoor-real: still hedging through the clone', tracker.speculative, true)
+  tracker.onCommand('s')
+  see('Main Street', DESC.main, 'Exits: north east')
+  check('blackmoor-real: distinctive room confirms', tracker.speculative, false)
+  check('blackmoor-real: no duplicate', Object.keys(model.map.rooms).length, before)
+  check('blackmoor-real: standing on Main Street', tracker.currentRoomId, main.id)
+  check('blackmoor-real: backfilled the stretched entrance', model.exitOf(model.room(side.id)!, 'e')?.to, alleyN.id)
+  check('blackmoor-real: not lost', tracker.lost, false)
 }
 
 // ---- description hashing ----

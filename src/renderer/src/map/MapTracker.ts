@@ -16,6 +16,7 @@ import { RoomCapture, closedDoorName, isMoveFailure, isClosedDoorFailure } from 
 import {
   DIR_DELTA,
   DIR_FULL,
+  fingerprintOf,
   hashText,
   normalizeRoomName,
   OPPOSITE,
@@ -50,6 +51,12 @@ interface PendingMove {
  * being distinguishable from "somewhere new" and is dropped -- which is what
  * keeps a stale reading from surviving forever on unexplored exits while the
  * player walks genuinely new ground.
+ *
+ * Surviving is not the same as being confirmed. A chain of cloned rooms will
+ * keep matching one mapped chain of the same rooms for as long as it is, so
+ * a unique survivor is only committed once a later room is something the
+ * guess uniquely predicted -- not another copy of the room that started the
+ * doubt. Until then the tracker hedges.
  */
 interface Hypothesis {
   /** Rooms this reading says we walked through, one per buffered step. */
@@ -987,6 +994,11 @@ export class MapTracker implements TrackerControl {
    * right. Stepping through an exit we have never walked makes it no better
    * than "somewhere new", so it is dropped rather than carried indefinitely --
    * that is what stops a stale reading surviving on unexplored exits forever.
+   *
+   * One survivor is still a hedge when this room is the same kind of clone
+   * that started the doubt. Coordinates are only a drawing, so a stretched
+   * or off-axis guess is allowed to live; it just is not written down until
+   * a later room is something that guess uniquely predicted.
    */
   private advanceSpeculation(move: PendingMove | undefined, det: RoomDetection): void {
     const spec = this.speculation
@@ -1013,7 +1025,7 @@ export class MapTracker implements TrackerControl {
     }
     spec.hypotheses = survivors
 
-    if (survivors.length === 1) {
+    if (survivors.length === 1 && !this.cloneOfDoubt(spec, det)) {
       this.settleOn(survivors[0])
       return
     }
@@ -1023,6 +1035,25 @@ export class MapTracker implements TrackerControl {
     }
     this.currentRoomId = survivors[0].path[survivors[0].path.length - 1]
     this.notify()
+  }
+
+  /**
+   * True when `det` is the same kind of room that started this doubt.
+   *
+   * Towns reuse a stock "Alley" with the same exits and the same prose. A
+   * mapped alley-then-alley will keep predicting those arrivals, which is
+   * how walking a second alley got committed as the first. Another copy is
+   * not confirmation; a later room the guess uniquely predicted is.
+   */
+  private cloneOfDoubt(spec: Speculation, det: RoomDetection): boolean {
+    const first = spec.steps[0]?.det
+    if (!first) return false
+    const dirs = (d: RoomDetection): Direction[] => d.exits.map((e) => e.dir)
+    if (fingerprintOf(first.name, dirs(first)) !== fingerprintOf(det.name, dirs(det))) {
+      return false
+    }
+    if (first.descHash && det.descHash && first.descHash !== det.descHash) return false
+    return true
   }
 
   /** One reading left: write the path it describes, backfilling every room it
