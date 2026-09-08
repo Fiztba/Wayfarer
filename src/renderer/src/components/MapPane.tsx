@@ -96,24 +96,35 @@ export function MapPane({ model, tracker, walkTo: startWalk, onPopout, onClose }
   const confidence = tracker.confidence
   const ambiguous = tracker.speculative && confidence.candidates > 1
   const expected = confidence.expectedPosition
-  const current = expected || ambiguous || tracker.lost ? null : tracker.currentRoom
-  const zoneId = viewZoneId ?? expected?.zoneId ?? current?.zoneId ?? model.activeZoneId ?? ''
-  const z = viewZ ?? expected?.z ?? current?.z ?? 0
+  const confirmed = !tracker.speculative && !tracker.lost ? tracker.currentRoom : null
+  const follow = expected ?? confirmed
+  const [lastFollow, setLastFollow] = useState(() => {
+    const room = model.room(model.map.lastRoomId)
+    return { zoneId: room?.zoneId ?? model.activeZoneId ?? '', z: room?.z ?? 0 }
+  })
+  const retainedView = model.map.zones.some(zone => zone.id === lastFollow.zoneId)
+    ? lastFollow : { zoneId: model.activeZoneId ?? '', z: 0 }
+  const zoneId = viewZoneId ?? follow?.zoneId ?? retainedView.zoneId
+  const z = viewZ ?? follow?.z ?? retainedView.z
+  const candidate = expected || ambiguous || tracker.lost ? null : tracker.currentRoom
+  const current = candidate?.zoneId === zoneId && candidate.z === z ? candidate : null
   const inspectedRoom = model.room(selectedId) ?? current
   const visibleInspection = inspectedRoom?.zoneId === zoneId && inspectedRoom?.z === z ? inspectedRoom : null
   const activeExitFocus = showExits && visibleInspection?.id === exitFocus?.roomId ? exitFocus : null
   useEffect(() => setExitFocus(null), [inspectedRoom?.id, zoneId, z])
 
-  // Auto-follow: when the player moves, snap the view to their zone/level.
+  // Only confirmed arrivals or an anchored compass path drive auto-follow.
+  // Losing the anchor must not hand the view to an unrelated room guess.
   useEffect(() => {
-    if (current || expected) {
+    if (follow) {
+      setLastFollow({ zoneId: follow.zoneId, z: follow.z })
       setViewZoneId(null)
       setViewZ(null)
       setCenterRoomId(null)
       setCenterToken((t) => t + 1)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [current?.id, expected?.x, expected?.y, expected?.z, expected?.zoneId])
+  }, [confirmed?.id, confirmed?.zoneId, confirmed?.z, expected?.x, expected?.y, expected?.z, expected?.zoneId])
 
   const closeMenu = useCallback(() => setMenu({ kind: 'closed' }), [])
 
