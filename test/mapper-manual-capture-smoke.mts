@@ -19,11 +19,14 @@ function fixture() {
 {
   const f = fixture()
   try {
+    f.model.setRivals(f.room.id, [f.old.id])
+    assert.equal(f.model.provisionalRooms().length, 1)
     f.tracker.setCurrentRoom(f.old.id)
     f.tracker.onCommand('recall')
     f.look()
     assert.equal(f.tracker.lost, true)
     f.tracker.setCurrentRoom(f.room.id)
+    assert.equal(f.room.rivals, undefined, 'I am here clears saved yellow-room doubt immediately')
     f.tracker.onCommand('look')
     f.look()
     assert.equal(f.tracker.currentRoomId, f.room.id)
@@ -35,6 +38,8 @@ function fixture() {
     assert.deepEqual([f.room.x, f.room.y, f.room.z, f.room.notes], [20, 30, 2, 'My recall point'])
     assert.equal(f.old.exits.length, 0, 'recall must not invent a connecting exit')
     assert.equal(Object.keys(f.model.map.rooms).length, 2)
+    const restored = new MapModel(JSON.parse(JSON.stringify(f.model.map)), () => {})
+    assert.equal(restored.room(f.room.id)?.rivals, undefined, 'confirmation survives saving and reloading')
     f.look('An Unexpected Destination')
     assert.equal(f.room.name, 'Town of Blackmoor', 'manual binding is consumed once')
     console.log('ok manual room captures the first post-recall look without relocating or duplicating it')

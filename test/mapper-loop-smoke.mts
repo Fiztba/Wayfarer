@@ -60,9 +60,9 @@ for (const variant of ['supported', 'no-description', 'distant', 'duplicate', 'c
     f.tracker.onCommand('e'); f.see('Blackmoor Square', descriptions.square, 'east west')
     assert.equal(f.tracker.speculative, true, 'a first match alone remains tentative')
     f.tracker.onCommand('e'); f.see('Main Street', descriptions.east, 'north east west')
-    if (variant === 'supported') {
+    if (variant === 'supported' || variant === 'duplicate') {
       assert.equal(f.model.exitOf(west, 'e')?.to, square.id)
-      assert.equal(Object.keys(f.model.map.rooms).length, 3)
+      assert.equal(Object.keys(f.model.map.rooms).length, variant === 'duplicate' ? 4 : 3)
     } else {
       assert.notEqual(f.model.exitOf(west, 'e')?.to, square.id, `${variant} cannot confirm on geometry`)
     }
@@ -160,5 +160,31 @@ console.log('ok unexplored exits preserve supported re-entry; weak and contradic
     assert.equal(f.tracker.currentRoomId, street.id)
     assert.equal(Object.keys(f.model.map.rooms).length, 2)
     console.log('ok walking east to the bridge and back completes both previously unexplored exits')
+  } finally { f.close() }
+}
+
+// A repeated street run must be retained when it reaches a mapped landmark,
+// and retracing it must reuse the cathedral instead of replaying a duplicate.
+{
+  const f = fixture()
+  try {
+    const body = 'Residential buildings lie to the north and south. The street stretches east and west.'
+    const add = (name, x, desc, dirs) => f.model.createRoom({ name, x, y: 0, descHashes: [hashText(desc)], exits: dirs.map(dir => ({ dir, to: null, door: false })) })
+    const junction = add('Intersection of Crystal Street and Main Street', 0, 'Crystal Street crosses Main Street.', ['e','w'])
+    const first = add('Main Street', 3, body, ['e','w'])
+    const cathedral = add('Main Street, before the Cathedral', 4, 'The elaborate cathedral stands to the east.', ['n','e','s','w'])
+    f.model.linkRooms(cathedral.id, 'w', first.id, true)
+    f.tracker.setCurrentRoom(cathedral.id)
+    for (let x=3; x>=1; x--) { f.tracker.onCommand('w'); f.see('Main Street', body, 'east west') }
+    f.tracker.onCommand('w'); f.see(junction.name, 'Crystal Street crosses Main Street.', 'east west')
+    assert.equal(Object.keys(f.model.map.rooms).length, 5, 'both missing street rooms are present before retracing')
+    for (let x=1; x<=3; x++) { f.tracker.onCommand('e'); f.see('Main Street', body, 'east west') }
+    f.tracker.onCommand('e'); f.see(cathedral.name, 'The elaborate cathedral stands to the east.', 'north east south west')
+    f.tracker.onCommand('e'); f.see('The Narthex', 'This is the entrance hall of the cathedral.', 'west')
+    assert.equal(Object.keys(f.model.map.rooms).length, 6)
+    assert.equal(Object.values(f.model.map.rooms).filter(r => r.name === cathedral.name).length, 1)
+    assert.equal(f.tracker.currentRoom?.name, 'The Narthex')
+    assert.equal(f.tracker.currentRoom?.x, 5)
+    console.log('ok missing repeated streets are retained and eastward retracing reuses the cathedral')
   } finally { f.close() }
 }

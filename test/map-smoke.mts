@@ -2116,7 +2116,9 @@ check('open cmd: no door, no command',
   const { model, tracker, infos } = makeWorld()
   const real = model.createRoom({ name: 'Plaza', x: 0, y: 0, z: 0, serverId: 'gmcp:7', exits: [] })
   const copy = model.createRoom({ name: 'Plaza', x: 3, y: 3, z: 0, serverId: 'gmcp:7', exits: [], rivals: [real.id] })
-  tracker.setCurrentRoom(copy.id)
+  // Ordinary tracking can reconcile authoritative IDs; manual placement dismisses doubt.
+  tracker.currentRoomId = copy.id
+  tracker.reset()
   check('reconcile: decided by the id alone', model.room(copy.id), null)
   check('reconcile: standing in the survivor', tracker.currentRoomId, real.id)
   const rec = (model.map.merges ?? []).slice(-1)[0]

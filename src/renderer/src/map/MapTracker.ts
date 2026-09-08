@@ -321,6 +321,7 @@ export class MapTracker implements TrackerControl {
     this.serverSettledAt = 0
     this.heldDetection = null
     this.capture.reset()
+    if (roomId) this.model.dismissDoubt(roomId)
     this.notify()
   }
 
@@ -625,6 +626,14 @@ export class MapTracker implements TrackerControl {
     // states. Follow mode used to go lost here without even looking, on
     // rooms it knew perfectly well.
     const candidates = this.candidatesFor(det)
+    const replayMatch = this.replaying ? this.expectedCandidate(current, dir, det) : null
+    if (replayMatch) {
+      this.recordObservedArrival(current, { dir }, replayMatch)
+      this.refreshExits(replayMatch, det)
+      this.currentRoomId = replayMatch.id
+      this.notify()
+      return
+    }
     if (candidates.length > 0 && !this.replaying) {
       this.beginSpeculation(current, dir, det, candidates)
       return
@@ -998,8 +1007,9 @@ export class MapTracker implements TrackerControl {
       return
     }
     if (held && from && move && this.hasArrivalPrior(spec) &&
-        !this.exitForMove(from, move)?.to && !this.cloneOfDoubt(spec, det) &&
-        this.candidatesFor(det).length === 0) {
+        !this.exitForMove(from, move)?.to &&
+        (this.candidatesFor(det).length === 0 || (move.dir && this.cloneOfDoubt(spec, det) &&
+          !this.expectedCandidate(from, move.dir, det)))) {
       this.settleOn(held)
       if (move.dir) this.handleMove(from, move.dir, det)
       else this.handleSpecialMove(from, move.command ?? '', det)
@@ -1042,6 +1052,19 @@ export class MapTracker implements TrackerControl {
       return
     }
     if (survivors.length === 0) {
+      const projected = this.expectedPosition(spec)
+      const projectedMatches = projected && det.descHash ? this.candidatesFor(det).filter((room) =>
+        room.x === projected.x && room.y === projected.y && room.z === projected.z &&
+        room.zoneId === projected.zoneId && room.descHashes?.includes(det.descHash!)) : []
+      const first = spec.steps[0]
+      const start = this.model.room(spec.anchorRoomId)
+      const unmappedCloneRun = start && first.dir && first.det.descHash && det.descHash &&
+        this.cloneOfDoubt(spec, det) && !this.expectedCandidate(start, first.dir, first.det)
+      if (this.mode === 'map' && move?.dir && first.dir && start &&
+          (projectedMatches.length === 1 || unmappedCloneRun)) {
+        this.settleAsNew()
+        return
+      }
       if (disprovedClone && this.mode === 'map' && spec.steps[0].dir && spec.anchorRoomId) {
         this.settleAsNew()
         return
@@ -1104,6 +1127,18 @@ export class MapTracker implements TrackerControl {
       candidate.y === anchor.y + dy && candidate.z === anchor.z + dz
   }
 
+  /** During replay, retain a unique prose match in the cell actually walked to. */
+  private expectedCandidate(from: MapRoom, dir: Direction, det: RoomDetection): MapRoom | null {
+    if (!det.descHash) return null
+    const [dx, dy, dz] = DIR_DELTA[dir]
+    const matches = this.candidatesFor(det).filter((room) => room.id !== from.id &&
+      room.zoneId === from.zoneId && room.x === from.x + dx && room.y === from.y + dy &&
+      room.z === from.z + dz && room.descHashes?.includes(det.descHash!))
+    if (matches.length !== 1) return null
+    const mapped = this.model.exitOf(from, dir)?.to
+    return !mapped || mapped === matches[0].id ? matches[0] : null
+  }
+
   /** Display dead reckoning separately from candidate identity until settled. */
   private expectedPosition(spec: Speculation): PositionConfidence['expectedPosition'] {
     const anchor = this.model.room(spec.anchorRoomId)
@@ -1144,24 +1179,34 @@ export class MapTracker implements TrackerControl {
     this.notify()
   }
 
-  /** No reading survived: the player really is somewhere new, so replay the
+  /** No mapped route survived: preserve the observed path by replaying the
    *  held moves as ordinary mapping. */
   private settleAsNew(): void {
     const spec = this.speculation
     if (!spec) return
     this.speculation = null
-    this.host.info(MSG_DUPE(spec.steps[0].det.name, spec.rivals.length + 1))
     const anchor = this.model.room(spec.anchorRoomId)
     if (!anchor) return
-    // Step one IS the ambiguity, pinned to the reading that won: a new room.
-    // Every later step drains back through the ordinary committed path so it
-    // still gets full identification -- which is how the room belonging in a
-    // gap gets created and the twin beyond it gets recognised rather than
-    // duplicated a second time.
+    // Keep a supported room at the expected position; otherwise create the gap.
+    // Replay later observations without discarding their room recognition.
     const first = spec.steps[0]
     if (first.dir) {
-      const made = this.createArrival(anchor, first.dir, first.det)
-      this.model.setRivals(made.id, spec.rivals)
+      let known = this.expectedCandidate(anchor, first.dir, first.det)
+      const next = spec.steps[1]
+      if (known && next && (next.dir || next.command)) {
+        const nextExit = next.dir ? this.model.exitOf(known, next.dir) :
+          known.exits[specialExitIndex(known, next.command ?? '')]
+        const predicted = nextExit?.to ? this.model.room(nextExit.to) : null
+        if (predicted && !this.couldBe(predicted, next.det)) known = null
+      }
+      const made = known ?? this.createArrival(anchor, first.dir, first.det)
+      if (known) {
+        this.recordObservedArrival(anchor, first, known)
+        this.refreshExits(known, first.det)
+      } else {
+        this.model.setRivals(made.id, spec.rivals)
+        this.host.info(MSG_DUPE(first.det.name, spec.rivals.length + 1))
+      }
       this.currentRoomId = made.id
     } else if (first.command) {
       const made = this.model.createRoom({ name: first.det.name, zoneId: this.zoneForNewRoom(anchor), ...this.placeSpecial(anchor) })
