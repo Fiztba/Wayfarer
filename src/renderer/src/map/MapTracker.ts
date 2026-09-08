@@ -1112,6 +1112,9 @@ export class MapTracker implements TrackerControl {
         this.beginSpeculation(anchor, null, det, candidates)
         if (this.speculation && approach && approach.steps.length <= SPECULATION_CAP) {
           this.speculation.approach = approach
+          if (this.mode === 'map' && this.approachConfirmsEndpoint(this.speculation)) {
+            this.settleOn(this.speculation.hypotheses[0])
+          }
         }
         return
       }
@@ -1183,6 +1186,37 @@ export class MapTracker implements TrackerControl {
     if (matches.length !== 1) return null
     const mapped = this.model.exitOf(from, dir)?.to
     return !mapped || mapped === matches[0].id ? matches[0] : null
+  }
+
+  /** A distinct known endpoint at the end of an observed compass path can
+   * resolve a gap without requiring yet more rooms beyond that endpoint. */
+  private approachConfirmsEndpoint(spec: Speculation): boolean {
+    const approach = spec.approach
+    if (!approach || spec.hypotheses.length !== 1) return false
+    const anchor = this.model.room(approach.anchorRoomId)
+    const endpoint = this.model.room(spec.hypotheses[0].path[0])
+    const moves = approach.steps
+    if (!anchor || !endpoint || moves.length < 2 || moves.some(step => !step.dir) ||
+        this.cloneOfDoubt({ ...spec, steps: [moves[0]] }, moves.at(-1)!.det)) return false
+    let { x, y, z } = anchor
+    let at: MapRoom | null = anchor
+    for (const step of approach.steps) {
+      if (!step.dir) continue
+      const [dx, dy, dz] = DIR_DELTA[step.dir]
+      x += dx; y += dy; z += dz
+      const occupants = Object.values(this.map.rooms).filter(room => room.zoneId === anchor.zoneId &&
+        room.x === x && room.y === y && room.z === z)
+      // An occupied cell or a saved exit that disagrees means this may be a
+      // folded path; leave it to the existing sequence confirmation instead.
+      if (occupants.length > 1) return false
+      const next = occupants[0] ?? null
+      if (next && (!step.det.descHash || !next.descHashes?.includes(step.det.descHash) ||
+          !this.couldBe(next, step.det))) return false
+      const saved: string | null | undefined = at ? this.model.exitOf(at, step.dir)?.to : null
+      if (saved && saved !== next?.id) return false
+      at = next
+    }
+    return at?.id === endpoint.id
   }
 
   /** Display dead reckoning separately from candidate identity until settled. */

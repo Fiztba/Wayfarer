@@ -19,6 +19,55 @@ function fixture() {
   return { model, tracker, see, close() { tracker.dispose(); model.flush() } }
 }
 
+// Two missing, differently described Main Street rooms between known ends.
+// Remote copies of both descriptions must not keep restarting recognition.
+for (const direction of ['e', 'w'] as const) {
+  for (const variant of ['ordinary', 'displaced', 'ambiguous', 'occupied', 'no-description']) {
+    const f = fixture()
+    try {
+      const bodies = ['The western gates can be seen.', 'Homes line both sides of the street.',
+        'A white fence encloses the gardens to the south.', 'Dragons Way branches north.']
+      const names = ['Main Street', 'Main Street', 'Main Street', 'Intersection of Main Street and Dragons Way']
+      const add = (index: number, x: number) => f.model.createRoom({ name: names[index], x, y: 0,
+        descHashes: [hashText(bodies[index])], exits: ['e', 'w'].map(dir => ({ dir: dir as 'e' | 'w', to: null, door: false })) })
+      const west = add(0, 0), east = add(3, 3)
+      const copies = [add(1, 10), add(2, 11)]
+      const endpoint = direction === 'e' ? east : west
+      if (variant === 'displaced') f.model.updateRoom(endpoint.id, { y: 5 })
+      if (variant === 'ambiguous') add(direction === 'e' ? 3 : 0, 20)
+      if (variant === 'occupied') f.model.createRoom({ name: 'Different room', x: direction === 'e' ? 1 : 2, y: 0 })
+      if (variant === 'no-description') f.model.updateRoom(endpoint.id, { descHashes: [] })
+      f.tracker.setCurrentRoom(direction === 'e' ? west.id : east.id)
+      const walk = (dir: 'e' | 'w') => {
+        for (const index of dir === 'e' ? [1, 2, 3] : [2, 1, 0]) {
+          f.tracker.onCommand(dir); f.see(names[index], bodies[index], 'east west')
+        }
+      }
+      walk(direction)
+      if (variant !== 'ordinary') {
+        assert.equal(f.tracker.speculative, true, `${variant} endpoint cannot resolve the approach on geometry`)
+        assert.equal(f.model.exitOf(direction === 'e' ? west : east, direction)?.to, null)
+        continue
+      }
+      assert.equal(f.tracker.speculative, false, 'reaching the distinct known endpoint resolves the entire gap')
+      assert.equal(f.tracker.currentRoomId, direction === 'e' ? east.id : west.id)
+      walk(direction === 'e' ? 'w' : 'e')
+      assert.equal(f.tracker.speculative, false)
+      const first = f.model.room(f.model.exitOf(west, 'e')?.to ?? '')!
+      const second = f.model.room(f.model.exitOf(first, 'e')?.to ?? '')!
+      assert.ok(first && second, 'both missing rooms are saved')
+      assert.equal(f.model.exitOf(second, 'e')?.to, east.id)
+      assert.equal(f.model.exitOf(east, 'w')?.to, second.id)
+      assert.equal(f.model.exitOf(second, 'w')?.to, first.id)
+      assert.equal(f.model.exitOf(first, 'w')?.to, west.id)
+      assert.deepEqual([first.x, second.x], [1, 2])
+      assert.equal(Object.keys(f.model.map.rooms).length, 6, 'retracing creates no duplicates')
+      for (const copy of copies) assert.ok(copy.exits.every(exit => exit.to === null), 'remote copies remain untouched')
+      console.log(`ok ${direction}-first traversal fills the Main Street gap and connects both ends`)
+    } finally { f.close() }
+  }
+}
+
 // Separately drawn sections need not have matching layout coordinates.
 // Identification at the far end must retain the actual approach through the gap.
 {
