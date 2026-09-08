@@ -79,6 +79,28 @@ app.whenReady().then(async () => {
   await waitFor(`document.body.textContent.includes('A searchable room description.')`)
   await js(`Array.from(document.querySelectorAll('button')).find(b => b.textContent.includes('Settings')).click()`)
   await waitFor(`!!document.querySelector('[role=dialog]')`)
+  await js(`document.querySelector('.add-btn').click()`)
+  await waitFor(`!!document.querySelector('.editor-form')`)
+  for (const width of [1280, 700, 420]) {
+    win.setSize(width, 740)
+    await new Promise(resolve => setTimeout(resolve, 80))
+    const layout = await js(`(() => {
+      const panel = document.querySelector('.panel').getBoundingClientRect();
+      const form = document.querySelector('.editor-form');
+      return { inside: form.getBoundingClientRect().right <= panel.right,
+        fits: form.scrollWidth <= form.clientWidth + 1,
+        textareaHeight: form.querySelector('textarea').getBoundingClientRect().height,
+        tabsFit: document.querySelector('.panel-tabs').getBoundingClientRect().right <= panel.right };
+    })()`)
+    assert.ok(layout.inside && layout.fits && layout.tabsFit, `settings contained at ${width}px: ${JSON.stringify(layout)}`)
+    assert.ok(layout.textareaHeight >= 50, 'command editor must not collapse when the form scrolls')
+    if (width === 700 && process.env.WAYFARER_SETTINGS_CAPTURE) {
+      fs.writeFileSync(process.env.WAYFARER_SETTINGS_CAPTURE, (await win.webContents.capturePage()).toPNG())
+    }
+  }
+  await js(`document.querySelector('.form-buttons').scrollIntoView()`)
+  assert.ok(await js(`document.querySelector('.form-buttons').getBoundingClientRect().bottom <= document.querySelector('.panel').getBoundingClientRect().bottom`))
+  console.log('ok trigger editor stays inside settings at desktop and narrow widths with usable scrolling')
   await js(`document.querySelector('.panel-close').click()`)
   await waitFor(`!document.querySelector('[role=dialog]')`)
   console.log('ok output renders and settings opens/closes')
