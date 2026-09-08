@@ -17,6 +17,8 @@ app.whenReady().then(async () => {
   const mod = { exports: {} }
   new Function('module', 'exports', bundled.outputFiles[0].text)(mod, mod.exports)
   const settings = mod.exports.defaultSettings()
+  settings.triggers.push({ id: 'pause-test', label: 'Pause test', pattern: 'pause probe', matchType: 'substring',
+    caseInsensitive: false, commands: 'say trigger-fired', gag: true, highlight: '', enabled: true })
   const sent = [], errors = []
   let finishUpdate
   ipcMain.handle('app:check-update', () => new Promise(resolve => { finishUpdate = resolve }))
@@ -104,6 +106,19 @@ app.whenReady().then(async () => {
   await js(`document.querySelector('.panel-close').click()`)
   await waitFor(`!document.querySelector('[role=dialog]')`)
   console.log('ok output renders and settings opens/closes')
+  const sentBeforePause = sent.length
+  await js(`Array.from(document.querySelectorAll('.status-btn')).find(b => b.textContent === 'Pause Triggers').click()`)
+  await waitFor(`!!document.querySelector('.status-btn[aria-pressed=true]')`)
+  event({ type: 'text', data: 'pause probe\r\n' })
+  await waitFor(`document.querySelector('.output').textContent.includes('pause probe')`)
+  assert.equal(sent.length, sentBeforePause)
+  await js(`document.querySelector('.status-btn[aria-pressed=true]').click()`)
+  await waitFor(`!!Array.from(document.querySelectorAll('.status-btn')).find(b => b.textContent === 'Pause Triggers')`)
+  event({ type: 'text', data: 'pause probe\r\n' })
+  await waitFor(`document.querySelector('.output').textContent.includes('trigger-fired')`)
+  assert.ok(sent.length > sentBeforePause)
+  assert.ok(sent.slice(sentBeforePause).every(command => command === 'say trigger-fired'))
+  console.log('ok status toggle pauses and resumes trigger commands and gagging through the real session')
   await js(`document.querySelector('.tab-close').click()`)
   await waitFor(`!document.querySelector('.command-input')`)
   assert.deepEqual(errors, [])

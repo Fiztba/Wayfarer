@@ -822,6 +822,11 @@ export function SessionView({
       <div className="status-bar">
         <span className="status-text">{statusBits.join('  ·  ')}</span>
         <span className="status-actions">
+          <button className="status-btn" aria-pressed={store.engine.triggersPaused}
+            onClick={() => store.toggleTriggers()}
+            title="Temporarily pause all triggers for this session, including global and character triggers. Click again to resume.">
+            {store.engine.triggersPaused ? 'Triggers Paused' : 'Pause Triggers'}
+          </button>
           {updateMessage && <span role="status" title={updateMessage} style={{ maxWidth: 300, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{updateMessage}</span>}
           <button className="status-btn" disabled={checkingUpdate} onClick={() => void checkForUpdate()} title="Check now and download an available update without interrupting your session.">
             {checkingUpdate ? 'Checking…' : 'Check For Update'}

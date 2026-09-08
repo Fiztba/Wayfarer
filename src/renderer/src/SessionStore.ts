@@ -641,6 +641,11 @@ export class SessionStore {
 
   getVersion = (): number => this.version
 
+  toggleTriggers(): void {
+    this.engine.triggersPaused = !this.engine.triggersPaused
+    this.notify()
+  }
+
   private notify(): void {
     if (this.flushScheduled) return
     this.flushScheduled = true

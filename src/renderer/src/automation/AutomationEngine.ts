@@ -210,6 +210,7 @@ export function substituteVars(text: string, vars: Record<string, string>): stri
 }
 
 export class AutomationEngine {
+  triggersPaused = false
   private host: EngineHost
   private getSets: () => SettingsSet[]
   private regexCache = new Map<string, RegExp | null>()
@@ -236,10 +237,11 @@ export class AutomationEngine {
   private completedOneShots = new Set<string>()
   resetTimerHistory(): void { this.completedOneShots.clear() }
   snapshot() {
-    return { runtimeVars: this.runtimeVars, persisted: [...this.persistedVarNames],
+    return { triggersPaused: this.triggersPaused, runtimeVars: this.runtimeVars, persisted: [...this.persistedVarNames],
       completed: [...this.completedOneShots], config: this.timerConfig }
   }
   restore(state: ReturnType<AutomationEngine['snapshot']>) {
+    this.triggersPaused = state.triggersPaused ?? false
     this.runtimeVars = state.runtimeVars; this.persistedVarNames = new Set(state.persisted)
     this.completedOneShots = new Set(state.completed); this.timerConfig = state.config
   }
@@ -435,6 +437,7 @@ export class AutomationEngine {
   processLine(plainText: string): LineDirective {
     this.resetBurst()
     const directive: LineDirective = { gag: false }
+    if (this.triggersPaused) return directive
     for (const set of this.getSets()) {
       for (const trigger of set.triggers) {
         if (!trigger.enabled || !this.active(trigger) || trigger.pattern.length === 0) continue

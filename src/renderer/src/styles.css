@@ -477,6 +477,12 @@ body,
   text-overflow: ellipsis;
 }
 
+.status-actions .status-btn[aria-pressed='true'] {
+  color: var(--accent);
+  background: var(--bg-input);
+  outline: 1px solid var(--accent);
+}
+
 .status-actions {
   display: flex;
   gap: 6px;

@@ -156,6 +156,24 @@ check('gag trigger (case-insensitive)', d2.gag, true)
 const d3 = engine.processLine('nothing special')
 check('non-matching line', d3, { gag: false })
 
+const enabledBeforePause = settings.triggers.map(t => t.enabled)
+engine.triggersPaused = true
+sent.length = 0
+check('paused trigger produces no highlight', engine.processLine('Gandalf tells you hello'), { gag: false })
+check('paused trigger produces no gag', engine.processLine('some SPAM LINE here'), { gag: false })
+check('paused triggers send nothing', sent, [])
+engine.processInput('k dragon')
+check('aliases still work while triggers pause', sent, ['kill dragon'])
+const pausedSnapshot = engine.snapshot()
+engine.triggersPaused = false
+engine.restore(pausedSnapshot)
+check('pause survives copyover restore', engine.triggersPaused, true)
+engine.triggersPaused = false
+sent.length = 0
+engine.processLine('Gandalf tells you hello')
+check('resuming fires only the new line', sent, ['reply Gandalf I am AFK'])
+check('pause preserves enabled flags', settings.triggers.map(t => t.enabled), enabledBeforePause)
+
 // ---- server text can't become command syntax ----
 settings.triggers.push({
   id: 'tinj',
