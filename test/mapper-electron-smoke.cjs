@@ -32,7 +32,7 @@ app.whenReady().then(async () => {
       window.walks = []; window.graph = () => JSON.stringify(model.map);
       createRoot(document.getElementById('root')).render(<MapPane model={model} tracker={tracker} walkTo={(id) => window.walks.push(id)} />);
     ` } })
-  const css = fs.readFileSync(path.join(root, 'src/renderer/src/styles.css'), 'utf8')
+  const css = fs.readFileSync(path.join(root, 'src/renderer/src/styles.css'), 'utf8') + fs.readFileSync(path.join(root, 'src/renderer/src/tools.css'), 'utf8')
   fs.writeFileSync(path.join(scratch, 'index.html'), `<!doctype html><meta charset="utf-8"><style>${css}\n#root {height:100vh;display:flex} .map-pane{border:0}</style><div id="root"></div><script src="fixture.js"></script>`)
   const win = new BrowserWindow({ show: false, width: 940, height: 720, webPreferences: { offscreen: true, backgroundThrottling: false } })
   const errors = []
@@ -73,6 +73,23 @@ app.whenReady().then(async () => {
     await waitFor(`!document.querySelector('.map-exit-inspector')`)
     assert.ok(await js(`document.querySelector('.map-canvas').clientHeight`) > height)
     console.log('ok exit inspector can be collapsed for more map space')
+    await js(`Array.from(document.querySelectorAll('button')).find(b => b.textContent === 'Route').click()`)
+    await waitFor(`!!document.querySelector('[aria-label="Route preview"]')`)
+    assert.deepEqual(await js('window.walks'), [])
+    assert.ok(await js(`document.querySelector('.route-steps').textContent.includes('u')`))
+    win.setSize(940,720)
+    await new Promise((r) => setTimeout(r, 100))
+    if (process.env.WAYFARER_ROUTE_CAPTURE) fs.writeFileSync(process.env.WAYFARER_ROUTE_CAPTURE, (await win.webContents.capturePage()).toPNG())
+    await js(`Array.from(document.querySelectorAll('button')).find(b => b.textContent === 'Avoid exit').click()`)
+    await waitFor(`document.querySelector('[aria-label="Route preview"]').textContent.includes('No route')`)
+    assert.deepEqual(await js('window.walks'), [])
+    await js(`Array.from(document.querySelectorAll('button')).find(b => b.textContent === 'Routing').click()`)
+    await waitFor(`!!document.querySelector('[aria-label="Routing preferences"]')`)
+    await js(`Array.from(document.querySelectorAll('button')).find(b => b.textContent === 'Allow u').click()`)
+    await waitFor(`!!Array.from(document.querySelectorAll('button')).find(b => b.textContent === 'Start walk')`)
+    await js(`Array.from(document.querySelectorAll('button')).find(b => b.textContent === 'Start walk').click()`)
+    assert.equal((await js('window.walks')).length, 1)
+    console.log('ok routing preview sends no movement until Start walk')
   }
   assert.deepEqual(errors, [])
   win.destroy()

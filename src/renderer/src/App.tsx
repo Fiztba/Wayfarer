@@ -4,6 +4,8 @@ import { SessionView } from './components/SessionView'
 import { ConnectScreen } from './components/ConnectScreen'
 import { SettingsPanel } from './components/SettingsPanel'
 import { HelpPanel } from './components/HelpPanel'
+import { WorldTools } from './components/WorldTools'
+import { HistorySearch } from './components/HistorySearch'
 import { uiState } from './uiState'
 import { settingsManager } from './SettingsManager'
 import type { Encoding } from '../../shared/types'
@@ -30,6 +32,9 @@ export default function App() {
   /** A line of output to build a trigger from, when Settings was opened for that. */
   const [settingsSeedLine, setSettingsSeedLine] = useState<string | null>(null)
   const [helpOpen, setHelpOpen] = useState(false)
+  const [tool, setTool] = useState<'worlds' | 'history' | null>(null)
+  const [worldRevision, setWorldRevision] = useState(0)
+  const closeTool = () => { setTool(null); setWorldRevision((n) => n + 1); setFocusTick((n) => n + 1) }
   const [, forceRender] = useState(0)
   // Bumped whenever a modal closes; the active SessionView refocuses its
   // command line on the change so the keyboard goes back where it was.
@@ -45,8 +50,8 @@ export default function App() {
   }, [])
 
   useEffect(() => {
-    uiState.modalOpen = settingsFor !== null || helpOpen
-  }, [settingsFor, helpOpen])
+    uiState.modalOpen = settingsFor !== null || helpOpen || tool !== null
+  }, [settingsFor, helpOpen, tool])
 
   useEffect(() => {
     uiState.openHelp = () => setHelpOpen(true)
@@ -166,6 +171,8 @@ export default function App() {
   return (
     <div className="app">
       <div className="tab-bar">
+        <button className="tab" onClick={() => setTool('worlds')}>Worlds</button>
+        <button className="tab" onClick={() => setTool('history')}>History</button>
         {tabs.map((tab) => {
           const store = sessionStores.get(tab.id)
           const dot =
@@ -248,13 +255,15 @@ export default function App() {
           ) : null
         })}
         {activeId === null && (
-          <ConnectScreen onConnect={connect} onOpenHelp={() => setHelpOpen(true)} />
+          <ConnectScreen key={worldRevision} onConnect={connect} onOpenHelp={() => setHelpOpen(true)} />
         )}
       </div>
       {settingsStore && (
         <SettingsPanel store={settingsStore} onClose={closeSettings} seedLine={settingsSeedLine} />
       )}
       {helpOpen && <HelpPanel onClose={closeHelp} />}
+      {tool === 'worlds' && <WorldTools onClose={closeTool} />}
+      {tool === 'history' && <HistorySearch onClose={closeTool} />}
     </div>
   )
 }

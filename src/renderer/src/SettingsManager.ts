@@ -63,6 +63,13 @@ class SettingsManager {
     return this.ready.has(profileId ?? GLOBAL_KEY)
   }
 
+  /** Reload disk state after an explicit world restore. */
+  async reload(profileId: string): Promise<void> {
+    this.loading.delete(profileId)
+    await this.load(profileId)
+    this.notify()
+  }
+
   /** Profile scope first (wins), then global. */
   getSets(profileId: string | null | undefined): SettingsSet[] {
     const sets: SettingsSet[] = []

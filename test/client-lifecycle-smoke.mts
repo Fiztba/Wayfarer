@@ -4,7 +4,7 @@ import { createRequire } from 'node:module'
 import { build } from 'esbuild'
 
 const built = await build({
-  stdin: { contents: `export { SessionStore, sessionStores } from './src/renderer/src/SessionStore'; export { settingsManager } from './src/renderer/src/SettingsManager'; export { defaultSettings } from './src/shared/types';`, resolveDir: process.cwd() },
+  stdin: { contents: `export { SessionStore, sessionStores, forgetWorldMap } from './src/renderer/src/SessionStore'; export { settingsManager } from './src/renderer/src/SettingsManager'; export { defaultSettings } from './src/shared/types';`, resolveDir: process.cwd() },
   bundle: true, write: false, platform: 'node', format: 'cjs', packages: 'external',
   plugins: [{ name: 'wasm-url', setup(b) {
     b.onResolve({ filter: /glue\.wasm\?url$/ }, () => ({ path: 'wasm', namespace: 'test' }))
@@ -137,5 +137,15 @@ await check('window shutdown flushes debounced variables', () => {
   assert.equal(saves.at(-1).variables.lastTarget, 'saved before quit')
 })
 sessionStores.clear()
+const oldRead = maps.get('world')
+mod.exports.forgetWorldMap('world')
+const restored = new SessionStore('restored', 'Restored', 'localhost', 4000, 'world')
+assert.notEqual(maps.get('world'), oldRead)
+maps.get('world')!.resolve({ version: 1, zones: [{ id: 'restored-zone', name: 'Restored zone' }], rooms: {}, waypoints: [] })
+await settle()
+await check('restoring a closed world reloads its map instead of reusing the old cached model', () => {
+  assert.equal(restored.mapModel.map.zones[0].name, 'Restored zone')
+})
+restored.dispose()
 console.log(`${failures} failures`)
 process.exitCode = failures ? 1 : 0

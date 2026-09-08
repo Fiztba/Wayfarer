@@ -207,6 +207,8 @@ export class MapModel {
       y: partial.y ?? 0,
       z: partial.z ?? 0,
       color: partial.color,
+      avoid: partial.avoid,
+      cost: partial.cost,
       notes: partial.notes,
       descHashes: partial.descHashes,
       rivals: partial.rivals,

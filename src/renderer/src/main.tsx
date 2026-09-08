@@ -4,6 +4,7 @@ import App from './App'
 import { PopoutMap } from './components/PopoutMap'
 import { setClientVersion } from './ansi'
 import './styles.css'
+import './tools.css'
 
 // Hand the real build version to the ANSI/MXP layer before any session can
 // negotiate MXP and be asked for it.

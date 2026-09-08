@@ -19,6 +19,31 @@ export interface HelpTopic {
 
 export const HELP_TOPICS: HelpTopic[] = [
   {
+    id: 'world-library', title: 'World Export, Import & Recovery', blocks: [
+      { p: 'Open Worlds in the tab bar. Export world saves the selected world’s connection, automation, variables and complete map in one .wayfarer.json file. Global automation and app options are separate; they are not transferred.' },
+      { p: 'Import world opens a preview with the server address and content counts. Import as a new world creates a separate profile even if that server is already saved. You can instead choose a destination world to replace. Imported scripts retain their saved enablement and run when you connect.' },
+      { p: 'Create backup makes a complete world snapshot. The backup list also includes the timestamped profile, settings and map backups created by ordinary saves. Click one to preview it. A component backup restores that component together with the other currently saved components; its timestamp is not a claim that all three came from that date.' },
+      { p: 'Close every tab for a destination world before replacing it. Its current data is saved in a complete snapshot first. Deleted worlds can be restored with their original identity, preserving the connection to their settings and map. If only a settings/map backup remains, restore the profile backup first.' },
+      { p: 'Files can include private variables or script text. Review them before sharing. Imports are limited to 64 MB, validated before saving, and never connect automatically.' }
+    ]
+  },
+  {
+    id: 'route-preferences', title: 'Route Previews & Avoidance', blocks: [
+      { p: 'Double-click a destination, choose Walk here, or use the Route button for the selected room. The preview lists each movement command, its destination, and any door-opening command. Nothing is sent until Start walk. Normal walking waits for each confirmed arrival; fast walking remains an explicit choice.' },
+      { p: 'Open Routing to avoid the selected room or add an entry cost. Exits & doors lets you avoid individual exits or change their traversal cost. Avoid exit in the preview excludes that exit and recalculates the route. The saved-avoidance list in Routing lets you allow it again.' },
+      { p: 'Normal exits cost 1 and rooms add 0. Higher costs make a route less attractive; avoidance excludes it entirely, including an avoided destination. Routing follows directed links across zones and floors, not the drawing. These preferences travel with world exports and work in map popouts.' },
+      { p: '#go and #go! remain direct commands: they start walking immediately, with the same saved routing preferences. #stop cancels a confirmed walk.' }
+    ]
+  },
+  {
+    id: 'history-search', title: 'Search Captures & Saved Logs', blocks: [
+      { p: 'Open History in the tab bar, enter literal text, and Search. Matching is case-insensitive. World, character and channel filters accept part of a name; the date range is inclusive in local time. Choose All, Logs or Captures.' },
+      { p: 'Results include currently open capture buffers and saved logs. Click a result to read eight surrounding lines on each side. Open captures and saved copies are labeled separately. Ctrl+F still searches the current session’s scrollback.' },
+      { p: 'Capture copies and character/channel metadata are saved only while logging is enabled. Older plain logs can be searched by text, world and date, but character/channel metadata cannot be recovered retroactively. A capture cleared without logging has no saved copy.' },
+      { p: 'A search returns up to 300 saved and 300 open-capture matches. Files above 128 MB are skipped; scans stop after 512 MB. The result status reports limits or unreadable files so you can narrow the filters.' }
+    ]
+  },
+  {
     id: 'getting-started',
     title: 'Getting Started',
     blocks: [
@@ -410,7 +435,7 @@ export const HELP_TOPICS: HelpTopic[] = [
       { h: 'Walking' },
       {
         list: [
-          'Double-click any room to walk there. Default is a confirmed walk: one step at a time, verifying each room, halting visibly if anything is off. Right-click offers "Walk here (fast)" to blast all steps at once.',
+          'Double-click any room to preview a route, then Start walk. The default waits for each confirmed room and halts if anything is off. Right-click offers "Walk here (fast)" with an explicit fast-walk preview. Routing and Exits & doors contain saved avoidance and cost preferences.',
           'Hidden doors self-heal: if a step bounces off a closed door the map never knew about, the walk opens it, retries, records the door for next time, and carries on. A door that stays shut (locked) or a hard "no way there" halts the walk with the reason.',
           '#stop cancels a walk in progress.'
         ]

@@ -1,9 +1,11 @@
-/** BFS pathfinding over the room graph. Exits are uniform cost; special
- *  exits are ordinary edges with a custom command. */
+/** Dijkstra routing over the graph, respecting saved avoidance and costs. */
 import type { MapModel } from './MapModel.ts'
 import { DIR_FULL, type Direction, type MapExit } from './types.ts'
 
 export interface WalkStep {
+  fromRoomId?: string
+  exitIndex?: number
+  cost?: number
   /** Command that traverses the exit ("n" or "enter portal"). */
   command: string
   /** Open this before moving, when the exit has a door. */
@@ -29,38 +31,67 @@ export function exitOpenCommand(exit: MapExit): string | undefined {
   return `open ${name || 'door'}`
 }
 
-/** Shortest path fromId → toId, or null if unreachable. */
+/** Lowest-cost path fromId → toId, or null if excluded or unreachable. */
 export function findPath(model: MapModel, fromId: string, toId: string): WalkStep[] | null {
   if (fromId === toId) return []
   const prev = new Map<string, { roomId: string; step: WalkStep }>()
-  const visited = new Set<string>([fromId])
-  const queue: string[] = [fromId]
+  if (!model.room(fromId) || !model.room(toId) || model.room(toId)?.avoid) return null
+  const distances = new Map<string, number>([[fromId, 0]])
+  const queue: { id: string; cost: number }[] = [{ id: fromId, cost: 0 }]
+  const push = (item: { id: string; cost: number }) => {
+    queue.push(item)
+    let i = queue.length - 1
+    while (i > 0) {
+      const p = (i - 1) >> 1
+      if (queue[p].cost <= item.cost) break
+      queue[i] = queue[p]; i = p
+    }
+    queue[i] = item
+  }
+  const pop = () => {
+    const first = queue[0], last = queue.pop()!
+    if (queue.length) {
+      let i = 0
+      while (i * 2 + 1 < queue.length) {
+        let child = i * 2 + 1
+        if (child + 1 < queue.length && queue[child + 1].cost < queue[child].cost) child++
+        if (queue[child].cost >= last.cost) break
+        queue[i] = queue[child]; i = child
+      }
+      queue[i] = last
+    }
+    return first
+  }
 
   while (queue.length > 0) {
-    const id = queue.shift()!
+    const { id, cost } = pop()
+    if (cost !== distances.get(id)) continue
+    if (id === toId) {
+      const steps: WalkStep[] = []
+      for (let cursor = toId; cursor !== fromId;) {
+        const entry = prev.get(cursor)!
+        steps.push(entry.step); cursor = entry.roomId
+      }
+      return steps.reverse()
+    }
     const room = model.room(id)
     if (!room) continue
-    for (const exit of room.exits) {
+    for (const [exitIndex, exit] of room.exits.entries()) {
       const dest = exit.to
-      if (!dest || visited.has(dest) || !model.room(dest)) continue
+      if (!dest || exit.avoid || !model.room(dest) || model.room(dest)?.avoid) continue
       const command = exitCommand(exit)
       if (!command) continue
-      visited.add(dest)
+      const entryCost = model.room(dest)?.cost
+      const stepCost = (Number.isFinite(exit.cost) && exit.cost! >= 1 ? exit.cost! : 1) +
+        (Number.isFinite(entryCost) && entryCost! >= 0 ? entryCost! : 0)
+      const nextCost = cost + stepCost
+      if (nextCost >= (distances.get(dest) ?? Infinity)) continue
+      distances.set(dest, nextCost)
       prev.set(dest, {
         roomId: id,
-        step: { command, openCommand: exitOpenCommand(exit), toRoomId: dest }
+        step: { command, openCommand: exitOpenCommand(exit), toRoomId: dest, fromRoomId: id, exitIndex, cost: stepCost }
       })
-      if (dest === toId) {
-        const steps: WalkStep[] = []
-        let cursor = toId
-        while (cursor !== fromId) {
-          const entry = prev.get(cursor)!
-          steps.unshift(entry.step)
-          cursor = entry.roomId
-        }
-        return steps
-      }
-      queue.push(dest)
+      push({ id: dest, cost: nextCost })
     }
   }
   return null

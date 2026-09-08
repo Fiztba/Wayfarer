@@ -9,6 +9,10 @@ import { MudDirectory } from './MudDirectory'
 import { SettingsStore } from './SettingsStore'
 import { LogWriter } from './LogWriter'
 import { MapStore } from './MapStore'
+import { WorldLibrary } from './WorldLibrary'
+import { HistoryStore } from './HistoryStore'
+import type { HistoryMeta, HistoryQuery } from '../shared/history'
+import { atomicWrite, slugify } from './storage'
 import { isOwnPage } from './navigation'
 import type { ConnectOptions, Profile, SettingsSet } from '../shared/types'
 
@@ -221,7 +225,15 @@ app.whenReady().then(async () => {
   const logs = new LogWriter(app.getPath('userData'))
   ipcMain.handle('log:start', (_e, sessionId: string, name: string) => logs.start(sessionId, name))
   ipcMain.handle('log:stop', (_e, sessionId: string) => logs.stop(sessionId))
-  ipcMain.on('log:line', fenced('log:line', (sessionId: string, text: string) => logs.line(sessionId, text)))
+  ipcMain.on('log:line', fenced('log:line', (sessionId: string, text: string, meta?: HistoryMeta) => logs.line(sessionId, text, meta)))
+  const history = new HistoryStore(logs.logsDir)
+  let searching = false
+  ipcMain.handle('history:search', async (_e, query: HistoryQuery) => {
+    if (searching) throw new Error('A history search is already running')
+    searching = true
+    try { return await history.search(query) } finally { searching = false }
+  })
+  ipcMain.handle('history:context', (_e, file: string, line: number) => history.context(file, line))
   ipcMain.handle('log:openFolder', () => shell.openPath(logs.logsDir))
   app.on('before-quit', () => logs.stopAll())
   // Closing a pop-out is the user forgetting it; closing because the app is
@@ -234,7 +246,26 @@ app.whenReady().then(async () => {
 
   // ---- Mapper: storage + pop-out windows with a state mirror --------------
   const maps = new MapStore(app.getPath('userData'), profileName)
+  const worlds = new WorldLibrary(app.getPath('userData'), profiles, settings, maps, (id) => sessions.hasProfile(id))
+  ipcMain.handle('worlds:export', async (_e, id: string) => {
+    const bundle = worlds.bundle(id)
+    const result = await dialog.showSaveDialog({ title: 'Export world', defaultPath: `${slugify(bundle.profile.name) || 'world'}.wayfarer.json`,
+      filters: [{ name: 'Wayfarer world', extensions: ['json'] }] })
+    if (result.canceled || !result.filePath) return false
+    atomicWrite(result.filePath, JSON.stringify(bundle, null, 2))
+    return true
+  })
+  ipcMain.handle('worlds:choose-import', async () => {
+    const result = await dialog.showOpenDialog({ title: 'Import world', properties: ['openFile'], filters: [{ name: 'Wayfarer world', extensions: ['json'] }] })
+    if (result.canceled || !result.filePaths[0]) return null
+    return worlds.preview(worlds.read(result.filePaths[0]), path.basename(result.filePaths[0]))
+  })
+  ipcMain.handle('worlds:backups', () => worlds.backups())
+  ipcMain.handle('worlds:preview-backup', (_e, id: string) => worlds.previewBackup(id))
+  ipcMain.handle('worlds:import', (_e, token: string, replaceId: string | null) => worlds.import(token, replaceId))
+  ipcMain.handle('worlds:snapshot', (_e, id: string) => worlds.snapshot(id))
   ipcMain.handle('map:load', (_e, key: string) => maps.load(key))
+  ipcMain.handle('map:persist', (_e, key: string, map: unknown) => maps.save(key, map))
   ipcMain.on('map:save', fenced('map:save', (key: string, map: unknown) => maps.save(key, map)))
 
   const popouts = new Map<string, Set<BrowserWindow>>()

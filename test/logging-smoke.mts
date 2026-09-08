@@ -12,7 +12,7 @@ try {
   assert.notEqual(a, b)
   writer.line('a', 'only session a')
   writer.line('b', 'only session b')
-  const finished = [...(writer as any).streams.values()].map((x: any) => once(x.stream, 'finish'))
+  const finished = [...(writer as any).streams.values()].flatMap((x: any) => [once(x.stream, 'finish'), once(x.history, 'finish')])
   writer.stopAll()
   await Promise.all(finished)
   assert.match(fs.readFileSync(a, 'utf8'), /only session a/)

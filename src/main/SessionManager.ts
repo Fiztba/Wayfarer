@@ -24,6 +24,8 @@ export class SessionManager {
 
   constructor(private getWebContents: () => WebContents | null) {}
 
+  hasProfile(id: string): boolean { return [...this.sessions.values()].some((s) => s.opts.profileId === id) }
+
   connect(opts: ConnectOptions): string {
     // Rejected here, as a message the renderer can show, rather than as an
     // ERR_INVALID_ARG_TYPE from deep inside net.connect.

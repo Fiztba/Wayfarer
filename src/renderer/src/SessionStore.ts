@@ -33,6 +33,7 @@ import type { ScriptDef, SessionEvent } from '../../shared/types'
 import luaWasmUrl from 'wasmoon/dist/glue.wasm?url'
 
 export interface Line {
+  character?: string | null
   id: number
   spans: Span[]
   kind: 'output' | 'input' | 'system' | 'error' | 'trigger'
@@ -580,7 +581,7 @@ export class SessionStore {
   }
 
   /** Write the batched variables into the scope's settings file. */
-  private flushVariables(): void {
+  private flushVariables(): Promise<void> | void {
     this.varPersistTimer = null
     if (this.pendingVars.size === 0) return
     const scope = this.profileId
@@ -594,7 +595,7 @@ export class SessionStore {
     const batch = Object.fromEntries(this.pendingVars)
     this.pendingVars.clear()
     const set = settingsManager.getScope(scope)
-    void settingsManager.save(scope, {
+    return settingsManager.save(scope, {
       ...set,
       variables: { ...set.variables, ...batch }
     })
@@ -1083,6 +1084,17 @@ export class SessionStore {
     return n
   }
 
+  async flushWorld(): Promise<void> {
+    if (this.varPersistTimer) clearTimeout(this.varPersistTimer)
+    if (settingsManager.isLoaded(this.profileId)) await this.flushVariables()
+    this.mapModel?.flush()
+    if (this.mapModel) await window.mud.map.persist(this.mapKey, this.mapModel.map)
+  }
+
+  private logLine(text: string, channel?: string): void {
+    window.mud.log.line(this.id, text, { world: this.name, profileId: this.profileId, character: this.charName, channel })
+  }
+
   private completeLine(): void {
     let spans = this.openSpans
     this.openSpans = []
@@ -1097,19 +1109,20 @@ export class SessionStore {
     }
     this.tracker?.onLine(plain)
     const directive = this.engine.processLine(plain)
-    if (this.logging) window.mud.log.line(this.id, plain)
+    if (this.logging) this.logLine(plain)
     if (directive.highlight) {
       const color = directive.highlight
       spans = spans.map((s) => ({ ...s, style: { ...s.style, color } }))
     }
     if (directive.captures) {
       for (const windowName of directive.captures) {
+        if (this.logging) this.logLine(plain, windowName)
         let buffer = this.captureWindows.get(windowName)
         if (!buffer) {
           buffer = []
           this.captureWindows.set(windowName, buffer)
         }
-        buffer.push({ id: this.nextLineId++, spans, kind: 'output', at: Date.now() })
+        buffer.push({ id: this.nextLineId++, spans, kind: 'output', at: Date.now(), character: this.charName })
         if (buffer.length > 2000) buffer.splice(0, buffer.length - 2000)
       }
     }
@@ -1132,7 +1145,7 @@ export class SessionStore {
     const spans = [...this.openSpans, { text, style: { color: '#ffd68a' } }]
     this.pushLine({ id: this.nextLineId++, spans, kind: 'input' })
     this.openSpans = []
-    if (this.logging) window.mud.log.line(this.id, spans.map((s) => s.text).join(''))
+    if (this.logging) this.logLine(spans.map((s) => s.text).join(''))
     this.notify()
   }
 
@@ -1151,7 +1164,7 @@ export class SessionStore {
       spans: [{ text, style: { color: '#c678dd' } }],
       kind: 'trigger'
     })
-    if (this.logging) window.mud.log.line(this.id, text)
+    if (this.logging) this.logLine(text)
     this.notify()
   }
 
@@ -1162,7 +1175,7 @@ export class SessionStore {
       spans: [{ text: `— ${text} —`, style: { color, italic: true } }],
       kind
     })
-    if (this.logging) window.mud.log.line(this.id, `--- ${text} ---`)
+    if (this.logging) this.logLine(`--- ${text} ---`)
     this.notify()
   }
 
@@ -1246,6 +1259,8 @@ export const sessionStores = new Map<string, SessionStore>()
 
 /** One shared MapModel per map key (kept across reconnects and tab closes). */
 const mapModelRegistry = new Map<string, Promise<MapModel>>()
+/** Restore is allowed only after all tabs for the world close. */
+export function forgetWorldMap(profileId: string): void { mapModelRegistry.delete(profileId) }
 
 // Flush debounced map and variable writes before the renderer disappears,
 // and stop session-owned work just as when closing an individual tab.

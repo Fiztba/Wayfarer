@@ -1,4 +1,6 @@
 import { contextBridge, ipcRenderer, IpcRendererEvent } from 'electron'
+import type { WorldPreview, WorldBackup } from '../shared/world'
+import type { HistoryMeta, HistoryQuery, HistoryResults, HistoryHit } from '../shared/history'
 import type {
   ConnectOptions,
   DirectoryResult,
@@ -8,6 +10,18 @@ import type {
 } from '../shared/types'
 
 export interface MudApi {
+  worlds: {
+    export(id: string): Promise<boolean>
+    chooseImport(): Promise<WorldPreview | null>
+    backups(): Promise<WorldBackup[]>
+    previewBackup(id: string): Promise<WorldPreview>
+    import(token: string, replaceId: string | null): Promise<Profile>
+    snapshot(id: string): Promise<void>
+  }
+  history: {
+    search(query: HistoryQuery): Promise<HistoryResults>
+    context(file: string, line: number): Promise<HistoryHit[]>
+  }
   /** This build's version, e.g. "0.3.1". Available synchronously. */
   version: string
   /** Version of a downloaded update waiting to install, else null. */
@@ -40,10 +54,11 @@ export interface MudApi {
   log: {
     start(sessionId: string, name: string): Promise<string>
     stop(sessionId: string): Promise<void>
-    line(sessionId: string, text: string): void
+    line(sessionId: string, text: string, meta?: HistoryMeta): void
     openFolder(): Promise<void>
   }
   map: {
+    persist(key: string, map: unknown): Promise<void>
     load(key: string): Promise<unknown | null>
     save(key: string, map: unknown): void
     popout(sessionId: string, title: string, bounds?: unknown): Promise<void>
@@ -70,6 +85,18 @@ const appVersion =
   process.argv.find((a) => a.startsWith(VERSION_FLAG))?.slice(VERSION_FLAG.length) || '0.0.0-dev'
 
 const api: MudApi = {
+  worlds: {
+    export: (id) => ipcRenderer.invoke('worlds:export', id),
+    chooseImport: () => ipcRenderer.invoke('worlds:choose-import'),
+    backups: () => ipcRenderer.invoke('worlds:backups'),
+    previewBackup: (id) => ipcRenderer.invoke('worlds:preview-backup', id),
+    import: (token, replaceId) => ipcRenderer.invoke('worlds:import', token, replaceId),
+    snapshot: (id) => ipcRenderer.invoke('worlds:snapshot', id)
+  },
+  history: {
+    search: (query) => ipcRenderer.invoke('history:search', query),
+    context: (file, line) => ipcRenderer.invoke('history:context', file, line)
+  },
   version: appVersion,
   updateState: () => ipcRenderer.invoke('app:update-state'),
   installUpdate: () => ipcRenderer.invoke('app:install-update'),
@@ -105,10 +132,11 @@ const api: MudApi = {
   log: {
     start: (sessionId, name) => ipcRenderer.invoke('log:start', sessionId, name),
     stop: (sessionId) => ipcRenderer.invoke('log:stop', sessionId),
-    line: (sessionId, text) => ipcRenderer.send('log:line', sessionId, text),
+    line: (sessionId, text, meta) => ipcRenderer.send('log:line', sessionId, text, meta),
     openFolder: () => ipcRenderer.invoke('log:openFolder')
   },
   map: {
+    persist: (key, map) => ipcRenderer.invoke('map:persist', key, map),
     load: (key) => ipcRenderer.invoke('map:load', key),
     save: (key, map) => ipcRenderer.send('map:save', key, map),
     popout: (sessionId, title, bounds) =>

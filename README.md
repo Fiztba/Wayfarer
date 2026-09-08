@@ -4,6 +4,16 @@
 
 Working today:
 
+- **World library** — the Worlds button exports/imports a world's connection,
+  automation, variables and map. Preview imports before creating a separate
+  world or replacing one. Create complete snapshots and restore existing
+  timestamped profile/settings/map backups. Replacing a world requires its
+  tabs to be closed and saves a recovery snapshot first.
+- **History search** — search open capture panes and saved logs with world,
+  character, channel and date filters; open a result's surrounding context.
+  New logs retain searchable metadata and capture copies while logging is on.
+  Older text logs remain searchable by text, world and date.
+
 - **Multi-source MUD directory** — one list unioned from The Mud Connector,
   Scandum's MSSP crawler, Grapevine and Vineyard (plus MUDVerse where a key is
   configured), de-duplicated across sources and probed for liveness. Filter by
@@ -51,9 +61,12 @@ From the Mapper stage:
   one-way connections have distinct markers
 - **Doors** — auto-detected from closed-door bumps and open commands, manual
   toggle per exit with custom open-name; auto-walks open them en route
-- **Walking** — double-click-to-walk with confirmed stepping (verify each
-  room, halt visibly) or fast mode; `#go <waypoint>` / `#go!` from the
-  command line; `#stop` cancels
+- **Route preview and preferences** — double-click a room, choose a waypoint,
+  or use Route to preview movement and door-opening commands before starting.
+  Saved room/exit avoidance and costs select the lowest-cost route, even when
+  it takes more steps. Confirmed stepping remains the default; fast mode is
+  explicit. `#go <waypoint>` / `#go!` start directly with the same routing
+  preferences; `#stop` cancels.
 - **Waypoints & zones** — `#wp add/del/list`, `#zone <name>` active-zone
   mapping with auto-zones from server area names, whole-zone delete
 - **Full editing** — drag rooms, rename/color/notes, delete, merge duplicates,

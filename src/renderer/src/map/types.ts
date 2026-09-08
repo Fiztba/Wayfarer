@@ -64,6 +64,10 @@ export function wordToDirection(word: string): Direction | null {
 }
 
 export interface MapExit {
+  /** Excluded from automatic routes. Manual movement still works. */
+  avoid?: boolean
+  /** Traversal cost, default 1. */
+  cost?: number
   /** Standard direction, or null for special exits ("enter portal"). */
   dir: Direction | null
   /** Command to traverse; for dir exits defaults to the direction itself. */
@@ -83,6 +87,9 @@ export interface MapExit {
 }
 
 export interface MapRoom {
+  avoid?: boolean
+  /** Additional cost to enter this room, default 0. */
+  cost?: number
   id: string
   /**
    * Hashes of descriptions seen in this room. A SET, not one value: weather,

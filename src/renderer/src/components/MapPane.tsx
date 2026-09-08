@@ -8,6 +8,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react'
 import { MapCanvas, type MapContextInfo } from './MapCanvas'
 import { MapExitInspector } from './MapExitInspector'
+import { RoutePreview } from './RoutePreview'
 import type { ExitFocus } from '../map/displayLinks'
 import { ClampedMenu } from './ClampedMenu'
 import type { MapModel } from '../map/MapModel'
@@ -43,7 +44,10 @@ function describeTidy(r: RelayoutResult & { applied: boolean }): string {
   return `Tidied ${Object.keys(r.moves).length} rooms: ${say(r.before)} → ${say(r.after)}.`
 }
 
-export function MapPane({ model, tracker, walkTo, onPopout, onClose }: MapPaneProps) {
+export function MapPane({ model, tracker, walkTo: startWalk, onPopout, onClose }: MapPaneProps) {
+  const [routeTarget, setRouteTarget] = useState<{ id: string; fast: boolean } | null>(null)
+  const [routingOpen, setRoutingOpen] = useState(false)
+  const walkTo = (id: string, fast = false) => setRouteTarget({ id, fast })
   const [, force] = useState(0)
   useEffect(() => {
     const off1 = model.subscribe(() => force((n) => n + 1))
@@ -213,6 +217,8 @@ export function MapPane({ model, tracker, walkTo, onPopout, onClose }: MapPanePr
         </button>
         <button className="map-btn" title="Inspect and trace room exits" aria-pressed={showExits}
           onClick={() => setShowExits((value) => !value)}>Exits</button>
+        <button className="map-btn" aria-pressed={routingOpen} onClick={() => setRoutingOpen(!routingOpen)}>Routing</button>
+        <button className="map-btn" disabled={!selectedId} onClick={() => selectedId && walkTo(selectedId)}>Route</button>
         <button
           className="map-btn"
           title="Doubts and merges: rooms the mapper is unsure about, and what it has merged (each undoable)"
@@ -517,6 +523,24 @@ export function MapPane({ model, tracker, walkTo, onPopout, onClose }: MapPanePr
         </div>
       )}
 
+      {routingOpen && <section className="route-preview" aria-label="Routing preferences">
+        {inspectedRoom && <>
+          <strong>{inspectedRoom.name}</strong>
+          <label><input type="checkbox" checked={!!inspectedRoom.avoid} onChange={(e) => model.updateRoom(inspectedRoom.id, { avoid: e.target.checked })} /> Avoid this room</label>
+          <label>Extra entry cost <input type="number" min="0" max="100000" value={inspectedRoom.cost ?? 0}
+            onChange={(e) => { const n = Number(e.target.value); if (Number.isFinite(n) && n >= 0 && n <= 100000) model.updateRoom(inspectedRoom.id, { cost: n }) }} /></label>
+        </>}
+        <details><summary>Saved avoided rooms and exits</summary>
+          {Object.values(model.map.rooms).filter((r) => r.avoid || r.exits.some((e) => e.avoid)).map((r) => <div key={r.id}>
+            <button onClick={() => locateRoom(r.id)}>{r.name}</button>
+            {r.avoid && <button onClick={() => model.updateRoom(r.id, { avoid: false })}>Allow room</button>}
+            {r.exits.map((e, i) => e.avoid && <button key={i} onClick={() => model.setExitAt(r.id, i, { avoid: false })}>Allow {e.command || e.dir}</button>)}
+          </div>)}
+        </details>
+      </section>}
+      {routeTarget && <RoutePreview model={model} from={tracker.currentRoomId} lost={tracker.lost}
+        destination={routeTarget.id} fast={routeTarget.fast} onClose={() => setRouteTarget(null)} onLocate={locateRoom}
+        onWalk={() => { startWalk(routeTarget.id, routeTarget.fast); setRouteTarget(null) }} />}
       <div className="map-canvas-wrap">
         <MapCanvas
           map={model.map}
@@ -831,6 +855,9 @@ function ExitsEditor({
           <span className="map-exit-dest" title={describe(exit)}>
             → {describe(exit)}
           </span>
+          <label><input type="checkbox" checked={!!exit.avoid} onChange={(e) => model.setExitAt(room.id, i, { avoid: e.target.checked })} /> Avoid</label>
+          <label>Cost <input className="routing-cost" type="number" min="1" max="100000" value={exit.cost ?? 1}
+            onChange={(e) => { const n = Number(e.target.value); if (Number.isFinite(n) && n >= 1 && n <= 100000) model.setExitAt(room.id, i, { cost: n }) }} /></label>
           <label title="Door on this exit">
             <input
               type="checkbox"
