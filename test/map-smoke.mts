@@ -1628,6 +1628,7 @@ check('open cmd: no door, no command',
   const { model, tracker, seeRoom, infos } = makeWorld()
   const stray = model.createRoom({ name: 'New room', x: 0, y: 0, z: 0 })
   tracker.setCurrentRoom(stray.id)
+  tracker.onCommand('recall') // A later teleport invalidates the manual capture.
 
   // A real room arrives that matches nothing: lost, correctly.
   seeRoom('Archetypal Chargen - Mage / Shaman Start Room', 'Exits: south')
@@ -1651,6 +1652,7 @@ check('open cmd: no door, no command',
   const a = model.createRoom({ name: 'Temple Square', x: 0, y: 0, z: 0 })
   model.createRoom({ name: 'Temple Square', x: 5, y: 5, z: 0 })
   tracker.setCurrentRoom(a.id)
+  seeRoom('Temple Square', 'Exits: north') // Consume the explicit manual capture.
   seeRoom('Somewhere Else Entirely', 'Exits: north')
   check('stuck: lost with rooms present', tracker.lost, true)
   const before = Object.keys(model.map.rooms).length

@@ -169,6 +169,8 @@ export class MapTracker implements TrackerControl {
   /** Room prose that arrived before the server's id for it, on a MUD that
    *  reports ids. It is applied to whichever room the id settles on. */
   private heldDetection: { det: RoomDetection; at: number } | null = null
+  /** Explicit placement binds the next look to this room, regardless of its placeholder name. */
+  private manualCaptureRoomId: string | null = null
 
   constructor(model: MapModel, host: TrackerHost) {
     this.model = model
@@ -210,6 +212,7 @@ export class MapTracker implements TrackerControl {
    * known to be discontinuous: a reconnect, a map swapped underneath us.
    */
   reset(): void {
+    this.manualCaptureRoomId = null
     this.pending = []
     this.abandonSpeculation()
     this.serverSettledAt = 0
@@ -291,6 +294,7 @@ export class MapTracker implements TrackerControl {
   }
 
   setMode(mode: TrackerMode): void {
+    this.manualCaptureRoomId = null
     this.mode = mode
     this.abandonSpeculation()
     this.notify()
@@ -300,13 +304,17 @@ export class MapTracker implements TrackerControl {
   setCurrentRoom(roomId: string | null): void {
     this.abandonSpeculation()
     this.currentRoomId = roomId
+    this.manualCaptureRoomId = roomId
     this.lost = false
     this.pending = []
     this.serverSettledAt = 0
+    this.heldDetection = null
+    this.capture.reset()
     this.notify()
   }
 
   private markLost(reason: string): void {
+    this.manualCaptureRoomId = null
     this.abandonSpeculation()
     if (!this.lost) {
       this.lost = true
@@ -322,6 +330,9 @@ export class MapTracker implements TrackerControl {
   onCommand(command: string): void {
     if (this.mode === 'off') return
     const trimmed = command.trim().toLowerCase()
+    // A movement/recall or other intervening command must not redirect the
+    // following room output into the manually selected room.
+    if (trimmed !== 'look' && trimmed !== 'l') this.manualCaptureRoomId = null
     const dir = wordToDirection(trimmed)
     if (dir) {
       this.pending.push({ dir, at: Date.now() })
@@ -424,6 +435,8 @@ export class MapTracker implements TrackerControl {
   }
 
   private settleServerRoom(info: ServerRoomInfo): void {
+    const manualRoomId = this.manualCaptureRoomId
+    this.manualCaptureRoomId = null
     // An authoritative id settles identity outright, so any run of guesses is
     // moot. Only reachable on MUDs that report room ids, which are exactly the
     // MUDs that never had to guess in the first place.
@@ -478,7 +491,7 @@ export class MapTracker implements TrackerControl {
     if (!move && !this.lost) {
       // Standing still (a look): this is the room we're in.
       const current = this.model.room(this.currentRoomId)
-      if (current && !current.serverId && (!info.name || current.name === info.name)) {
+      if (current && !current.serverId && (manualRoomId === current.id || !info.name || current.name === info.name)) {
         adopt(current.id)
         return
       }
@@ -641,6 +654,15 @@ export class MapTracker implements TrackerControl {
       return
     }
     const move = fromServer ? undefined : this.pending.shift()
+
+    if (!move && current && this.manualCaptureRoomId === current.id) {
+      this.manualCaptureRoomId = null
+      this.model.updateRoom(current.id, { name: det.name })
+      this.applyDetectedExits(current, det)
+      this.lost = false
+      this.notify()
+      return
+    }
 
     if (this.speculation) {
       this.advanceSpeculation(move, det)

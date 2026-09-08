@@ -610,7 +610,7 @@ export function MapPane({ model, tracker, walkTo: startWalk, onPopout, onClose }
             ) : menuRoom ? (
               <>
                 <div className="map-menu-title">{menuRoom.name}</div>
-                <button onClick={() => { tracker.setCurrentRoom(menuRoom.id); closeMenu() }}>
+                <button title="Set your position here, then look to capture this room's name, description and exits." onClick={() => { tracker.setCurrentRoom(menuRoom.id); closeMenu() }}>
                   ⌖ I am here
                 </button>
                 <button onClick={() => { walkTo(menuRoom.id); closeMenu() }}>🚶 Walk here</button>
