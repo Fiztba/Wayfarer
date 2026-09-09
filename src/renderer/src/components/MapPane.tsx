@@ -97,7 +97,10 @@ export function MapPane({ model, tracker, walkTo: startWalk, onPopout, onClose }
   const ambiguous = tracker.speculative && confidence.candidates > 1
   const expected = confidence.expectedPosition
   const confirmed = !tracker.speculative && !tracker.lost ? tracker.currentRoom : null
-  const follow = expected ?? confirmed
+  const guess = tracker.speculative && confidence.candidates === 1 && !tracker.lost
+    ? tracker.currentRoom : null
+  const followRoom = confirmed ?? guess
+  const follow = expected ?? followRoom
   const [lastFollow, setLastFollow] = useState(() => {
     const room = model.room(model.map.lastRoomId)
     return { zoneId: room?.zoneId ?? model.activeZoneId ?? '', z: room?.z ?? 0 }
@@ -113,8 +116,8 @@ export function MapPane({ model, tracker, walkTo: startWalk, onPopout, onClose }
   const activeExitFocus = showExits && visibleInspection?.id === exitFocus?.roomId ? exitFocus : null
   useEffect(() => setExitFocus(null), [inspectedRoom?.id, zoneId, z])
 
-  // Only confirmed arrivals or an anchored compass path drive auto-follow.
-  // Losing the anchor must not hand the view to an unrelated room guess.
+  // Follow a single mapped guess when there is no anchored compass position,
+  // including teleports. This changes the view only; identity stays tentative.
   useEffect(() => {
     if (follow) {
       setLastFollow({ zoneId: follow.zoneId, z: follow.z })
@@ -124,7 +127,7 @@ export function MapPane({ model, tracker, walkTo: startWalk, onPopout, onClose }
       setCenterToken((t) => t + 1)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [confirmed?.id, confirmed?.zoneId, confirmed?.z, expected?.x, expected?.y, expected?.z, expected?.zoneId])
+  }, [followRoom?.id, followRoom?.zoneId, followRoom?.z, expected?.x, expected?.y, expected?.z, expected?.zoneId])
 
   const closeMenu = useCallback(() => setMenu({ kind: 'closed' }), [])
 
