@@ -4,6 +4,9 @@
 
 Working today:
 
+- OSC 8 hyperlinks — HTTP/HTTPS labels open the browser; `send:` links send a decoded MUD command on click, and `prompt:` links fill the input for editing. Links survive slow delivery and color changes, alongside existing MXP support.
+- ANSI double underline (SGR 21), with SGR 24 clearing underline and SGR 22 clearing bold/dim. Automatic URL detection spans the whole output line, so network chunk boundaries cannot split a completed URL into different destinations.
+
 - **Connection copyover** — compatible updates replace the client while a
   separate connection keeper preserves TCP/TLS, Telnet negotiation and MCCP.
   Tabs, scrollback, partial output, variables and mapper observations restore

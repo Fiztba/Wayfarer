@@ -9,6 +9,8 @@
 
 /** Clickable MXP link attached to a span. */
 export interface MxpLink {
+  /** OSC 8 commands are literal commands, not MXP pipe-separated menus. */
+  protocol?: 'osc8'
   /** MUD command to send on click (send tags). */
   command?: string
   /** External URL to open (a tags). */
@@ -31,7 +33,7 @@ export interface SpanStyle {
   background?: string
   bold?: boolean
   italic?: boolean
-  underline?: boolean
+  underline?: boolean | 'double'
   strike?: boolean
   dim?: boolean
 }
@@ -157,7 +159,7 @@ interface Attrs {
   bold: boolean
   dim: boolean
   italic: boolean
-  underline: boolean
+  underline: boolean | 'double'
   inverse: boolean
   strike: boolean
 }
@@ -198,7 +200,7 @@ export function getClientVersion(): string {
 }
 
 import { saveFields, restoreFields } from '../../shared/copyover.ts'
-const ANSI_STATE = ['attrs', 'escBuf', 'cachedStyle', 'lastWasCR', 'lastWasLF', 'mxpEnabled', 'mxpMode', 'mxpDefault', 'mxpLink', 'mxpColorStack']
+const ANSI_STATE = ['attrs', 'escBuf', 'cachedStyle', 'lastWasCR', 'lastWasLF', 'mxpEnabled', 'mxpMode', 'mxpDefault', 'mxpLink', 'mxpColorStack', 'oscLink']
 export class AnsiParser {
   snapshot() { return saveFields(this, ANSI_STATE) }
   restore(state: Record<string, unknown>) { restoreFields(this, ANSI_STATE, state) }
@@ -218,6 +220,7 @@ export class AnsiParser {
   private mxpMode = 0 // 0 open, 1 secure, 2 locked, 4 secure-for-one-tag
   private mxpDefault = 0 // applied at each line start (set by lock modes 5/6/7)
   private mxpLink: MxpLink | null = null
+  private oscLink: MxpLink | null = null
   private mxpColorStack: Array<{ fg: number | string | null; bg: number | string | null }> = []
 
   private mxpSecure(): boolean {
@@ -233,9 +236,10 @@ export class AnsiParser {
     const flushPlain = () => {
       if (plain) {
         const span: Span = { text: plain, style: this.style() }
-        if (this.mxpLink) {
-          span.link = this.mxpLink
-          this.mxpLink.textAcc = (this.mxpLink.textAcc ?? '') + plain
+        const link = this.oscLink ?? this.mxpLink
+        if (link) {
+          span.link = link
+          if (link === this.mxpLink) link.textAcc = (link.textAcc ?? '') + plain
         }
         tokens.push({ kind: 'span', span })
         plain = ''
@@ -357,14 +361,35 @@ export class AnsiParser {
     if (kind === ']') {
       // OSC sequence: terminated by BEL or ST (ESC \)
       for (let j = i + 2; j < text.length; j++) {
-        if (text[j] === '\x07') return j
-        if (text[j] === '\x1b' && text[j + 1] === '\\') return j + 1
+        if (text[j] === '\x07' || (text[j] === '\x1b' && text[j + 1] === '\\')) {
+          flushPlain()
+          this.applyOsc(text.slice(i + 2, j))
+          return text[j] === '\x07' ? j : j + 1
+        }
       }
       return -1
     }
 
     // Two-character escape (ESC + single char): consume and ignore.
     return i + 1
+  }
+
+  private applyOsc(body: string): void {
+    if (!body.startsWith('8;')) return
+    const separator = body.indexOf(';', 2)
+    if (separator < 0) return
+    const uri = body.slice(separator + 1)
+    this.oscLink = null
+    if (/^https?:\/\//i.test(uri) && !/[\x00-\x20\x7f]/.test(uri)) {
+      this.oscLink = { protocol: 'osc8', url: uri }
+    } else if (/^(send|prompt):/i.test(uri)) {
+      try {
+        const command = decodeURIComponent(uri.slice(uri.indexOf(':') + 1))
+        if (command && !/[\x00-\x1f\x7f]/.test(command)) {
+          this.oscLink = { protocol: 'osc8', command, prompt: /^prompt:/i.test(uri) }
+        }
+      } catch { /* Malformed URI encoding leaves ordinary, non-clickable text. */ }
+    }
   }
 
   private applySgr(params: string): void {
@@ -389,7 +414,8 @@ export class AnsiParser {
       else if (p === 4) a.underline = true
       else if (p === 7) a.inverse = true
       else if (p === 9) a.strike = true
-      else if (p === 21 || p === 22) {
+      else if (p === 21) a.underline = 'double'
+      else if (p === 22) {
         a.bold = false
         a.dim = false
       } else if (p === 23) a.italic = false
@@ -571,7 +597,7 @@ export class AnsiParser {
     if (a.bold) s.bold = true
     if (a.dim) s.dim = true
     if (a.italic) s.italic = true
-    if (a.underline) s.underline = true
+    if (a.underline) s.underline = a.underline
     if (a.strike) s.strike = true
     this.cachedStyle = s
     return s

@@ -14,6 +14,7 @@ import { uiState } from '../uiState'
 import { updateState } from '../updateState'
 import { MapPane } from './MapPane'
 import { OutputLine, OutputSpan, formatTime, lineText, type LinkHandler } from './OutputLine'
+import { splitSpanLinks } from '../linkify.ts'
 import { GaugeBar } from './GaugeBar'
 import { CapturePane } from './CapturePane'
 import { ClampedMenu } from './ClampedMenu'
@@ -226,12 +227,21 @@ export function SessionView({
   const handleMxpLink = useCallback<LinkHandler>(
     (link, menu) => {
       if (link.url) {
-        const url = link.url.startsWith('http') ? link.url : `https://${link.url}`
+        const url = /^https?:\/\//i.test(link.url) ? link.url : `https://${link.url}`
         window.open(url) // main process routes this to the system browser
         return
       }
       const raw = link.command || link.textAcc?.trim()
       if (!raw) return
+      if (link.protocol === 'osc8') {
+        if (menu) return
+        if (link.prompt) {
+          setInput(raw)
+          inputRef.current?.focus()
+          requestAnimationFrame(() => inputRef.current?.setSelectionRange(raw.length, raw.length))
+        } else store.sendInput(raw, false)
+        return
+      }
       const commands = raw.split('|').map((c) => c.trim()).filter(Boolean)
       if (menu) {
         // Right-click: offer the menu entries (skipping a handle entry).
@@ -619,8 +629,8 @@ export function SessionView({
   const openPrompt = store.openSpans.length > 0 && (
     <div className="line line-prompt">
       {options.showTimestamps && <span className="line-time">{formatTime(Date.now())}</span>}
-      {store.openSpans.map((s, i) => (
-        <OutputSpan key={i} span={s} onLink={handleMxpLink} />
+      {splitSpanLinks(store.openSpans).map((parts, i) => (
+        <OutputSpan key={i} span={store.openSpans[i]} linkParts={parts} onLink={handleMxpLink} />
       ))}
     </div>
   )

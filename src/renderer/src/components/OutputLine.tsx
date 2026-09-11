@@ -2,7 +2,7 @@
 import React from 'react'
 import type { Line } from '../SessionStore'
 import type { MxpLink, Span, SpanStyle } from '../ansi'
-import { splitLinks } from '../linkify.ts'
+import { splitSpanLinks, type LinkPart } from '../linkify.ts'
 
 /** `menu` is set on right-click, with the pointer position for a context menu. */
 export type LinkHandler = (link: MxpLink, menu?: { x: number; y: number }) => void
@@ -31,6 +31,7 @@ function spanCss(style: SpanStyle): React.CSSProperties {
   if (style.italic) css.fontStyle = 'italic'
   const deco = [style.underline && 'underline', style.strike && 'line-through'].filter(Boolean)
   if (deco.length) css.textDecoration = deco.join(' ')
+  if (style.underline === 'double') css.textDecorationStyle = 'double'
   return css
 }
 
@@ -58,11 +59,13 @@ function highlightParts(text: string, query: string, current: boolean): React.Re
 
 export const OutputSpan = React.memo(function OutputSpan({
   span,
+  linkParts,
   highlight,
   highlightCurrent,
   onLink
 }: {
   span: Span
+  linkParts?: LinkPart[]
   highlight?: string
   highlightCurrent?: boolean
   onLink?: LinkHandler
@@ -74,7 +77,8 @@ export const OutputSpan = React.memo(function OutputSpan({
     const link = span.link
     // Tooltip: the first `|`-part of the hint (for handle links that is the
     // exact target, e.g. "3.hound"); fall back to the first command.
-    const tip = (link.hint ?? link.url ?? link.command ?? '').split('|')[0]
+    const label = link.hint ?? link.url ?? link.command ?? ''
+    const tip = link.protocol === 'osc8' ? label : label.split('|')[0]
     return (
       <span
         style={spanCss(span.style)}
@@ -94,7 +98,7 @@ export const OutputSpan = React.memo(function OutputSpan({
   }
   // Web addresses in plain text (see linkify.ts) open in the system browser:
   // window.open is routed there by the main process, never to a new window.
-  const parts = splitLinks(span.text)
+  const parts = linkParts ?? [{ text: span.text }]
   if (parts.length === 1 && !parts[0].href) {
     return <span style={spanCss(span.style)}>{content}</span>
   }
@@ -140,6 +144,7 @@ export const OutputLine = React.memo(function OutputLine({
   onLink?: LinkHandler
   onLineMenu?: LineMenuHandler
 }) {
+  const linkParts = splitSpanLinks(line.spans)
   return (
     <div
       className={`line line-${line.kind}`}
@@ -158,6 +163,7 @@ export const OutputLine = React.memo(function OutputLine({
             <OutputSpan
               key={i}
               span={s}
+              linkParts={linkParts[i]}
               highlight={searchQuery}
               highlightCurrent={searchCurrent}
               onLink={onLink}

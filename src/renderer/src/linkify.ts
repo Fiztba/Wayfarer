@@ -11,12 +11,43 @@
  * link, including a closing bracket the link did not open.
  */
 
+import type { Span } from './ansi.ts'
+
 export interface TextLink {
   /** Offsets into the text: [start, end). */
   start: number
   end: number
   /** What to open: the text itself, given a scheme when it had none. */
   href: string
+}
+
+export type LinkPart = { text: string; href?: string }
+
+/** Detect on the assembled line, then project destinations back onto its styles.
+ * Explicit MXP links are boundaries and retain their server-provided behavior.
+ */
+export function splitSpanLinks(spans: Span[]): LinkPart[][] {
+  const text = spans.map(s => s.link ? ' '.repeat(s.text.length) : s.text).join('')
+  const links = findLinks(text)
+  let offset = 0
+  let first = 0
+  return spans.map(span => {
+    const start = offset
+    const end = offset += span.text.length
+    while (first < links.length && links[first].end <= start) first++
+    const parts: LinkPart[] = []
+    let at = start
+    for (let i = first; i < links.length && links[i].start < end; i++) {
+      const link = links[i]
+      const left = Math.max(start, link.start)
+      const right = Math.min(end, link.end)
+      if (left > at) parts.push({ text: span.text.slice(at - start, left - start) })
+      parts.push({ text: span.text.slice(left - start, right - start), href: link.href })
+      at = right
+    }
+    if (at < end) parts.push({ text: span.text.slice(at - start) })
+    return parts.length ? parts : [{ text: span.text }]
+  })
 }
 
 const TLDS = [
