@@ -33,7 +33,7 @@ import type { ScriptDef, SessionEvent } from '../../shared/types'
 import luaWasmUrl from 'wasmoon/dist/glue.wasm?url'
 import { saveFields, restoreFields } from '../../shared/copyover'
 const SESSION_STATE = ['name', 'host', 'port', 'profileId', 'charName', 'charNameFromGmcp',
-  'lines', 'openSpans', 'status', 'serverEchoes', 'mccp', 'gmcp', 'msdp', 'mxp', 'msp',
+  'lines', 'openSpans', 'promptDone', 'status', 'serverEchoes', 'mccp', 'gmcp', 'msdp', 'mxp', 'msp',
   'lastMssp', 'msdpRoom', 'showCaptures', 'history', 'showMap', 'nextLineId', 'automationReady', 'draft']
 
 export interface Line {
@@ -51,6 +51,12 @@ const PASTE_CONFIRM_LINES = 200
 /** Ceiling on an unterminated line before it is forced closed. */
 const MAX_OPEN_SPANS = 256
 const MAX_OPEN_CHARS = 8192
+/**
+ * How a partial line must end to count as a prompt when all the server gave
+ * was a pause after it (no GA/EOR): with the marker prompts close on. A pause
+ * after prose ("Saving....") is a slow server, and the line is left whole.
+ */
+const PROMPT_END = /[>\]):?]\s*$/
 
 function scrollbackCap(): number {
   const raw = settingsManager.globalOptions.scrollbackLines
@@ -132,6 +138,15 @@ export class SessionStore {
   lines: Line[] = []
   /** Spans of the current unfinished line (usually the prompt). */
   openSpans: Span[] = []
+  /**
+   * The open line is a finished prompt, so the next server text starts a new
+   * line. Merc-family MUDs send a command's reply with no line break, and
+   * when another prompt went out while the command waited, the reply lands
+   * on that prompt; split there, triggers anchored with ^ and capture
+   * windows see the reply alone. The player's own echo still joins the
+   * prompt line, cMUD-style.
+   */
+  private promptDone = false
   version = 0
 
   status: SessionStatus = 'connecting'
@@ -694,6 +709,13 @@ export class SessionStore {
         break
       case 'prompt':
         // GA/EOR marks end-of-prompt; leave openSpans as the visible prompt.
+        // An inferred one (a pause, no GA/EOR) must also look like a prompt.
+        if (
+          this.openSpans.length > 0 &&
+          (!event.inferred || PROMPT_END.test(this.openSpans.map((s) => s.text).join('')))
+        ) {
+          this.promptDone = true
+        }
         this.notify()
         break
       case 'echo':
@@ -1084,6 +1106,7 @@ export class SessionStore {
       if (token.kind === 'newline') {
         this.completeLine()
       } else {
+        if (this.promptDone) this.completeLine()
         this.openSpans.push(token.span)
         // A line that never ends (a broken server, or a huge unterminated
         // dump) would otherwise grow without bound; break it here.
@@ -1152,6 +1175,7 @@ export class SessionStore {
   private completeLine(): void {
     let spans = this.openSpans
     this.openSpans = []
+    this.promptDone = false
     const plain = spans.map((s) => s.text).join('')
     // MSP sound triggers are protocol, not prose: play and swallow.
     if (this.msp) {
@@ -1199,6 +1223,7 @@ export class SessionStore {
     const spans = [...this.openSpans, { text, style: { color: '#ffd68a' } }]
     this.pushLine({ id: this.nextLineId++, spans, kind: 'input' })
     this.openSpans = []
+    this.promptDone = false
     if (this.logging) this.logLine(spans.map((s) => s.text).join(''))
     this.notify()
   }

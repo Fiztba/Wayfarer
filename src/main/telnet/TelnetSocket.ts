@@ -71,6 +71,16 @@ const SB_MAX = 64 * 1024
 /** How long a connect (including the TLS handshake) may take before it is
  *  reported instead of hanging on the OS's much longer default. */
 const CONNECT_TIMEOUT_MS = 20_000
+/**
+ * A partial line followed by this much silence was probably a prompt, on a
+ * server that never marks prompts with GA/EOR. Merc-family MUDs answer a
+ * command with no leading line break, so when a fresh prompt went out while
+ * the command waited its turn, the reply lands glued onto that prompt — at
+ * least one pulse (250 ms) later. The pieces of one burst arrive
+ * milliseconds apart. Timed here, in the keeper, so a busy renderer cannot
+ * stretch the gap and an update's backlog replays it intact.
+ */
+const PROMPT_PAUSE_MS = 150
 
 export type Encoding = 'utf8' | 'latin1'
 
@@ -89,8 +99,12 @@ export interface TelnetEvents {
   error: [message: string]
   /** Decoded in-band text from the server. */
   text: [data: string]
-  /** Server sent GA or EOR — the current partial line is a prompt. */
-  prompt: []
+  /**
+   * Server sent GA or EOR — the current partial line is a prompt. Inferred:
+   * the server never marks prompts, but its partial line sat quiet for
+   * PROMPT_PAUSE_MS before more text came (sent just ahead of that text).
+   */
+  prompt: [inferred?: boolean]
   /** true = server is echoing (client should mask input, e.g. passwords). */
   echo: [serverEchoes: boolean]
   gmcp: [pkg: string, data: unknown]
@@ -114,6 +128,10 @@ export class TelnetSocket extends EventEmitter<TelnetEvents> {
   private sbOption = 0
   private sbBuf: number[] = []
   private textBuf: number[] = []
+  /** The server marks its own prompts (GA/EOR), so none are inferred. */
+  private marksPrompts = false
+  /** When text last left a line unfinished; null once a line ends. */
+  private openLineAt: number | null = null
 
   /** Options the remote end has active (they sent WILL, we sent DO). */
   private remoteOpts = new Set<number>()
@@ -265,7 +283,15 @@ export class TelnetSocket extends EventEmitter<TelnetEvents> {
     if (this.textBuf.length === 0) return
     const text = this.decoder.write(Buffer.from(this.textBuf))
     this.textBuf = []
-    if (text.length > 0) this.emit('text', text)
+    if (text.length === 0) return
+    const now = performance.now()
+    const startsLine = text[0] === '\n' || text[0] === '\r'
+    if (this.openLineAt !== null && !this.marksPrompts && !startsLine && now - this.openLineAt >= PROMPT_PAUSE_MS) {
+      this.emit('prompt', true)
+    }
+    const last = text[text.length - 1]
+    this.openLineAt = last === '\n' || last === '\r' ? null : now
+    this.emit('text', text)
   }
 
   private appendSubBytes(...bytes: number[]): void {
@@ -295,6 +321,7 @@ export class TelnetSocket extends EventEmitter<TelnetEvents> {
             this.textBuf.push(IAC)
             this.state = ST_DATA
           } else if (b === GA || b === EOR_CMD) {
+            this.marksPrompts = true
             this.flushText()
             this.emit('prompt')
             this.state = ST_DATA

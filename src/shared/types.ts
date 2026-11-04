@@ -234,7 +234,8 @@ export type SessionEvent =
   | { type: 'disconnected'; hadError: boolean }
   | { type: 'error'; message: string }
   | { type: 'text'; data: string }
-  | { type: 'prompt' }
+  /** The open line is a prompt. Inferred: no GA/EOR, just a pause after it. */
+  | { type: 'prompt'; inferred?: boolean }
   | { type: 'echo'; serverEchoes: boolean }
   | { type: 'gmcp'; package: string; data: unknown }
   | { type: 'mssp'; data: Record<string, string> }

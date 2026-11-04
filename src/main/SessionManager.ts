@@ -84,7 +84,7 @@ export class SessionManager {
     })
     telnet.on('error', (message) => emit({ type: 'error', message }))
     telnet.on('text', (data) => emit({ type: 'text', data }))
-    telnet.on('prompt', () => emit({ type: 'prompt' }))
+    telnet.on('prompt', (inferred) => emit(inferred ? { type: 'prompt', inferred } : { type: 'prompt' }))
     telnet.on('echo', (serverEchoes) => emit({ type: 'echo', serverEchoes }))
     telnet.on('gmcp', (pkg, data) => emit({ type: 'gmcp', package: pkg, data }))
     telnet.on('mssp', (data) => emit({ type: 'mssp', data }))

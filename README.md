@@ -131,7 +131,8 @@ From Phase 1:
 
 - **Full telnet engine** — option negotiation with loop protection, TTYPE/MTTS
   cycling (reports 256-color + truecolor + UTF-8), NAWS window sizing, CHARSET,
-  EOR/GA prompt marking, ECHO-driven password masking
+  EOR/GA prompt marking (inferred from a pause on MUDs that send neither, so a
+  reply never glues onto the prompt), ECHO-driven password masking
 - **MCCP2** compression (zlib), verified against Aardwolf
 - **GMCP** negotiation with Core.Hello/Core.Supports.Set, plus **MSSP** and
   basic **MSDP** parsing
