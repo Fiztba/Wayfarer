@@ -365,7 +365,7 @@ export const HELP_TOPICS: HelpTopic[] = [
     title: 'Chat Capture',
     blocks: [
       {
-        p: 'A capture window collects specific lines — tells, group chat, channels — into a tabbed pane below the output, so conversation never drowns in combat spam.'
+        p: 'A capture window collects specific lines — tells, group chat, channels — into a tabbed pane above the output, so conversation never drowns in combat spam.'
       },
       {
         list: [

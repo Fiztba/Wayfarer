@@ -369,6 +369,8 @@ body,
 
 /* ---- Split scrollback: history above, live tail below ---- */
 .output-split {
+  /* Anchors the search bar to the scrollback, clear of the capture pane. */
+  position: relative;
   flex: 1;
   min-height: 0;
   display: flex;
@@ -1612,7 +1614,7 @@ input.map-exit-command:focus {
   height: 190px;
   display: flex;
   flex-direction: column;
-  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
   background: var(--bg);
 }
 

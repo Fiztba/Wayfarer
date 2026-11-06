@@ -640,6 +640,7 @@ export function SessionView({
       <div className="session-main">
         <div className="session-terminal">
           <GaugeBar store={store} />
+          {store.showCaptures && <CapturePane store={store} onLink={handleMxpLink} />}
           <div className="output-split" ref={splitRef}>
             <div className="output" ref={scrollRef} onScroll={onScroll}>
               <span ref={measureRef} className="measure" aria-hidden>
@@ -689,6 +690,38 @@ export function SessionView({
                   {openPrompt}
                 </div>
               </>
+            )}
+            {searchOpen && (
+              <div className="search-bar">
+                <input
+                  ref={searchInputRef}
+                  className="search-input"
+                  placeholder="Search scrollback…"
+                  value={query}
+                  onChange={(e) => setQuery(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Escape') {
+                      e.preventDefault()
+                      closeSearch()
+                    } else if (e.key === 'Enter') {
+                      e.preventDefault()
+                      navigateSearch(e.shiftKey ? 1 : -1)
+                    }
+                  }}
+                />
+                <span className="search-count">
+                  {matches.length > 0 ? `${matchIdx + 1}/${matches.length}` : query ? '0' : ''}
+                </span>
+                <button className="map-btn" title="Older match (Enter)" onClick={() => navigateSearch(-1)}>
+                  ↑
+                </button>
+                <button className="map-btn" title="Newer match (Shift+Enter)" onClick={() => navigateSearch(1)}>
+                  ↓
+                </button>
+                <button className="map-btn" title="Close (Esc)" onClick={closeSearch}>
+                  ✕
+                </button>
+              </div>
             )}
           </div>
           {linkMenu && (
@@ -740,39 +773,6 @@ export function SessionView({
               </div>
             </ClampedMenu>
           )}
-          {searchOpen && (
-            <div className="search-bar">
-              <input
-                ref={searchInputRef}
-                className="search-input"
-                placeholder="Search scrollback…"
-                value={query}
-                onChange={(e) => setQuery(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Escape') {
-                    e.preventDefault()
-                    closeSearch()
-                  } else if (e.key === 'Enter') {
-                    e.preventDefault()
-                    navigateSearch(e.shiftKey ? 1 : -1)
-                  }
-                }}
-              />
-              <span className="search-count">
-                {matches.length > 0 ? `${matchIdx + 1}/${matches.length}` : query ? '0' : ''}
-              </span>
-              <button className="map-btn" title="Older match (Enter)" onClick={() => navigateSearch(-1)}>
-                ↑
-              </button>
-              <button className="map-btn" title="Newer match (Shift+Enter)" onClick={() => navigateSearch(1)}>
-                ↓
-              </button>
-              <button className="map-btn" title="Close (Esc)" onClick={closeSearch}>
-                ✕
-              </button>
-            </div>
-          )}
-          {store.showCaptures && <CapturePane store={store} onLink={handleMxpLink} />}
         </div>
         {store.showMap && (
           <>
