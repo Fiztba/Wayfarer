@@ -159,6 +159,24 @@ const waitFor = async (test) => {
   await waitFor(() => serverInput.includes('say pong\r\n'))
   console.log('ok a world stays in one window, and settings saved in one window reach the others')
 
+  // A different world (its own profile, so its own map) connected from the
+  // detached window lives there from its very first line.
+  const otherWorld = await call(`window.mud.profiles.save({ name: 'Second World', host: '127.0.0.1', port: ${port}, tls: false, encoding: 'utf8' })`)
+  const inDetached = (code) => detached.webContents.executeJavaScript(code)
+  await inDetached(`document.querySelector('.tab-new').click()`)
+  await waitFor(() => inDetached(`Array.from(document.querySelectorAll('.profile-card')).some(c => c.textContent.includes('Second World'))`))
+  await inDetached(`Array.from(document.querySelectorAll('.profile-card')).find(c => c.textContent.includes('Second World')).click()`)
+  await waitFor(() => sockets.size === 2)
+  const secondMud = [...sockets].find((s) => s !== mud)
+  secondMud.write('Second world says hello.\r\n')
+  await waitFor(() => inDetached(`document.body.textContent.includes('Second world says hello.')`))
+  assert.equal(await call(`document.body.textContent.includes('Second world says hello.')`), false)
+  assert.ok(await inDetached(`document.body.textContent.includes('Connected to 127.0.0.1')`), 'its first events reached the window that connected it')
+  await inDetached(`document.querySelector('.tab-active .tab-close').click()`)
+  await waitFor(() => sockets.size === 1)
+  await call(`window.mud.profiles.remove(${JSON.stringify(otherWorld.id)})`)
+  console.log('ok a new world connected from a detached window lives in that window')
+
   detached.close()
   await waitFor(() => BrowserWindow.getAllWindows().length === 1)
   await waitFor(() => textIn(main, 'This line arrives after the move.'))
