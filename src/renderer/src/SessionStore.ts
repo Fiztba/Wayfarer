@@ -25,6 +25,7 @@ import {
   DIR_FULL,
   wordToDirection,
   type Direction,
+  type MapRoom,
   type MudMap,
   type PopoutBounds,
   type ServerRoomInfo
@@ -485,6 +486,73 @@ export class SessionStore {
     return `Tidied ${moved} rooms: ${say(r.before)} → ${say(r.after)}. #map untidy puts them back.`
   }
 
+  /**
+   * #zone set / fill / undo: sort rooms into zones by text, for a map that
+   * grew up in one zone. "set" moves the room you stand in, "fill" floods
+   * out from it through rooms of the same zone; "@ <room>" aims either at
+   * every room with that name (or that id) instead.
+   */
+  private zoneCommand(op: string, rest: string): void {
+    const model = this.mapModel!
+    const tracker = this.tracker!
+    if (op === 'undo') {
+      const n = model.undoZoneMove()
+      this.addSystemLine(n === null ? 'No zone move to undo.' : `Put ${n} rooms back in their old zones.`, n === null ? 'error' : 'system')
+      return
+    }
+    const [zoneName, target] = rest.split(/\s+@\s+/, 2).map((s) => s.trim())
+    if (!zoneName) {
+      this.addSystemLine(`Usage: #zone ${op} <zone name> [@ <room name>]. Without @ it starts from the room you are in.`, 'system')
+      return
+    }
+    let starts: MapRoom[]
+    if (target) {
+      const wanted = target.toLowerCase()
+      const rooms = Object.values(model.map.rooms)
+      starts = rooms.filter((r) => r.id === target)
+      if (starts.length === 0) starts = rooms.filter((r) => r.name.toLowerCase() === wanted)
+      if (starts.length === 0) {
+        this.addSystemLine(`No room called "${target}" on the map.`, 'error')
+        return
+      }
+    } else {
+      const here = tracker.lost ? null : tracker.currentRoom
+      if (!here) {
+        this.addSystemLine('Position unknown: stand somewhere the map knows, or aim with @ <room name>.', 'error')
+        return
+      }
+      starts = [here]
+    }
+    const zoneId = model.createZone(zoneName)
+    const zone = model.map.zones.find((z) => z.id === zoneId)!.name
+    const ids = starts.map((r) => r.id)
+    const named = target && starts.length > 1 ? ` (${starts.length} rooms are called "${starts[0].name}")` : ''
+    if (op === 'set') {
+      const moved = model.moveRoomsToZone(ids, zoneId)
+      this.addSystemLine(
+        moved === 0
+          ? `Already in ${zone}${named}.`
+          : `Moved ${moved} room${moved === 1 ? '' : 's'} to ${zone}${named}. #zone undo puts ${moved === 1 ? 'it' : 'them'} back.`,
+        'system'
+      )
+    } else {
+      const { moved, stoppedAt } = model.fillZone(ids, zoneId)
+      const walls = stoppedAt.map((id) => model.map.zones.find((z) => z.id === id)?.name).filter(Boolean)
+      this.addSystemLine(
+        `Filled ${zone}: moved ${moved} room${moved === 1 ? '' : 's'}${named}.` +
+          (walls.length > 0 ? ` Stopped at rooms in ${walls.join(', ')}.` : '') +
+          (moved > 0 ? ' #zone undo puts them back.' : ''),
+        'system'
+      )
+    }
+    // Standing in the zone: show it, and keep new rooms here in it.
+    if (!target && tracker.currentRoom?.zoneId === zoneId) {
+      model.setActiveZone(zoneId)
+      model.setPendingZone(zoneId)
+    }
+    this.notify()
+  }
+
   /** Returns true if the input was a mapper command (consumed). */
   private tryMapperCommand(raw: string): boolean {
     const m = /^#(map|go!?|wp|waypoint|zone|lost)(?:\s+(.*))?$/i.exec(raw.trim())
@@ -492,23 +560,31 @@ export class SessionStore {
     const verb = m[1].toLowerCase()
     const arg = (m[2] ?? '').trim()
 
-    if (verb === 'map' && /^(tidy!?|untidy)$/i.test(arg)) {
+    const tidy = /^(tidy!?|untidy)(?:\s+(.+))?$/i.exec(arg)
+    if (verb === 'map' && tidy) {
       if (!this.mapModel || !this.tracker) {
         this.addSystemLine('Map still loading — try again in a moment.', 'error')
         return true
       }
-      if (arg.toLowerCase() === 'untidy') {
+      if (tidy[1].toLowerCase() === 'untidy') {
         const n = this.mapModel.undoTidy()
         this.addSystemLine(n === null ? 'No tidy to undo.' : `Put ${n} rooms back where they were.`, n === null ? 'error' : 'system')
         return true
       }
       const current = this.tracker.currentRoom
-      const zoneId = current?.zoneId ?? this.mapModel.activeZoneId
+      // "#map tidy Town of Knat" tidies a zone by name, wherever you stand.
+      const named = tidy[2] ? this.mapModel.zoneByName(tidy[2]) : null
+      if (tidy[2] && !named) {
+        this.addSystemLine(`No zone called "${tidy[2].trim()}". #zone list shows them.`, 'error')
+        return true
+      }
+      const zoneId = named?.id ?? current?.zoneId ?? this.mapModel.activeZoneId
       if (!zoneId) {
         this.addSystemLine('No zone to tidy — stand in one, or pick it on the map.', 'error')
         return true
       }
-      const result = this.mapModel.tidyZone(zoneId, current?.id, arg.endsWith('!'))
+      const anchor = current && current.zoneId === zoneId ? current.id : null
+      const result = this.mapModel.tidyZone(zoneId, anchor, tidy[1].endsWith('!'))
       this.addSystemLine(this.describeTidy(result), result.applied ? 'system' : 'error')
       return true
     }
@@ -606,11 +682,19 @@ export class SessionStore {
       return true
     }
     if (verb === 'zone') {
+      const op = /^(set|fill|undo)(?:\s+(.*))?$/i.exec(arg)
+      if (op) {
+        this.zoneCommand(op[1].toLowerCase(), (op[2] ?? '').trim())
+        return true
+      }
       if (!arg || arg.toLowerCase() === 'list') {
         const names = this.mapModel.map.zones
           .map((z) => (z.id === this.mapModel!.activeZoneId ? `[${z.name}]` : z.name))
           .join(', ')
-        this.addSystemLine(`Zones: ${names}  ·  #zone <name> switches/creates.`, 'system')
+        this.addSystemLine(
+          `Zones: ${names}  ·  #zone <name> switches/creates · #zone set|fill <name> [@ <room>] sorts rooms · #zone undo`,
+          'system'
+        )
       } else {
         const id = this.mapModel.createZone(arg)
         this.mapModel.setActiveZone(id)

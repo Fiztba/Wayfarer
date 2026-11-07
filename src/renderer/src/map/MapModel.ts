@@ -72,6 +72,8 @@ export class MapModel {
    * which new rooms inherit the zone of the room they were entered from.
    */
   pendingZoneId: string | null = null
+  /** Each room's zone before the last zone move or fill, for #zone undo. */
+  private lastZoneMove: Record<string, string> | null = null
 
   private saver: (map: MudMap) => void
   private saveTimer: ReturnType<typeof setTimeout> | null = null
@@ -172,16 +174,72 @@ export class MapModel {
   /** Reassign rooms to a zone; coordinates and links are untouched. */
   moveRoomsToZone(roomIds: string[], zoneId: string): number {
     if (!this.map.zones.some((z) => z.id === zoneId)) return 0
-    let moved = 0
+    const before: Record<string, string> = {}
     for (const id of roomIds) {
       const room = this.map.rooms[id]
-      if (room && room.zoneId !== zoneId) {
+      if (room && room.zoneId !== zoneId && !(id in before)) {
+        before[id] = room.zoneId
         room.zoneId = zoneId
-        moved++
       }
     }
-    if (moved > 0) this.touch()
+    const moved = Object.keys(before).length
+    if (moved > 0) {
+      this.lastZoneMove = before
+      this.touch()
+    }
     return moved
+  }
+
+  /**
+   * Paint-bucket a zone: the start rooms and every room reachable from them
+   * through rooms still in a start room's zone (or already in the target)
+   * move to `zoneId`. Rooms in any other zone are walls, so marking an
+   * area's border rooms first keeps the fill inside it. Returns the rooms
+   * moved and the zones the fill stopped at.
+   */
+  fillZone(startIds: string[], zoneId: string): { moved: number; stoppedAt: string[] } {
+    const starts = startIds.map((id) => this.map.rooms[id]).filter((r): r is MapRoom => !!r)
+    const passable = new Set([zoneId, ...starts.map((r) => r.zoneId)])
+    const seen = new Set(starts.map((r) => r.id))
+    const queue = [...seen]
+    const stoppedAt = new Set<string>()
+    while (queue.length > 0) {
+      const room = this.map.rooms[queue.shift()!]
+      for (const exit of room.exits) {
+        const next = exit.to ? this.map.rooms[exit.to] : undefined
+        if (!next || seen.has(next.id)) continue
+        if (!passable.has(next.zoneId)) {
+          stoppedAt.add(next.zoneId)
+          continue
+        }
+        seen.add(next.id)
+        queue.push(next.id)
+      }
+    }
+    return { moved: this.moveRoomsToZone([...seen], zoneId), stoppedAt: [...stoppedAt] }
+  }
+
+  /** Put back the rooms the last zone move (or fill) reassigned. */
+  undoZoneMove(): number | null {
+    const before = this.lastZoneMove
+    if (!before) return null
+    this.lastZoneMove = null
+    let restored = 0
+    for (const [id, zoneId] of Object.entries(before)) {
+      const room = this.map.rooms[id]
+      if (room && this.map.zones.some((z) => z.id === zoneId)) {
+        room.zoneId = zoneId
+        restored++
+      }
+    }
+    if (restored > 0) this.touch()
+    return restored
+  }
+
+  /** The zone with this name, ignoring case. */
+  zoneByName(name: string): { id: string; name: string } | null {
+    const wanted = name.trim().toLowerCase()
+    return this.map.zones.find((z) => z.name.toLowerCase() === wanted) ?? null
   }
 
   setActiveZone(id: string): void {

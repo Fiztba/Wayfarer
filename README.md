@@ -81,7 +81,10 @@ From the Mapper stage:
   explicit. `#go <waypoint>` / `#go!` start directly with the same routing
   preferences; `#stop` cancels.
 - **Waypoints & zones** — `#wp add/del/list`, `#zone <name>` active-zone
-  mapping with auto-zones from server area names, whole-zone delete
+  mapping with auto-zones from server area names, whole-zone delete;
+  `#zone set` / `#zone fill` (a paint bucket bounded by other zones) /
+  `#zone undo` sort an existing map by text, and `#map tidy <zone>` lays
+  any zone out by name
 - **Full editing** — drag rooms, rename/color/notes, delete, merge duplicates,
   link stubs, add rooms/exits by hand
 - **Docked pane + pop-out window** — resizable in-session pane, plus a

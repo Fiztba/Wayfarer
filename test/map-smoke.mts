@@ -691,6 +691,44 @@ function makeWorld() {
   check('zones: links survive the move', moved.exits.length > 0, true)
 }
 
+// ---- #zone fill: a paint bucket inside one zone, walls at others; #zone undo ----
+{
+  const model = new MapModel(null, () => {})
+  const unsorted = model.activeZoneId
+  const mk = (name: string, x: number) => model.createRoom({ name, zoneId: unsorted, x, y: 0, z: 0 })
+  const hub = mk('Hub', 0)
+  const yard = mk('Keep Yard', 1)
+  const gate = mk('Gate', 2)
+  const road = mk('Road', 3)
+  const town = mk('Town Square', 4)
+  model.linkRooms(hub.id, 'e', yard.id, true)
+  model.linkRooms(yard.id, 'e', gate.id, true)
+  model.linkRooms(gate.id, 'e', road.id, true)
+  model.linkRooms(road.id, 'e', town.id, true)
+
+  // Mark the border first (the road is the wilds), then fill from inside.
+  const wilds = model.createZone('Wilds')
+  check('fill: border room set', model.moveRoomsToZone([road.id], wilds), 1)
+  const keep = model.createZone('Keep')
+  const result = model.fillZone([hub.id], keep)
+  check('fill: moves the rooms up to the border', result.moved, 3)
+  check('fill: reports the zone it stopped at', result.stoppedAt, [wilds])
+  check('fill: border room untouched', model.room(road.id)?.zoneId, wilds)
+  check('fill: rooms past the border untouched', model.room(town.id)?.zoneId, unsorted)
+  check('fill: refill from inside is a no-op', model.fillZone([yard.id], keep).moved, 0)
+
+  // Undo restores the last move that did something: the fill.
+  check('fill: undo restores the fill', model.undoZoneMove(), 3)
+  check('fill: undone rooms back where they were', [hub, yard, gate].map((r) => model.room(r.id)?.zoneId), [unsorted, unsorted, unsorted])
+  check('fill: only one undo', model.undoZoneMove(), null)
+
+  // Rooms already in the target zone don't stop a fill (resuming a sort).
+  model.moveRoomsToZone([yard.id], keep)
+  check('fill: passes through rooms already in the zone', model.fillZone([hub.id], keep).moved, 2)
+  check('fill: zoneByName ignores case', model.zoneByName('kEEp')?.id, keep)
+  check('fill: unknown zone name', model.zoneByName('Nowhere'), null)
+}
+
 // ---- position persists across sessions ----
 {
   const { model, tracker, seeRoom } = makeWorld()
