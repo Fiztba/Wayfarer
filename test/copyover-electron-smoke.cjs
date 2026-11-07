@@ -61,6 +61,9 @@ const text = value => new Promise((resolve, reject) => { compressed.write(value)
   // A tab in a window of its own comes back to the main window for the
   // update, carrying its draft, half-read escape and pending room with it.
   const sessionId = await client.js(`document.querySelector('.tab[data-session]').dataset.session`)
+  // Agent control turned on in the main window (#agent on), as after an
+  // update: quitting closes that window, and its cleanup must not throw.
+  await client.js(`window.mud.agent.enable(${JSON.stringify(sessionId)}, { name: 'Copyover Test', character: null })`)
   assert.deepEqual(await client.js(`window.mud.windows.move(${JSON.stringify(sessionId)}, 'new')`), { ok: true })
   assert.equal(await client.js(`!!document.querySelector('.command-input')`), false, 'the tab left the main window')
   await client.update()

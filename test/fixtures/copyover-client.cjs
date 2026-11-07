@@ -16,8 +16,12 @@ Module._load = function(name, ...args) {
   }
   return load.call(this, name, ...args)
 }
+// An exception escaping a main-process handler would show the user an error
+// dialog; here it fails the test instead.
+process.on('uncaughtException', (error) => process.send?.({ failure: `uncaught: ${error?.stack ?? error}` }))
 const updater = require('electron-updater').autoUpdater
-updater.quitAndInstall = () => { setTimeout(() => app.exit(0), 30) }
+// Quit the way the real installer does (windows close, quit events run).
+updater.quitAndInstall = () => { setTimeout(() => app.quit(), 30) }
 process.on('message', async (message) => {
   try {
     const windows = BrowserWindow.getAllWindows().filter(w => !w.webContents.getURL().includes('#popout'))

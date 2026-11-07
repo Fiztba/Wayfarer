@@ -327,7 +327,15 @@ app.whenReady().then(async () => {
    *  Wayfarer in the background, so its window keeps the mapper and timers at speed. */
   const refreshThrottling = (): void => {
     const playing = new Set(agentOwners.values())
-    for (const win of sessionWindows?.all() ?? []) win.webContents.setBackgroundThrottling(!playing.has(win.webContents))
+    // It runs from a closing window's 'destroyed' event, when other windows
+    // may be closing too: one that can't take the setting is skipped.
+    for (const win of sessionWindows?.all() ?? []) {
+      try {
+        win.webContents.setBackgroundThrottling(!playing.has(win.webContents))
+      } catch (err) {
+        console.error(`[agent] throttling not updated: ${String(err)}`)
+      }
+    }
   }
   const watchedOwners = new WeakSet<Electron.WebContents>()
   ipcMain.handle('agent:enable', async (e, sessionId: string, info: AgentSessionInfo) => {
@@ -337,13 +345,19 @@ app.whenReady().then(async () => {
       watchedOwners.add(owner)
       // A reload or a crash takes that window's sessions with it: leave no
       // ghost sessions the agent could still name.
+      // An event handler: anything it throws would reach the user as a
+      // main-process error dialog, so it is fenced like the IPC handlers.
       const forget = (): void => {
-        for (const [id, wc] of [...agentOwners]) {
-          if (wc !== owner) continue
-          agentOwners.delete(id)
-          void agent.disable(id)
+        try {
+          for (const [id, wc] of [...agentOwners]) {
+            if (wc !== owner) continue
+            agentOwners.delete(id)
+            void agent.disable(id).catch(() => {})
+          }
+          refreshThrottling()
+        } catch (err) {
+          console.error(`[agent] cleanup after a window closed failed: ${String(err)}`)
         }
-        refreshThrottling()
       }
       owner.on('did-navigate', forget)
       owner.on('render-process-gone', forget)

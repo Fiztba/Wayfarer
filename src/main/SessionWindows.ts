@@ -58,9 +58,11 @@ export class SessionWindows {
     for (const [id] of this.deps.sessions()) if (!this.owners.has(id)) this.owners.set(id, win)
   }
 
-  /** Session windows (not map pop-outs). */
+  /** Session windows (not map pop-outs). A window closing normally loses its
+   *  contents a moment before it counts as destroyed, and calling into those
+   *  contents throws, so such a window no longer counts either. */
   all(): BrowserWindow[] {
-    return [...this.windows.values()].filter((w) => !w.isDestroyed())
+    return [...this.windows.values()].filter((w) => !w.isDestroyed() && !w.webContents.isDestroyed())
   }
 
   // ---- routing ------------------------------------------------------------
