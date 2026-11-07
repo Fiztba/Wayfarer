@@ -24,12 +24,13 @@ Module._load = function (name, ...args) {
 let quitRequests = 0
 app.quit = () => { quitRequests++ }
 const sockets = new Set()
+let serverInput = ''
 const server = net.createServer((socket) => {
   sockets.add(socket)
   socket.on('close', () => sockets.delete(socket))
-  socket.on('data', () => {})
+  socket.on('data', (data) => { serverInput += data.toString('latin1') })
 })
-const deadline = setTimeout(() => { console.error('main lifecycle timed out'); app.exit(1) }, 30000)
+const deadline = setTimeout(() => { console.error('main lifecycle timed out'); app.exit(1) }, 40000)
 const waitFor = async (test) => {
   const until = Date.now() + 5000
   while (!await test()) {
@@ -117,6 +118,62 @@ const waitFor = async (test) => {
   await waitFor(() => sockets.size === 0 && BrowserWindow.getAllWindows().length === 1)
   assert.equal(fs.existsSync(agentJson), false, 'disconnecting turns agent control off')
   console.log('ok closing a session closes its TCP socket, map window and agent control')
+
+  // ---- A session tab moves to a window of its own and back, through the
+  // real UI, keeper and sockets.
+  const port = server.address().port
+  const profile = await call(`window.mud.profiles.save({ name: 'Local MUD', host: '127.0.0.1', port: ${port}, tls: false, encoding: 'utf8' })`)
+  main.webContents.reload()
+  await waitFor(() => !main.webContents.isLoading())
+  await waitFor(() => call(`!!document.querySelector('.profile-card')`))
+  await call(`document.querySelector('.profile-card').click()`)
+  await waitFor(() => sockets.size === 1)
+  const mud = [...sockets][0]
+  const textIn = (win, text) => win.webContents.executeJavaScript(`!!document.querySelector('.output')?.textContent.includes(${JSON.stringify(text)})`)
+  mud.write('Welcome to the test MUD.\r\n')
+  await waitFor(() => textIn(main, 'Welcome to the test MUD.'))
+  const sessionId = await call(`document.querySelector('.tab[data-session]').dataset.session`)
+  assert.deepEqual(await call(`window.mud.windows.move(${JSON.stringify(sessionId)}, 'new')`), { ok: true })
+  assert.equal(BrowserWindow.getAllWindows().length, 2)
+  const detached = BrowserWindow.getAllWindows().find((w) => w !== main)
+  await waitFor(() => textIn(detached, 'Welcome to the test MUD.'))
+  assert.equal(await call(`!!document.querySelector('.output')`), false, 'the main window let go of the session')
+  mud.write('This line arrives after the move.\r\n')
+  await waitFor(() => textIn(detached, 'This line arrives after the move.'))
+  await detached.webContents.executeJavaScript(`{ const el = document.querySelector('.command-input');
+    Object.getOwnPropertyDescriptor(Object.getPrototypeOf(el), 'value').set.call(el, 'look');
+    el.dispatchEvent(new Event('input', { bubbles: true }));
+    setTimeout(() => el.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })), 30) }`)
+  await waitFor(() => serverInput.includes('look\r\n'))
+  console.log('ok a tab moves to a new window with its scrollback; output and typing follow it')
+
+  await call(`document.querySelector('.profile-card').click()`)
+  await waitFor(() => call(`document.body.textContent.includes('already open in another window')`))
+  assert.equal(sockets.size, 1, 'a world open in one window is not opened in another')
+  const settings = await call('window.mud.settings.get(null)')
+  settings.triggers.push({ id: 'ping', label: 'Ping', pattern: 'ping from the server', matchType: 'substring',
+    caseInsensitive: false, commands: 'say pong', gag: false, highlight: '', enabled: true })
+  await call(`window.mud.settings.save(null, ${JSON.stringify(settings)})`)
+  await new Promise((r) => setTimeout(r, 100))
+  mud.write('ping from the server\r\n')
+  await waitFor(() => serverInput.includes('say pong\r\n'))
+  console.log('ok a world stays in one window, and settings saved in one window reach the others')
+
+  detached.close()
+  await waitFor(() => BrowserWindow.getAllWindows().length === 1)
+  await waitFor(() => textIn(main, 'This line arrives after the move.'))
+  mud.write('Home again.\r\n')
+  await waitFor(() => textIn(main, 'Home again.'))
+  assert.equal(sockets.size, 1, 'closing the window kept the connection')
+  console.log('ok closing a detached window brings its sessions back to the main window, still connected')
+
+  assert.deepEqual(await call(`window.mud.windows.move(${JSON.stringify(sessionId)}, 'new')`), { ok: true })
+  const second = BrowserWindow.getAllWindows().find((w) => w !== main)
+  await waitFor(() => textIn(second, 'Home again.'))
+  await second.webContents.executeJavaScript(`document.querySelector('.tab-close').click()`)
+  await waitFor(() => sockets.size === 0 && BrowserWindow.getAllWindows().length === 1)
+  await call(`window.mud.profiles.remove(${JSON.stringify(profile.id)})`)
+  console.log('ok closing the last tab in a detached window ends the session and closes the window')
   await call(`window.mud.map.popout('shutdown-test', 'Test')`)
   await waitFor(() => BrowserWindow.getAllWindows().length === 2)
   main.destroy()

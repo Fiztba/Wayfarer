@@ -58,6 +58,11 @@ const text = value => new Promise((resolve, reject) => { compressed.write(value)
   // Stop mid-room AND mid-ANSI escape. The resumed half must complete once.
   await text('Eastern Walkway\r\nThe walkway follows a stone wall.\r\n\x1b[3')
   await value('.command-input', 'unsent draft')
+  // A tab in a window of its own comes back to the main window for the
+  // update, carrying its draft, half-read escape and pending room with it.
+  const sessionId = await client.js(`document.querySelector('.tab[data-session]').dataset.session`)
+  assert.deepEqual(await client.js(`window.mud.windows.move(${JSON.stringify(sessionId)}, 'new')`), { ok: true })
+  assert.equal(await client.js(`!!document.querySelector('.command-input')`), false, 'the tab left the main window')
   await client.update()
   assert.equal(closes, 0)
   await text('6mExits: west east\x1b[0m\r\nping2\r\nBuffered café ✓\r\n')

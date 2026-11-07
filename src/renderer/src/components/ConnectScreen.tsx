@@ -61,7 +61,7 @@ export function ConnectScreen({ onConnect, onOpenHelp }: Props) {
         // Electron wraps IPC rejections as "Error invoking remote method
         // 'connect': Error: …"; the tail is the part worth reading.
         const msg = err instanceof Error ? err.message : String(err)
-        setConnectError(msg.replace(/^Error invoking remote method '\w+': (Error: )?/, ''))
+        setConnectError(msg.replace(/^Error invoking remote method '[\w:-]+': (Error: )?/, ''))
       } finally {
         connectingRef.current = false
         setConnecting(false)

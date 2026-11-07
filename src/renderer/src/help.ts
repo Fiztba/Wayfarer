@@ -95,7 +95,9 @@ export const HELP_TOPICS: HelpTopic[] = [
           'An empty Enter sends a blank line — many MUDs use this to repeat the prompt.',
           'Scrollback: each session keeps 100,000 lines of history by default (configurable up to 1,000,000 in ⚙ Settings → General). Scroll up to read and the pane splits: history scrolls above a divider while new output keeps arriving in a live tail below it, so nothing is missed. Drag the divider to resize the tail (remembered between sessions). Older history loads as you approach the top; scrolling back down to the end, or the ▼ Jump to bottom button on the divider, rejoins the panes.',
           'Search: Ctrl+F searches the entire scrollback (case-insensitive), starting from the most recent match. Enter steps to older matches, Shift+Enter to newer, Esc closes. Select text first and Ctrl+F searches for it.',
-          'Tabs: drag a session tab left or right to reorder it (a bar shows where it will land), or press Ctrl+Shift+PgUp / PgDn to move the active tab.'
+          'Tabs: drag a session tab left or right to reorder it (a bar shows where it will land), or press Ctrl+Shift+PgUp / PgDn to move the active tab.',
+          'Windows: drag a tab out of the tab strip to give it a window of its own, or drop it on another Wayfarer window to move it there. Right-click a tab for the same moves. The session stays connected and brings its scrollback, map and log with it. Closing a window sends its tabs back to the main window; closing the main window quits Wayfarer.',
+          "A world's tabs share one map, so they stay in one window together. To show two characters on the same MUD side by side, give each its own world profile. After an update, every tab comes back in the main window."
         ]
       },
       { h: 'Special prefixes' },

@@ -144,6 +144,10 @@ From Phase 1:
   truecolor, bold/italic/underline/inverse/strikethrough
 - **Multi-session tabs**, scrollback with auto-scroll pinning, input history,
   `;` command stacking, select-on-send
+- **Session windows** — drag a tab out (or right-click it) to move it to a
+  window of its own, Chrome-style, and drag it onto another window to move it
+  there; the connection, scrollback, map and log go with it, and closing a
+  window docks its tabs back in the main window
 - **Corruption-proof profiles** — one JSON file each, atomic writes
   (temp + fsync + rename), 25 timestamped backups per profile, quarantine
   instead of silent deletion for unreadable files

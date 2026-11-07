@@ -10,6 +10,7 @@ import { MudDirectory } from './MudDirectory'
 import { SettingsStore } from './SettingsStore'
 import { LogWriter } from './LogWriter'
 import { AgentBridge } from './AgentBridge'
+import { SessionWindows, type WindowResult } from './SessionWindows'
 import type { AgentLine, AgentSendResult, AgentSessionInfo } from '../shared/agent'
 import { MapStore } from './MapStore'
 import { WorldLibrary } from './WorldLibrary'
@@ -47,12 +48,17 @@ protocol.registerSchemesAsPrivileged([
   { scheme: 'msp-sound', privileges: { stream: true } }
 ])
 
+/** Which window shows which session; set up once the app is ready. */
+let sessionWindows: SessionWindows | null = null
 const keeperRoot = app.isPackaged
   ? path.join(process.resourcesPath, 'app.asar.unpacked/out/keeper') : path.join(__dirname, '../keeper')
 const sessions = new KeeperClient(app.getPath('userData'),
   path.join(keeperRoot, process.platform === 'win32' ? 'WayfarerConnection.exe' : 'wayfarer-connection'),
   path.join(keeperRoot, 'keeper.cjs'), app.getVersion(),
-  (id, event) => mainWindow?.webContents.send('session:event', id, event))
+  (id, event) => {
+    if (sessionWindows) sessionWindows.deliver(id, event)
+    else mainWindow?.webContents.send('session:event', id, event)
+  })
 let profiles: ProfileStore
 
 // Windows toasts are delivered by AppUserModelID, and Electron's runtime
@@ -105,6 +111,7 @@ function createWindow(): void {
     title: 'Wayfarer',
     webPreferences: rendererPreferences()
   })
+  sessionWindows?.registerMain(mainWindow)
 
   mainWindow.on('closed', () => {
     mainWindow = null
@@ -120,6 +127,23 @@ function createWindow(): void {
   } else {
     mainWindow.loadFile(path.join(__dirname, '../renderer/index.html'))
   }
+}
+
+/** A window a session was moved to. Same client; it starts out waiting for the session. */
+function createSessionWindow(bounds: Electron.Rectangle): BrowserWindow {
+  const win = new BrowserWindow({
+    ...bounds,
+    minWidth: 640,
+    minHeight: 400,
+    backgroundColor: '#0d1117',
+    autoHideMenuBar: true,
+    title: 'Wayfarer',
+    webPreferences: rendererPreferences()
+  })
+  guardNavigation(win)
+  if (process.env.ELECTRON_RENDERER_URL) win.loadURL(process.env.ELECTRON_RENDERER_URL + '?detached=1')
+  else win.loadFile(path.join(__dirname, '../renderer/index.html'), { query: { detached: '1' } })
+  return win
 }
 
 app.whenReady().then(async () => {
@@ -174,7 +198,7 @@ app.whenReady().then(async () => {
         if (result.downloadPromise) {
           await result.downloadPromise
           updateReady = result.updateInfo.version
-          mainWindow?.webContents.send('app:update-ready', updateReady)
+          sessionWindows?.broadcast('app:update-ready', [updateReady])
           return `Version ${updateReady} is ready to install.`
         }
         return `You are up to date (v${app.getVersion()}).`
@@ -191,7 +215,9 @@ app.whenReady().then(async () => {
   ipcMain.handle('copyover:prepared', (event, result) => {
     if (event.sender === mainWindow?.webContents) prepared?.(result)
   })
-  ipcMain.handle('copyover:restore', () => sessions.restore())
+  // After an update every session comes back in the main window; a detached
+  // window opening later must not take the saved bundle.
+  ipcMain.handle('copyover:restore', (e) => (e.sender === mainWindow?.webContents ? sessions.restore() : null))
   ipcMain.handle('copyover:resume', () => sessions.resume())
   ipcMain.handle('app:install-update', async () => {
     if (!updateReady) return false
@@ -199,6 +225,8 @@ app.whenReady().then(async () => {
     preparingUpdate = true
     try {
       if (sessions.count > 0) {
+        // Only the main window is restored after the update.
+        await sessionWindows?.dockAll()
         await sessions.pause()
         const result = await new Promise<{ snapshot?: unknown; error?: string }>((resolve, reject) => {
           const timeout = setTimeout(() => { prepared = null; reject(new Error('The client did not finish saving its sessions.')) }, 30_000)
@@ -228,7 +256,9 @@ app.whenReady().then(async () => {
     return true
   })
 
-  ipcMain.handle('session:connect', (_e, opts: ConnectOptions) => sessions.connect(opts))
+  ipcMain.handle('session:connect', (e, opts: ConnectOptions) =>
+    sessionWindows!.connect(e.sender, opts, () => sessions.connect(opts))
+  )
   // ipcMain.on handlers have nobody to reject to: a throw inside one is an
   // uncaught exception in the main process. Each fire-and-forget channel is
   // fenced so a bad write or a dead socket is a log line, not a crash.
@@ -246,6 +276,27 @@ app.whenReady().then(async () => {
     'session:resize',
     fenced('session:resize', (id: string, cols: number, rows: number) => sessions.resize(id, cols, rows))
   )
+
+  // ---- Session windows: tabs can move to windows of their own --------------
+  sessionWindows = new SessionWindows({
+    createWindow: createSessionWindow,
+    sessions: () => sessions.list(),
+    disconnect: (id) => closeSession(id),
+    onOwnerChange: (id, owner) => {
+      if (agentOwners.has(id)) agentOwners.set(id, owner)
+      refreshThrottling()
+    },
+    // An update in progress counts: its connections are being carried over.
+    isQuitting: () => quitting || sessions.isPreserving
+  })
+  ipcMain.on('windows:ready', (e) => sessionWindows?.markReady(e.sender))
+  ipcMain.on(
+    'windows:reply',
+    fenced('windows:reply', (requestId: number, result: WindowResult) => sessionWindows?.reply(requestId, result))
+  )
+  ipcMain.handle('windows:move', (_e, id: string, target: number | 'new') => sessionWindows!.move(id, target))
+  ipcMain.handle('windows:tear-off', (_e, id: string) => sessionWindows!.tearOff(id))
+  ipcMain.handle('windows:choices', (e) => sessionWindows!.choices(e.sender))
 
   // ---- Agent control (#agent on): a local program drives one session ------
   const agentOwners = new Map<string, Electron.WebContents>()
@@ -269,33 +320,42 @@ app.whenReady().then(async () => {
         owner.send('agent:send', requestId, sessionId, text)
       })
     },
-    // Chromium slows timers in a hidden or covered window. An agent plays
-    // with Wayfarer in the background, and the mapper and timers must keep up.
-    (active) => {
-      if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.setBackgroundThrottling(!active)
-    }
+    () => refreshThrottling()
   )
+  /** Chromium slows timers in a hidden or covered window. An agent plays with
+   *  Wayfarer in the background, so its window keeps the mapper and timers at speed. */
+  const refreshThrottling = (): void => {
+    const playing = new Set(agentOwners.values())
+    for (const win of sessionWindows?.all() ?? []) win.webContents.setBackgroundThrottling(!playing.has(win.webContents))
+  }
   const watchedOwners = new WeakSet<Electron.WebContents>()
-  ipcMain.handle('agent:enable', (e, sessionId: string, info: AgentSessionInfo) => {
+  ipcMain.handle('agent:enable', async (e, sessionId: string, info: AgentSessionInfo) => {
     const owner = e.sender
     agentOwners.set(sessionId, owner)
     if (!watchedOwners.has(owner)) {
       watchedOwners.add(owner)
-      // A reload or a crash takes every session with it: leave no ghost
-      // sessions the agent could still name.
+      // A reload or a crash takes that window's sessions with it: leave no
+      // ghost sessions the agent could still name.
       const forget = (): void => {
-        for (const [id, wc] of agentOwners) if (wc === owner) agentOwners.delete(id)
-        void agent.disableAll()
+        for (const [id, wc] of [...agentOwners]) {
+          if (wc !== owner) continue
+          agentOwners.delete(id)
+          void agent.disable(id)
+        }
+        refreshThrottling()
       }
       owner.on('did-navigate', forget)
       owner.on('render-process-gone', forget)
       owner.once('destroyed', forget)
     }
-    return agent.enable(sessionId, info)
+    const result = await agent.enable(sessionId, info)
+    refreshThrottling()
+    return result
   })
-  ipcMain.handle('agent:disable', (_e, sessionId: string) => {
+  ipcMain.handle('agent:disable', async (_e, sessionId: string) => {
     agentOwners.delete(sessionId)
-    return agent.disable(sessionId)
+    await agent.disable(sessionId)
+    refreshThrottling()
   })
   ipcMain.on('agent:line', fenced('agent:line', (sessionId: string, line: AgentLine) => agent.line(sessionId, line)))
   ipcMain.on('agent:prompt', fenced('agent:prompt', (sessionId: string, text: string) => agent.prompt(sessionId, text)))
@@ -308,16 +368,20 @@ app.whenReady().then(async () => {
   )
   app.on('before-quit', () => void agent.disableAll())
 
-  ipcMain.handle('session:disconnect', async (_e, id: string) => {
+  /** End a session for good: its connection, log, agent control and map windows. */
+  const closeSession = async (id: string): Promise<void> => {
     await sessions.disconnect(id)
     logs.stop(id)
     agentOwners.delete(id)
     await agent.disable(id)
+    refreshThrottling()
     for (const win of popouts.get(id) ?? []) {
       if (!win.isDestroyed()) win.close()
     }
     popouts.delete(id)
-  })
+    sessionWindows?.release(id)
+  }
+  ipcMain.handle('session:disconnect', (_e, id: string) => closeSession(id))
   ipcMain.handle('session:reconnect', (_e, id: string) => sessions.reconnect(id))
 
   ipcMain.handle('profiles:list', () => {
@@ -349,9 +413,13 @@ app.whenReady().then(async () => {
 
   const settings = new SettingsStore(app.getPath('userData'), profileName)
   ipcMain.handle('settings:get', (_e, profileId: string | null) => settings.get(profileId))
-  ipcMain.handle('settings:save', (_e, profileId: string | null, set: SettingsSet) =>
-    settings.save(profileId, set)
-  )
+  ipcMain.handle('settings:save', (e, profileId: string | null, set: SettingsSet) => {
+    const saved = settings.save(profileId, set)
+    // Every window caches settings, and a stale copy would be saved back
+    // over this one the next time that window persisted a variable.
+    sessionWindows?.broadcast('settings:changed', [profileId, saved], e.sender)
+    return saved
+  })
 
   const logs = new LogWriter(app.getPath('userData'))
   ipcMain.handle('log:start', (_e, sessionId: string, name: string) => logs.start(sessionId, name))
@@ -400,7 +468,12 @@ app.whenReady().then(async () => {
   })
   ipcMain.handle('worlds:backups', () => worlds.backups())
   ipcMain.handle('worlds:preview-backup', (_e, id: string) => worlds.previewBackup(id))
-  ipcMain.handle('worlds:import', (_e, token: string, replaceId: string | null) => worlds.import(token, replaceId))
+  ipcMain.handle('worlds:import', async (e, token: string, replaceId: string | null) => {
+    const profile = await worlds.import(token, replaceId)
+    // Other windows may still hold the old map and settings in memory.
+    sessionWindows?.broadcast('worlds:replaced', [profile.id], e.sender)
+    return profile
+  })
   ipcMain.handle('worlds:snapshot', (_e, id: string) => worlds.snapshot(id))
   ipcMain.handle('map:load', (_e, key: string) => maps.load(key))
   ipcMain.handle('map:persist', (_e, key: string, map: unknown) => maps.save(key, map))
@@ -430,8 +503,11 @@ app.whenReady().then(async () => {
     return visible ? b : null
   }
 
+  /** The renderer showing a session: its pop-outs' hellos, actions and bounds go there. */
+  const sessionContents = (sessionId: string): Electron.WebContents | null =>
+    sessionWindows?.contentsFor(sessionId) ?? mainWindow?.webContents ?? null
   const reportBounds = (sessionId: string, bounds: PopoutBounds | null): void => {
-    mainWindow?.webContents.send('map:popout-bounds', sessionId, bounds)
+    sessionContents(sessionId)?.send('map:popout-bounds', sessionId, bounds)
   }
 
   ipcMain.handle('map:popout', (_e, sessionId: string, title: string, saved?: PopoutBounds) => {
@@ -491,13 +567,13 @@ app.whenReady().then(async () => {
   ipcMain.on(
     'map:mirror-hello',
     fenced('map:mirror-hello', (sessionId: string) => {
-      mainWindow?.webContents.send('map:mirror-hello', sessionId)
+      sessionContents(sessionId)?.send('map:mirror-hello', sessionId)
     })
   )
   ipcMain.on(
     'map:mirror-action',
     fenced('map:mirror-action', (sessionId: string, action: unknown) => {
-      mainWindow?.webContents.send('map:mirror-action', sessionId, action)
+      sessionContents(sessionId)?.send('map:mirror-action', sessionId, action)
     })
   )
 
@@ -536,7 +612,7 @@ app.whenReady().then(async () => {
     autoUpdater.on('update-downloaded', (info) => {
       log('[ready]', info.version, '— installs on quit')
       updateReady = info.version
-      mainWindow?.webContents.send('app:update-ready', info.version)
+      sessionWindows?.broadcast('app:update-ready', [info.version])
     })
 
     // Driven by hand rather than checkForUpdatesAndNotify, so the download can

@@ -19,6 +19,8 @@ class SettingsManager {
   private listeners = new Set<Listener>()
   /** Latest save issued per scope, so an older save's result can't win. */
   private saveSeq = new Map<string, number>()
+  /** Saves still waiting for the main process, per scope. */
+  private pending = new Map<string, number>()
 
   async ensure(profileId: string | null | undefined): Promise<void> {
     const jobs: Promise<void>[] = []
@@ -107,9 +109,31 @@ class SettingsManager {
     const key = profileId ?? GLOBAL_KEY
     const seq = (this.saveSeq.get(key) ?? 0) + 1
     this.saveSeq.set(key, seq)
+    this.pending.set(key, (this.pending.get(key) ?? 0) + 1)
     this.apply(profileId, set)
-    const saved = await window.mud.settings.save(profileId, set)
-    if (this.saveSeq.get(key) === seq) this.apply(profileId, saved)
+    try {
+      const saved = await window.mud.settings.save(profileId, set)
+      if (this.saveSeq.get(key) === seq) this.apply(profileId, saved)
+    } finally {
+      const left = (this.pending.get(key) ?? 1) - 1
+      if (left > 0) this.pending.set(key, left)
+      else this.pending.delete(key)
+    }
+  }
+
+  /**
+   * Another window saved this scope. Take its copy, unless a save from this
+   * window is still on its way: that one reaches the disk later and wins, and
+   * the other windows hear about it in turn. A load still in flight is older
+   * than this copy, so its result is dropped.
+   */
+  applyExternal(profileId: string | null, set: SettingsSet): void {
+    const key = profileId ?? GLOBAL_KEY
+    if (this.pending.has(key)) return
+    this.saveSeq.set(key, (this.saveSeq.get(key) ?? 0) + 1)
+    if (!this.loading.has(key)) this.loading.set(key, Promise.resolve())
+    this.ready.add(key)
+    this.apply(profileId, set)
   }
 
   subscribe(fn: Listener): () => void {
@@ -123,3 +147,8 @@ class SettingsManager {
 }
 
 export const settingsManager = new SettingsManager()
+
+// Each window keeps its own copy; saves from the others arrive here.
+if (typeof window !== 'undefined' && window.mud?.settings?.onChanged) {
+  window.mud.settings.onChanged((profileId, set) => settingsManager.applyExternal(profileId, set))
+}

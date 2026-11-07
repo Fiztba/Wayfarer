@@ -18,6 +18,8 @@ export class KeeperClient {
 
   hasProfile(id: string): boolean { return [...this.entries.values()].some((opts) => opts.profileId === id) }
   get count(): number { return this.entries.size }
+  /** Every live session and the options it was opened with. */
+  list(): Array<[string, ConnectOptions]> { return [...this.entries.entries()] }
   private get descriptor(): string { return path.join(this.root, 'connection-keeper.json') }
 
   async initialize(): Promise<void> {

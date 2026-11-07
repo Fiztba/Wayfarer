@@ -2,6 +2,7 @@ import { contextBridge, ipcRenderer, IpcRendererEvent } from 'electron'
 import type { WorldPreview, WorldBackup } from '../shared/world'
 import type { HistoryMeta, HistoryQuery, HistoryResults, HistoryHit } from '../shared/history'
 import type { AgentLine, AgentSendResult, AgentSessionInfo } from '../shared/agent'
+import type { WindowChoice, WindowResult } from '../shared/windows'
 import type {
   ConnectOptions,
   DirectoryResult,
@@ -25,6 +26,21 @@ export interface MudApi {
     previewBackup(id: string): Promise<WorldPreview>
     import(token: string, replaceId: string | null): Promise<Profile>
     snapshot(id: string): Promise<void>
+    /** Another window imported over this world: drop its cached map and settings. */
+    onReplaced(cb: (profileId: string) => void): () => void
+  }
+  /** Sessions in windows of their own. */
+  windows: {
+    /** This window's page is up and can take sessions. */
+    ready(): void
+    move(sessionId: string, target: number | 'new'): Promise<WindowResult>
+    /** The tab was let go outside the tab strip: move it to wherever the cursor is. */
+    tearOff(sessionId: string): Promise<WindowResult>
+    /** Other windows a session could move to. */
+    choices(): Promise<WindowChoice[]>
+    onExport(cb: (requestId: number, sessionId: string) => void): () => void
+    onAdopt(cb: (requestId: number, payload: unknown) => void): () => void
+    reply(requestId: number, result: WindowResult): void
   }
   history: {
     search(query: HistoryQuery): Promise<HistoryResults>
@@ -59,6 +75,8 @@ export interface MudApi {
   settings: {
     get(profileId: string | null): Promise<SettingsSet>
     save(profileId: string | null, set: SettingsSet): Promise<SettingsSet>
+    /** Another window saved this scope. */
+    onChanged(cb: (profileId: string | null, set: SettingsSet) => void): () => void
   }
   log: {
     start(sessionId: string, name: string): Promise<string>
@@ -117,7 +135,29 @@ const api: MudApi = {
     backups: () => ipcRenderer.invoke('worlds:backups'),
     previewBackup: (id) => ipcRenderer.invoke('worlds:preview-backup', id),
     import: (token, replaceId) => ipcRenderer.invoke('worlds:import', token, replaceId),
-    snapshot: (id) => ipcRenderer.invoke('worlds:snapshot', id)
+    snapshot: (id) => ipcRenderer.invoke('worlds:snapshot', id),
+    onReplaced: (cb) => {
+      const handler = (_e: IpcRendererEvent, profileId: string) => cb(profileId)
+      ipcRenderer.on('worlds:replaced', handler)
+      return () => ipcRenderer.off('worlds:replaced', handler)
+    }
+  },
+  windows: {
+    ready: () => ipcRenderer.send('windows:ready'),
+    move: (sessionId, target) => ipcRenderer.invoke('windows:move', sessionId, target),
+    tearOff: (sessionId) => ipcRenderer.invoke('windows:tear-off', sessionId),
+    choices: () => ipcRenderer.invoke('windows:choices'),
+    onExport: (cb) => {
+      const handler = (_e: IpcRendererEvent, requestId: number, sessionId: string) => cb(requestId, sessionId)
+      ipcRenderer.on('session:export', handler)
+      return () => ipcRenderer.off('session:export', handler)
+    },
+    onAdopt: (cb) => {
+      const handler = (_e: IpcRendererEvent, requestId: number, payload: unknown) => cb(requestId, payload)
+      ipcRenderer.on('session:adopt', handler)
+      return () => ipcRenderer.off('session:adopt', handler)
+    },
+    reply: (requestId, result) => ipcRenderer.send('windows:reply', requestId, result)
   },
   history: {
     search: (query) => ipcRenderer.invoke('history:search', query),
@@ -154,7 +194,12 @@ const api: MudApi = {
   },
   settings: {
     get: (profileId) => ipcRenderer.invoke('settings:get', profileId),
-    save: (profileId, set) => ipcRenderer.invoke('settings:save', profileId, set)
+    save: (profileId, set) => ipcRenderer.invoke('settings:save', profileId, set),
+    onChanged: (cb) => {
+      const handler = (_e: IpcRendererEvent, profileId: string | null, set: SettingsSet) => cb(profileId, set)
+      ipcRenderer.on('settings:changed', handler)
+      return () => ipcRenderer.off('settings:changed', handler)
+    }
   },
   log: {
     start: (sessionId, name) => ipcRenderer.invoke('log:start', sessionId, name),

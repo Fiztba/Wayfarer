@@ -134,6 +134,14 @@ body,
   min-height: 0;
 }
 
+/* A new window waiting for the session moving into it. */
+.moving-placeholder {
+  flex: 1;
+  display: grid;
+  place-items: center;
+  color: var(--fg-dim);
+}
+
 /* ---- Session view ---- */
 .session {
   flex: 1;

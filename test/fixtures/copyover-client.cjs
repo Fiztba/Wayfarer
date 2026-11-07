@@ -20,7 +20,8 @@ const updater = require('electron-updater').autoUpdater
 updater.quitAndInstall = () => { setTimeout(() => app.exit(0), 30) }
 process.on('message', async (message) => {
   try {
-    const win = BrowserWindow.getAllWindows().find(w => !w.webContents.getURL().includes('#popout'))
+    const windows = BrowserWindow.getAllWindows().filter(w => !w.webContents.getURL().includes('#popout'))
+    const win = windows.find(w => !w.webContents.getURL().includes('detached=1')) ?? windows[0]
     if (message.op === 'quit') { app.quit(); return }
     if (message.op === 'update') {
       const descriptor = Object.getOwnPropertyDescriptor(app, 'isPackaged')

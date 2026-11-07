@@ -195,7 +195,8 @@ export class SessionStore {
   tracker: MapTracker | null = null
   walker: Walker | null = null
   showMap = false
-  private mapKey: string
+  /** Which map this session reads and writes: its profile, or host and port. */
+  readonly mapKey: string
 
   private parser = new AnsiParser()
   private nextLineId = 1
@@ -1159,7 +1160,8 @@ export class SessionStore {
       engine: this.engine.snapshot(), scripts, tracker: this.tracker?.snapshot(),
       captures: [...this.captureWindows], logging: this.logging }
   }
-  async restore(snapshot: Awaited<ReturnType<SessionStore['snapshot']>>) {
+  /** `moved`: the session came from another window, whose log is still open in main. */
+  async restore(snapshot: Awaited<ReturnType<SessionStore['snapshot']>>, opts?: { moved?: { logPath: string | null } }) {
     await this.ready
     restoreFields(this, SESSION_STATE, snapshot.state)
     this.parser.restore(snapshot.parser)
@@ -1169,8 +1171,14 @@ export class SessionStore {
     this.captureWindows = new Map(snapshot.captures)
     if (snapshot.tracker) this.tracker?.restore(snapshot.tracker)
     this.copyoverPaused = true
-    // Restart logging without reprocessing historical lines or login scripts.
-    if (snapshot.logging) await this.toggleLogging()
+    if (opts?.moved) {
+      // Same log file: starting it again would split the log in two.
+      this.logging = snapshot.logging
+      this.logPath = snapshot.logging ? opts.moved.logPath : null
+    } else if (snapshot.logging) {
+      // Restart logging without reprocessing historical lines or login scripts.
+      await this.toggleLogging()
+    }
     this.notify()
   }
   resumeCopyover(): void {
@@ -1405,6 +1413,15 @@ export class SessionStore {
     return { ok: true }
   }
 
+  /** The session moved here from another window with agent control on: it carries on, quietly. */
+  resumeAgent(): void {
+    if (this.disposed) return
+    this.agent = true
+    this.agentPromptSent = ''
+    void window.mud.agent.enable(this.id, this.agentInfo()).catch(() => {})
+    this.syncAgentPrompt()
+  }
+
   private agentInfo(): AgentSessionInfo {
     return { name: this.name, character: this.charName }
   }
@@ -1423,12 +1440,17 @@ export class SessionStore {
     window.mud.agent.prompt(this.id, text)
   }
 
-  dispose(): void {
+  /**
+   * Stop everything this window runs for the session. `moved`: the session
+   * lives on in another window, so its log and agent control stay open.
+   */
+  dispose(opts?: { moved?: boolean }): void {
     if (this.disposed) return
     this.disposed = true
+    const moved = opts?.moved === true
     if (this.agent) {
       this.agent = false
-      void window.mud.agent.disable(this.id)
+      if (!moved) void window.mud.agent.disable(this.id)
     }
     this.connectionGeneration++
     this.engine.stopTimers()
@@ -1445,7 +1467,7 @@ export class SessionStore {
     this.sounds.stopAll()
     this.mapModel?.flush()
     this.scripts.dispose()
-    if (this.logging) void window.mud.log.stop(this.id)
+    if (this.logging && !moved) void window.mud.log.stop(this.id)
   }
 }
 
