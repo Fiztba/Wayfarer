@@ -72,8 +72,10 @@ const text = value => new Promise((resolve, reject) => { compressed.write(value)
   await wait(() => (received.match(/ack\r?\n/g) || []).length === 2)
   assert.equal(connections, 1)
   assert.equal(closes, 0)
+  // The trigger answers ping2 as the line is processed; the line after it
+  // reaches the page on the next frame, so wait for it rather than race it.
+  await wait(() => client.js(`document.body.textContent.includes('Buffered café ✓')`))
   const page = await client.js('document.body.textContent')
-  assert.ok(page.includes('Buffered café ✓'))
   assert.equal((page.match(/ping1/g) || []).length, 1)
   assert.equal((page.match(/ping2/g) || []).length, 1)
   const readMap = () => client.js(`(async () => { const p=(await window.mud.profiles.list()).find(p=>p.name==='Copyover Test'); return window.mud.map.load(p.id) })()`)
