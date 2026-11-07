@@ -103,6 +103,18 @@ try {
   const rollover = await history.search({ text: 'after midnight', from: '2024-01-03', to: '2024-01-03' })
   assert.equal(rollover.hits.length, 1)
   console.log('ok persisted captures filter by world/character/channel/date, include context, and legacy logs stay searchable')
+
+  // The same address under the same name is the profile already saved (a
+  // repeated quick connect); another name is a second profile, as for an alt.
+  const shelf = new ProfileStore(path.join(base, 'profile-rules'))
+  const first = shelf.save({ name: 'Dawn of Demise', host: 'tdod.org', port: 4000 })
+  assert.equal(shelf.save({ name: 'dawn of demise', host: 'TDOD.org', port: 4000 }).id, first.id)
+  const alt = shelf.save({ name: 'Dawn of Demise (alt)', host: 'tdod.org', port: 4000 })
+  assert.notEqual(alt.id, first.id)
+  assert.equal(shelf.list().length, 2)
+  assert.equal(shelf.save({ id: alt.id, name: 'Second character', host: 'tdod.org', port: 4000 }).id, alt.id)
+  assert.deepEqual(shelf.list().map((p) => p.id).sort(), [first.id, alt.id].sort())
+  console.log('ok a new name for a saved address makes a second profile; the same name reuses it; editing keeps its id')
 } finally {
   assert.equal(path.dirname(base), path.resolve(os.tmpdir()))
   assert.ok(path.basename(base).startsWith('wayfarer-world-test-'))

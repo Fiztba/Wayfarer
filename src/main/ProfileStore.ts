@@ -61,14 +61,18 @@ export class ProfileStore {
       throw new Error('Port must be a whole number from 1 to 65535')
     }
     const now = new Date().toISOString()
-    // No id given: reuse any existing profile for the same host:port instead
-    // of minting a duplicate (duplicates orphan their maps/settings).
+    // No id given: the same address under the same name is the profile that
+    // already exists (a repeated quick connect), not a duplicate with an empty
+    // map and settings. A different name for the same address is a second
+    // profile on purpose, such as for another character with its own map.
     let id = input.id
     if (!id && input.host) {
+      const name = (input.name?.trim() || 'Unnamed').toLowerCase()
       const twin = this.list().find(
         (p) =>
           p.host.toLowerCase() === input.host!.trim().toLowerCase() &&
-          p.port === port
+          p.port === port &&
+          p.name.trim().toLowerCase() === name
       )
       if (twin) id = twin.id
     }

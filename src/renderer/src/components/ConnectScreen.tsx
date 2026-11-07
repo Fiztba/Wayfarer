@@ -102,6 +102,13 @@ export function ConnectScreen({ onConnect, onOpenHelp }: Props) {
   }, [])
 
   const formValid = host.trim().length > 0 && Number.isInteger(Number(port)) && Number(port) > 0 && Number(port) <= 65535
+  // Profiles already saved for the address in the form. Saving under one of
+  // their names updates that profile; any other name makes a new one.
+  const sameAddress = editingId || !formValid ? [] : profiles.filter(
+    (p) => p.host.toLowerCase() === host.trim().toLowerCase() && p.port === Number(port)
+  )
+  const formName = (name.trim() || host.trim()).toLowerCase()
+  const sameName = sameAddress.find((p) => p.name.trim().toLowerCase() === formName)
 
   const saveCurrent = useCallback(async (): Promise<Profile | null> => {
     if (!formValid) return null
@@ -362,6 +369,15 @@ export function ConnectScreen({ onConnect, onOpenHelp }: Props) {
                   </label>
                 )}
               </div>
+              {saveProfile && sameAddress.length > 0 && (
+                <p className="field-hint" role="status">
+                  {sameName
+                    ? `This updates your saved ${sameName.name} profile.`
+                    : `${host.trim()}:${port} is already saved as ${sameAddress.map((p) => p.name).join(', ')}. ` +
+                      'Saving makes another profile with its own map and settings, for a second character. ' +
+                      `To play ${sameAddress[0].name} itself, use its card instead.`}
+                </p>
+              )}
               <div className="button-row">
                 {editingId && (
                   <button className="save-btn" disabled={!formValid} onClick={saveOnly}>

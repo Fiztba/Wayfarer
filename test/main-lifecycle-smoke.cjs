@@ -162,6 +162,7 @@ const waitFor = async (test) => {
   // A different world (its own profile, so its own map) connected from the
   // detached window lives there from its very first line.
   const otherWorld = await call(`window.mud.profiles.save({ name: 'Second World', host: '127.0.0.1', port: ${port}, tls: false, encoding: 'utf8' })`)
+  assert.notEqual(otherWorld.id, profile.id, 'a new name for the same MUD is a second profile, with its own map')
   const inDetached = (code) => detached.webContents.executeJavaScript(code)
   await inDetached(`document.querySelector('.tab-new').click()`)
   await waitFor(() => inDetached(`Array.from(document.querySelectorAll('.profile-card')).some(c => c.textContent.includes('Second World'))`))
