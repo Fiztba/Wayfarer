@@ -543,6 +543,7 @@ export const HELP_TOPICS: HelpTopic[] = [
           '#agent only works typed in the input line, so a link or trigger from the game can never turn it on.',
           'Its commands go through your aliases, speedwalks and the mapper like typed ones, so the map grows as it explores. They stay out of your command history.',
           'It cannot log in for you: it is refused while the game hides what you type (passwords) or the session is disconnected, and it cannot reconnect or change agent control.',
+          'Turn it on after you log in. A game that does not hide password typing would echo your password like any command, and the program would see it.',
           'Agent control turns off when the session closes and after an update. While it is on, Wayfarer keeps full speed when its window is hidden.'
         ]
       },
