@@ -80,6 +80,13 @@ export class SessionWindows {
     this.contentsFor(id)?.send('session:event', id, event)
   }
 
+  /** Sessions a window should be showing, and how each was opened. */
+  sessionsOf(contents: WebContents): Array<{ id: string; opts: ConnectOptions }> {
+    const win = this.windowOf(contents)
+    if (!win) return []
+    return this.deps.sessions().filter(([id]) => this.owners.get(id) === win).map(([id, opts]) => ({ id, opts }))
+  }
+
   /** The renderer that owns a session: where its events and pop-out traffic go. */
   contentsFor(id: string): WebContents | null {
     const win = this.owners.get(id) ?? this.main

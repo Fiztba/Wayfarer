@@ -23,6 +23,10 @@ Module._load = function (name, ...args) {
 }
 let quitRequests = 0
 app.quit = () => { quitRequests++ }
+// An exception escaping a main-process event handler shows the user an error
+// dialog without stopping anything, so a test has to look for it.
+const uncaught = []
+process.on('uncaughtException', (err) => uncaught.push(err))
 const sockets = new Set()
 let serverInput = ''
 const server = net.createServer((socket) => {
@@ -178,8 +182,16 @@ const waitFor = async (test) => {
   await call(`window.mud.profiles.remove(${JSON.stringify(otherWorld.id)})`)
   console.log('ok a new world connected from a detached window lives in that window')
 
+  // Agent control turned on from the detached window, as when a player types
+  // #agent on there; closing the window must hand it back without throwing.
+  await inDetached(`window.mud.agent.enable(${JSON.stringify(sessionId)}, { name: 'Local MUD', character: null })`)
+  assert.ok(fs.existsSync(agentJson))
   detached.close()
   await waitFor(() => BrowserWindow.getAllWindows().length === 1)
+  await new Promise((r) => setTimeout(r, 200))
+  assert.deepEqual(uncaught.map(String), [], 'closing a window raised no main-process errors')
+  assert.deepEqual((await ask({ op: 'sessions' })).sessions.map((s) => s.id), [sessionId], 'agent control followed the session home')
+  await call(`window.mud.agent.disable(${JSON.stringify(sessionId)})`)
   await waitFor(() => textIn(main, 'This line arrives after the move.'))
   mud.write('Home again.\r\n')
   await waitFor(() => textIn(main, 'Home again.'))

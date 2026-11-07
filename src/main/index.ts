@@ -297,6 +297,7 @@ app.whenReady().then(async () => {
   ipcMain.handle('windows:move', (_e, id: string, target: number | 'new') => sessionWindows!.move(id, target))
   ipcMain.handle('windows:tear-off', (_e, id: string) => sessionWindows!.tearOff(id))
   ipcMain.handle('windows:choices', (e) => sessionWindows!.choices(e.sender))
+  ipcMain.handle('windows:mine', (e) => sessionWindows!.sessionsOf(e.sender))
 
   // ---- Agent control (#agent on): a local program drives one session ------
   const agentOwners = new Map<string, Electron.WebContents>()

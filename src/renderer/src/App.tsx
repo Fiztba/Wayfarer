@@ -141,11 +141,19 @@ export default function App() {
       setCopying(true)
       void (async () => {
         try {
-          const stores = tabs.map((tab) => sessionStores.get(tab.id)).filter((s): s is SessionStore => !!s)
+          // Every session this window holds, in tab order. A tab that just
+          // came back from another window (an update docks them first) can
+          // be in sessionStores before this render's tabs list catches up.
+          const listed = tabs.filter((tab) => sessionStores.has(tab.id))
+          const late = [...sessionStores.values()]
+            .filter((s) => !listed.some((tab) => tab.id === s.id))
+            .map((s) => ({ id: s.id, name: s.name }))
+          const allTabs = [...listed, ...late]
+          const stores = allTabs.map((tab) => sessionStores.get(tab.id)!)
           for (const store of stores) store.scripts.snapshot()
           const saved = []
           for (const store of stores) saved.push(await store.snapshot())
-          await window.mud.copyover.prepared({ snapshot: { tabs, activeId, stores: saved } })
+          await window.mud.copyover.prepared({ snapshot: { tabs: allTabs, activeId, stores: saved } })
         } catch (error) { await window.mud.copyover.prepared({ error: String(error) }) }
       })()
     })
@@ -180,7 +188,19 @@ export default function App() {
         await store.restore(snapshot)
         sessionStores.set(store.id, store)
       }
-      setTabs(saved.tabs); setActiveId(saved.activeId)
+      // A connection the keeper carried over without a screen in the
+      // snapshot would stay open with no tab to show it or close it.
+      const strayTabs: TabInfo[] = []
+      for (const { id, opts } of await window.mud.windows.mine()) {
+        if (sessionStores.has(id)) continue
+        await settingsManager.ensure(opts.profileId ?? null)
+        const store = new SessionStore(id, opts.name || opts.host, opts.host, opts.port, opts.profileId)
+        store.onCharName = () => forceRender((n) => n + 1)
+        store.adoptStray()
+        sessionStores.set(id, store)
+        strayTabs.push({ id, name: store.name })
+      }
+      setTabs([...saved.tabs, ...strayTabs]); setActiveId(saved.activeId)
       for (const store of sessionStores.values()) store.resumeCopyover()
       await window.mud.copyover.resume()
       setCopying(false)

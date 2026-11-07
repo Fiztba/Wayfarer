@@ -1437,6 +1437,19 @@ export class SessionStore {
     return { ok: true }
   }
 
+  /**
+   * The keeper carried this connection across an update but the snapshot
+   * had no screen for it. It is still open, so show it as connected and say
+   * why the scrollback is empty.
+   */
+  adoptStray(): void {
+    this.status = 'connected'
+    this.addSystemLine(
+      "Wayfarer couldn't bring back this session's screen after the update, but the connection stayed open. Carry on here, or close the tab to disconnect.",
+      'system'
+    )
+  }
+
   /** The session moved here from another window with agent control on: it carries on, quietly. */
   resumeAgent(): void {
     if (this.disposed) return

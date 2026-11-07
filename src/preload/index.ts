@@ -38,6 +38,8 @@ export interface MudApi {
     tearOff(sessionId: string): Promise<WindowResult>
     /** Other windows a session could move to. */
     choices(): Promise<WindowChoice[]>
+    /** The sessions main has this window showing, and how each was opened. */
+    mine(): Promise<Array<{ id: string; opts: ConnectOptions }>>
     onExport(cb: (requestId: number, sessionId: string) => void): () => void
     onAdopt(cb: (requestId: number, payload: unknown) => void): () => void
     reply(requestId: number, result: WindowResult): void
@@ -147,6 +149,7 @@ const api: MudApi = {
     move: (sessionId, target) => ipcRenderer.invoke('windows:move', sessionId, target),
     tearOff: (sessionId) => ipcRenderer.invoke('windows:tear-off', sessionId),
     choices: () => ipcRenderer.invoke('windows:choices'),
+    mine: () => ipcRenderer.invoke('windows:mine'),
     onExport: (cb) => {
       const handler = (_e: IpcRendererEvent, requestId: number, sessionId: string) => cb(requestId, sessionId)
       ipcRenderer.on('session:export', handler)
