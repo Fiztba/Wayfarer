@@ -76,11 +76,47 @@ const waitFor = async (test) => {
   const opts = JSON.stringify({ host: '127.0.0.1', port: server.address().port })
   const id = await call(`window.mud.connect(${opts})`)
   await waitFor(() => sockets.size === 1)
+  // Agent control through the real main process: token file, pipe, the round
+  // trip to the renderer, and cleanup on reload and on disconnect.
+  const agentJson = path.join(userData, 'agent.json')
+  const ask = (body) => new Promise((resolve, reject) => {
+    const { pipe, token } = JSON.parse(fs.readFileSync(agentJson, 'utf8'))
+    const socket = net.connect(pipe)
+    let buffered = ''
+    socket.setEncoding('utf8')
+    socket.on('connect', () => socket.write(JSON.stringify({ token, ...body }) + '\n'))
+    socket.on('data', (chunk) => {
+      buffered += chunk
+      const newline = buffered.indexOf('\n')
+      if (newline >= 0) { socket.destroy(); resolve(JSON.parse(buffered.slice(0, newline))) }
+    })
+    socket.on('error', reject)
+  })
+  const enableAgent = () => call(`window.mud.agent.enable(${JSON.stringify(id)}, { name: 'Test', character: null })`)
+  assert.equal(fs.existsSync(agentJson), false)
+  await enableAgent()
+  assert.deepEqual((await ask({ op: 'sessions' })).sessions, [{ id, name: 'Test', character: null }])
+  await call(`window.mud.agent.line(${JSON.stringify(id)}, { kind: 'output', text: 'hello from the renderer' })`)
+  await waitFor(async () => (await ask({ op: 'read', last: 1 })).lines[0]?.text === 'hello from the renderer')
+  // Opened without a tab, this session has no store in the renderer, so the
+  // round trip comes back refused instead of typed.
+  assert.match((await ask({ op: 'send', text: 'look' })).error, /gone/)
+  console.log('ok agent control crosses the real main process: token file, pipe and renderer round trip')
+  main.webContents.reload()
+  await waitFor(() => !fs.existsSync(agentJson))
+  await waitFor(() => !main.webContents.isLoading())
+  if (typeof main.webContents.getBackgroundThrottling === 'function') {
+    assert.equal(main.webContents.getBackgroundThrottling(), true, 'throttling comes back once no session has agent control')
+  }
+  await enableAgent()
+  assert.ok(fs.existsSync(agentJson))
+  console.log('ok reloading the window drops agent control')
   await call(`window.mud.map.popout(${JSON.stringify(id)}, 'Test')`)
   await waitFor(() => BrowserWindow.getAllWindows().length === 2)
   await call(`window.mud.disconnect(${JSON.stringify(id)})`)
   await waitFor(() => sockets.size === 0 && BrowserWindow.getAllWindows().length === 1)
-  console.log('ok closing a session closes its TCP socket and map window')
+  assert.equal(fs.existsSync(agentJson), false, 'disconnecting turns agent control off')
+  console.log('ok closing a session closes its TCP socket, map window and agent control')
   await call(`window.mud.map.popout('shutdown-test', 'Test')`)
   await waitFor(() => BrowserWindow.getAllWindows().length === 2)
   main.destroy()

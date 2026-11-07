@@ -531,6 +531,29 @@ export const HELP_TOPICS: HelpTopic[] = [
     ]
   },
   {
+    id: 'agent',
+    title: 'Agent Control (experimental)',
+    blocks: [
+      {
+        p: 'Agent control lets a program on this computer play a session: an AI assistant, a script, an accessibility tool. It types commands as you would and reads back the text the session shows. It stays off until you turn it on, and then only for the session you turned it on in.'
+      },
+      {
+        list: [
+          '#agent on lets a program drive this session. 🤖 Agent on appears in the status bar; click it or type #agent off to stop. #agent alone says whether it is on.',
+          '#agent only works typed in the input line, so a link or trigger from the game can never turn it on.',
+          'Its commands go through your aliases, speedwalks and the mapper like typed ones, so the map grows as it explores. They stay out of your command history.',
+          'It cannot log in for you: it is refused while the game hides what you type (passwords) or the session is disconnected, and it cannot reconnect or change agent control.',
+          'Agent control turns off when the session closes and after an update. While it is on, Wayfarer keeps full speed when its window is hidden.'
+        ]
+      },
+      { h: 'For program authors' },
+      {
+        p: 'While any session has agent control on, Wayfarer listens on a local pipe and writes its address and a fresh token to agent.json in its data folder (%APPDATA%\\Wayfarer on Windows). Send one JSON object per line and get one back. {"token": …, "op": "send", "text": "look"} runs a command, waits for the game to go quiet, and returns the lines since your last read plus the current prompt. {"op": "read", "waitMs": 5000} waits for new text; "last": 50 looks back instead. {"op": "sessions"} lists the sessions you may drive; add "session" to a request to pick one. The repository includes scripts/agent.mjs, a command-line client.'
+      },
+      { code: 'node scripts/agent.mjs send look\nnode scripts/agent.mjs read --wait 10000\nnode scripts/agent.mjs read --last 40' }
+    ]
+  },
+  {
     id: 'settings-data',
     title: 'Settings, Scopes & Your Data',
     blocks: [

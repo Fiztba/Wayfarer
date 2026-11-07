@@ -530,6 +530,18 @@ body,
   background: rgba(229, 192, 123, 0.12);
 }
 
+/* Agent control is on: always visible, since another program is driving. */
+.status-btn-agent {
+  color: #c678dd;
+  border-color: #c678dd;
+}
+
+.status-btn-agent:hover {
+  color: #dda5ec;
+  border-color: #dda5ec;
+  background: rgba(198, 120, 221, 0.12);
+}
+
 /* ---- Connect screen ---- */
 .connect-screen {
   flex: 1;

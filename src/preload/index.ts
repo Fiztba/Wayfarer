@@ -1,6 +1,7 @@
 import { contextBridge, ipcRenderer, IpcRendererEvent } from 'electron'
 import type { WorldPreview, WorldBackup } from '../shared/world'
 import type { HistoryMeta, HistoryQuery, HistoryResults, HistoryHit } from '../shared/history'
+import type { AgentLine, AgentSendResult, AgentSessionInfo } from '../shared/agent'
 import type {
   ConnectOptions,
   DirectoryResult,
@@ -64,6 +65,16 @@ export interface MudApi {
     stop(sessionId: string): Promise<void>
     line(sessionId: string, text: string, meta?: HistoryMeta): void
     openFolder(): Promise<void>
+  }
+  /** Agent control (#agent on); the pipe side is src/main/AgentBridge.ts. */
+  agent: {
+    enable(sessionId: string, info: AgentSessionInfo): Promise<{ config: string }>
+    disable(sessionId: string): Promise<void>
+    line(sessionId: string, line: AgentLine): void
+    prompt(sessionId: string, text: string): void
+    /** A local program's command for a session; answer it with sent(). */
+    onSend(cb: (requestId: number, sessionId: string, text: string) => void): () => void
+    sent(requestId: number, result: AgentSendResult): void
   }
   map: {
     persist(key: string, map: unknown): Promise<void>
@@ -150,6 +161,19 @@ const api: MudApi = {
     stop: (sessionId) => ipcRenderer.invoke('log:stop', sessionId),
     line: (sessionId, text, meta) => ipcRenderer.send('log:line', sessionId, text, meta),
     openFolder: () => ipcRenderer.invoke('log:openFolder')
+  },
+  agent: {
+    enable: (sessionId, info) => ipcRenderer.invoke('agent:enable', sessionId, info),
+    disable: (sessionId) => ipcRenderer.invoke('agent:disable', sessionId),
+    line: (sessionId, line) => ipcRenderer.send('agent:line', sessionId, line),
+    prompt: (sessionId, text) => ipcRenderer.send('agent:prompt', sessionId, text),
+    onSend: (cb) => {
+      const handler = (_e: IpcRendererEvent, requestId: number, sessionId: string, text: string) =>
+        cb(requestId, sessionId, text)
+      ipcRenderer.on('agent:send', handler)
+      return () => ipcRenderer.off('agent:send', handler)
+    },
+    sent: (requestId, result) => ipcRenderer.send('agent:sent', requestId, result)
   },
   map: {
     persist: (key, map) => ipcRenderer.invoke('map:persist', key, map),

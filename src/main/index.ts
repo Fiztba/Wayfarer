@@ -9,6 +9,8 @@ import { ProfileStore } from './ProfileStore'
 import { MudDirectory } from './MudDirectory'
 import { SettingsStore } from './SettingsStore'
 import { LogWriter } from './LogWriter'
+import { AgentBridge } from './AgentBridge'
+import type { AgentLine, AgentSendResult, AgentSessionInfo } from '../shared/agent'
 import { MapStore } from './MapStore'
 import { WorldLibrary } from './WorldLibrary'
 import { HistoryStore } from './HistoryStore'
@@ -244,9 +246,73 @@ app.whenReady().then(async () => {
     'session:resize',
     fenced('session:resize', (id: string, cols: number, rows: number) => sessions.resize(id, cols, rows))
   )
+
+  // ---- Agent control (#agent on): a local program drives one session ------
+  const agentOwners = new Map<string, Electron.WebContents>()
+  const agentReplies = new Map<number, (result: AgentSendResult) => void>()
+  let agentRequest = 0
+  const agent = new AgentBridge(
+    app.getPath('userData'),
+    (sessionId, text) => {
+      const owner = agentOwners.get(sessionId)
+      if (!owner || owner.isDestroyed()) return Promise.resolve({ ok: false, error: 'That session is gone.' })
+      const requestId = ++agentRequest
+      return new Promise<AgentSendResult>((resolve) => {
+        const timer = setTimeout(() => {
+          agentReplies.delete(requestId)
+          resolve({ ok: false, error: 'Wayfarer did not answer.' })
+        }, 5000)
+        agentReplies.set(requestId, (result) => {
+          clearTimeout(timer)
+          resolve(result)
+        })
+        owner.send('agent:send', requestId, sessionId, text)
+      })
+    },
+    // Chromium slows timers in a hidden or covered window. An agent plays
+    // with Wayfarer in the background, and the mapper and timers must keep up.
+    (active) => {
+      if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.setBackgroundThrottling(!active)
+    }
+  )
+  const watchedOwners = new WeakSet<Electron.WebContents>()
+  ipcMain.handle('agent:enable', (e, sessionId: string, info: AgentSessionInfo) => {
+    const owner = e.sender
+    agentOwners.set(sessionId, owner)
+    if (!watchedOwners.has(owner)) {
+      watchedOwners.add(owner)
+      // A reload or a crash takes every session with it: leave no ghost
+      // sessions the agent could still name.
+      const forget = (): void => {
+        for (const [id, wc] of agentOwners) if (wc === owner) agentOwners.delete(id)
+        void agent.disableAll()
+      }
+      owner.on('did-navigate', forget)
+      owner.on('render-process-gone', forget)
+      owner.once('destroyed', forget)
+    }
+    return agent.enable(sessionId, info)
+  })
+  ipcMain.handle('agent:disable', (_e, sessionId: string) => {
+    agentOwners.delete(sessionId)
+    return agent.disable(sessionId)
+  })
+  ipcMain.on('agent:line', fenced('agent:line', (sessionId: string, line: AgentLine) => agent.line(sessionId, line)))
+  ipcMain.on('agent:prompt', fenced('agent:prompt', (sessionId: string, text: string) => agent.prompt(sessionId, text)))
+  ipcMain.on(
+    'agent:sent',
+    fenced('agent:sent', (requestId: number, result: AgentSendResult) => {
+      agentReplies.get(requestId)?.(result)
+      agentReplies.delete(requestId)
+    })
+  )
+  app.on('before-quit', () => void agent.disableAll())
+
   ipcMain.handle('session:disconnect', async (_e, id: string) => {
     await sessions.disconnect(id)
     logs.stop(id)
+    agentOwners.delete(id)
+    await agent.disable(id)
     for (const win of popouts.get(id) ?? []) {
       if (!win.isDestroyed()) win.close()
     }

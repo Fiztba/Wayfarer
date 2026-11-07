@@ -536,7 +536,10 @@ export function SessionView({
   const sendCommand = useCallback(() => {
     const raw = input
     const masked = store.serverEchoes
-    store.sendInput(raw, masked)
+    // #agent is honoured here, from the input line, and nowhere else: links
+    // and triggers from the server must not be able to turn it on.
+    if (!masked && /^#agent\b/i.test(raw.trim())) store.agentCommand(raw)
+    else store.sendInput(raw, masked)
     if (!masked) {
       store.pushHistory(raw)
       // "Keep it selected" exists so you can re-send one command by typing
@@ -832,6 +835,15 @@ export function SessionView({
       <div className="status-bar">
         <span className="status-text">{statusBits.join('  ·  ')}</span>
         <span className="status-actions">
+          {store.agent && (
+            <button
+              className="status-btn status-btn-agent"
+              title="Agent control is on: a program on this computer can type in this session and read its text. Click to turn it off (#agent off)."
+              onClick={() => void store.setAgent(false)}
+            >
+              🤖 Agent on
+            </button>
+          )}
           <button className="status-btn" aria-pressed={store.engine.triggersPaused}
             onClick={() => store.toggleTriggers()}
             title="Temporarily pause all triggers for this session, including global and character triggers. Click again to resume.">

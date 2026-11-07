@@ -89,11 +89,17 @@ export default function App() {
     const offBounds = window.mud.map.onPopoutBounds((id, bounds) =>
       sessionStores.get(id)?.notePopoutBounds(bounds as PopoutBounds | null)
     )
+    // Agent control: run a local program's command in its session, as typed.
+    const offAgent = window.mud.agent.onSend((requestId, id, text) => {
+      const store = sessionStores.get(id)
+      window.mud.agent.sent(requestId, store ? store.agentSend(text) : { ok: false, error: 'That session is gone.' })
+    })
     return () => {
       off()
       offHello()
       offAction()
       offBounds()
+      offAgent()
     }
   }, [])
 

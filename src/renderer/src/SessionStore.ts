@@ -30,6 +30,7 @@ import {
   type ServerRoomInfo
 } from './map/types.ts'
 import type { ScriptDef, SessionEvent } from '../../shared/types'
+import type { AgentLine, AgentSendResult, AgentSessionInfo } from '../../shared/agent'
 import luaWasmUrl from 'wasmoon/dist/glue.wasm?url'
 import { saveFields, restoreFields } from '../../shared/copyover'
 const SESSION_STATE = ['name', 'host', 'port', 'profileId', 'charName', 'charNameFromGmcp',
@@ -123,6 +124,8 @@ export class SessionStore {
     if (name === this.charName) return
     this.charName = name
     this.onCharName?.()
+    // Lets an agent address the session by the character it is playing.
+    if (this.agent) void window.mud.agent.enable(this.id, this.agentInfo()).catch(() => {})
     // Character-scoped items wake up (or go quiet) with the name. Timers
     // re-arm to pick up the ones now active (startTimers, not refreshTimers:
     // that one also reconciles variables against a settings save that did
@@ -171,6 +174,12 @@ export class SessionStore {
   logging = false
   logPath: string | null = null
   private loggingPending = false
+
+  /** Agent control (#agent on): a program on this computer may type here and
+   *  read the session's text. Deliberately not carried across an update. */
+  agent = false
+  private agentPending = false
+  private agentPromptSent = ''
 
   /** Named capture windows (tells, channels, ...) fed by triggers. */
   captureWindows = new Map<string, Line[]>()
@@ -692,6 +701,7 @@ export class SessionStore {
         this.tracker?.reset()
         this.sounds.stopAll()
         this.closeOpenLine()
+        this.syncAgentPrompt()
         this.charNameFromGmcp = false
         this.loginGuess.reset()
         this.setCharName(null, false)
@@ -1115,6 +1125,7 @@ export class SessionStore {
         }
       }
     }
+    this.syncAgentPrompt()
     this.notify()
   }
 
@@ -1186,6 +1197,9 @@ export class SessionStore {
       }
     }
     this.tracker?.onLine(plain)
+    // Before the triggers run, so a trigger's echo follows the line that fired
+    // it; and gagged lines too, since a gag only hides text from the screen.
+    this.agentLine('output', plain)
     const directive = this.engine.processLine(plain)
     if (this.logging) this.logLine(plain)
     if (directive.highlight) {
@@ -1225,6 +1239,8 @@ export class SessionStore {
     this.openSpans = []
     this.promptDone = false
     if (this.logging) this.logLine(spans.map((s) => s.text).join(''))
+    this.agentLine('input', spans.map((s) => s.text).join(''))
+    this.syncAgentPrompt()
     this.notify()
   }
 
@@ -1234,6 +1250,7 @@ export class SessionStore {
       spans: [{ text: `» ${command}`, style: { color: '#8b949e', italic: true } }],
       kind: 'trigger'
     })
+    this.agentLine('trigger', command)
     this.notify()
   }
 
@@ -1244,6 +1261,7 @@ export class SessionStore {
       kind: 'trigger'
     })
     if (this.logging) this.logLine(text)
+    this.agentLine('script', text)
     this.notify()
   }
 
@@ -1255,6 +1273,7 @@ export class SessionStore {
       kind
     })
     if (this.logging) this.logLine(`--- ${text} ---`)
+    this.agentLine(kind, text)
     this.notify()
   }
 
@@ -1311,9 +1330,106 @@ export class SessionStore {
     }
   }
 
+  // ---- agent control ------------------------------------------------------
+
+  /**
+   * #agent [on|off], typed by the player. SessionView sends it here from the
+   * input line and nowhere else: a link or trigger from the server must
+   * never be able to hand the session to another program.
+   */
+  agentCommand(raw: string): void {
+    const m = /^#agent(?:\s+(on|off))?$/i.exec(raw.trim())
+    if (!m) {
+      this.addSystemLine('Usage: #agent on, #agent off, or #agent to see which.', 'error')
+    } else if (m[1]) {
+      void this.setAgent(m[1].toLowerCase() === 'on')
+      return
+    } else {
+      this.addSystemLine(
+        this.agent
+          ? 'Agent control is on for this session. #agent off stops it.'
+          : 'Agent control is off. #agent on lets a program on this computer play this session.',
+        'system'
+      )
+    }
+    this.notify()
+  }
+
+  async setAgent(on: boolean): Promise<void> {
+    if (this.disposed || this.agentPending || on === this.agent) return
+    this.agentPending = true
+    try {
+      if (on) {
+        await window.mud.agent.enable(this.id, this.agentInfo())
+        if (this.disposed) {
+          void window.mud.agent.disable(this.id)
+          return
+        }
+        this.agent = true
+        this.agentPromptSent = ''
+        this.addSystemLine(
+          'Agent control on: a program on this computer can now type in this session and read its text. #agent off stops it.',
+          'system'
+        )
+        this.syncAgentPrompt()
+      } else {
+        this.agent = false
+        await window.mud.agent.disable(this.id)
+        this.addSystemLine('Agent control off.', 'system')
+      }
+    } catch (err) {
+      if (!this.disposed) this.addSystemLine(`Agent control failed: ${String(err)}`, 'error')
+    } finally {
+      this.agentPending = false
+      this.notify()
+    }
+  }
+
+  /** A command from the agent bridge: run it as if typed, or say why not. */
+  agentSend(text: string): AgentSendResult {
+    if (!this.agent || this.disposed) return { ok: false, error: 'Agent control is off for this session.' }
+    if (this.copyoverPaused) return { ok: false, error: 'Wayfarer is installing an update; try again in a moment.' }
+    if (this.status !== 'connected') {
+      return { ok: false, error: 'The session is not connected. The player reconnects and logs in from Wayfarer.' }
+    }
+    if (this.serverEchoes) return { ok: false, error: 'The game is asking for a password. The player types it in Wayfarer.' }
+    // Multi-line text would become a pasted block, which can stop for a
+    // confirmation dialog nobody is there to answer.
+    if (/[\r\n]/.test(text)) return { ok: false, error: 'One command at a time.' }
+    const trimmed = text.trim()
+    if (/^#agent\b/i.test(trimmed)) return { ok: false, error: 'Only the player can change agent control.' }
+    // A reconnect can run a stored login script: logging in stays with the player.
+    if (/^#rec(onnect)?$/i.test(trimmed)) return { ok: false, error: 'Reconnecting is left to the player.' }
+    if (/^#help$/i.test(trimmed)) return { ok: false, error: "#help opens Wayfarer's help window; use the game's own help." }
+    this.sendInput(text, false)
+    return { ok: true }
+  }
+
+  private agentInfo(): AgentSessionInfo {
+    return { name: this.name, character: this.charName }
+  }
+
+  /** Synchronous on purpose: notify() waits for a frame, and a hidden window gets none. */
+  private agentLine(kind: AgentLine['kind'], text: string): void {
+    if (this.agent) window.mud.agent.line(this.id, { kind, text })
+  }
+
+  /** Tell the bridge when the unfinished last line, usually the prompt, changes. */
+  private syncAgentPrompt(): void {
+    if (!this.agent) return
+    const text = this.openSpans.map((s) => s.text).join('')
+    if (text === this.agentPromptSent) return
+    this.agentPromptSent = text
+    window.mud.agent.prompt(this.id, text)
+  }
+
   dispose(): void {
     if (this.disposed) return
     this.disposed = true
+    if (this.agent) {
+      this.agent = false
+      void window.mud.agent.disable(this.id)
+    }
     this.connectionGeneration++
     this.engine.stopTimers()
     this.engine.cancelPacedRepeats()

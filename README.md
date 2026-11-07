@@ -123,6 +123,10 @@ From Phase 2:
   repeats auto-cancel on disconnect
 - **Session logging** — timestamped plain-text logs, manual toggle or
   auto-start on connect, stored in `<userData>/logs`
+- **Agent control (experimental)** — `#agent on` lets a local program play one
+  session over a token-protected local pipe: it types as you would (aliases,
+  speedwalks and the mapper included) and reads the session's text back.
+  Refused at password prompts; `scripts/agent.mjs` is a command-line client
 - **Settings UI** — tabbed editor (⚙ in the status bar), settings saved per
   world profile plus a global "all worlds" scope, same atomic-write +
   timestamped-backup storage as profiles
