@@ -430,7 +430,7 @@ export const HELP_TOPICS: HelpTopic[] = [
       },
       { h: 'How it tracks you' },
       {
-        p: 'The mapper watches the commands you send and the room descriptions that come back. On MUDs that publish structured room data (GMCP or MSDP, like The Builder Academy), tracking is exact. Everywhere else it uses dead reckoning — and when something contradicts the map, it deliberately STOPS and shows "position unknown" rather than guessing junk rooms into your map. Fix it by right-clicking the room you are actually in → "I am here" (or type #lost to reset and re-sync). Your position is remembered between sessions: on reconnect you resume where you left off, re-verified against your first room description.'
+        p: 'The mapper watches the commands you send and the room descriptions that come back. On MUDs that publish structured room data (GMCP or MSDP, like The Builder Academy), tracking is exact. Everywhere else it uses dead reckoning — and when something contradicts the map, it deliberately STOPS and shows "position unknown" rather than guessing junk rooms into your map. Fix it by right-clicking the room you are actually in → "I am here" (or type #lost to reset and re-sync). If you are somewhere the map has never seen, such as after a teleport into a new area, type #map here: it adds the room you are standing in, sets your position there and looks to fill in its details, and mapping carries on from it. Your position is remembered between sessions: on reconnect you resume where you left off, re-verified against your first room description.'
       },
       {
         list: [

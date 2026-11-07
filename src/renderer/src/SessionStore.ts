@@ -512,6 +512,30 @@ export class SessionStore {
       this.addSystemLine(this.describeTidy(result), result.applied ? 'system' : 'error')
       return true
     }
+    if (verb === 'map' && /^here$/i.test(arg)) {
+      if (!this.mapModel || !this.tracker) {
+        this.addSystemLine('Map still loading — try again in a moment.', 'error')
+        return true
+      }
+      const known = this.tracker.currentRoom
+      if (known && !this.tracker.lost) {
+        this.addSystemLine(`The mapper already has you in ${known.name}.`, 'system')
+        return true
+      }
+      // The keyboard's "Add room here and set my position", for when the
+      // mapper has lost you somewhere it has never seen (a teleport, a
+      // portal): a fresh room on a clear spot, then a look to fill in its
+      // name, description and exits.
+      const zoneId = this.mapModel.activeZoneId
+      const level = Object.values(this.mapModel.map.rooms).filter((r) => r.zoneId === zoneId && r.z === 0)
+      const x = level.length > 0 ? Math.max(...level.map((r) => r.x)) + 3 : 0
+      const room = this.mapModel.createRoom({ name: 'New room', zoneId, x, y: 0, z: 0 })
+      this.tracker.setCurrentRoom(room.id)
+      this.addSystemLine('Mapping from here: this room is on the map now. Looking to fill in its details.', 'system')
+      this.echoInput('look')
+      this.engine.processInput('look')
+      return true
+    }
     if (verb === 'map') {
       this.toggleMap()
       return true

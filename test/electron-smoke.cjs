@@ -31,6 +31,9 @@ app.whenReady().then(async () => {
   })) ipcMain.handle(channel, () => value)
   ipcMain.handle('settings:save', (_e, _scope, set) => set)
   ipcMain.on('session:send', (_e, _id, text) => sent.push(text))
+  let savedMap = null
+  ipcMain.on('map:save', (_e, _key, map) => { savedMap = map })
+  ipcMain.handle('map:persist', (_e, _key, map) => { savedMap = map })
   const win = new BrowserWindow({ show: false, width: 1280, height: 860,
     webPreferences: { preload: path.join(root, 'out/preload/index.js'), contextIsolation: true, sandbox: false, backgroundThrottling: false, offscreen: true } })
   win.webContents.on('console-message', (event) => { if (event.level === 'error') errors.push(event.message) })
@@ -148,6 +151,23 @@ app.whenReady().then(async () => {
   assert.ok(sent.length > sentBeforePause)
   assert.ok(sent.slice(sentBeforePause).every(command => command === 'say trigger-fired'))
   console.log('ok status toggle pauses and resumes trigger commands and gagging through the real session')
+  // #map here: map from a room the mapper has never seen, as after a teleport.
+  const sentBeforeHere = sent.length
+  await setInput('#map here')
+  await key('Enter')
+  await waitFor(`document.querySelector('.output').textContent.includes('Mapping from here')`)
+  assert.deepEqual(sent.slice(sentBeforeHere), ['look'])
+  event({ type: 'text', data: 'A Quiet Glade\r\nTall grass sways in the breeze.\r\nExits: north\r\n' })
+  const until = Date.now() + 5000
+  while (!Object.values(savedMap?.rooms ?? {}).some((r) => r.name === 'A Quiet Glade')) {
+    assert.ok(Date.now() < until, 'the new room was saved with the name the look brought back')
+    await new Promise((r) => setTimeout(r, 50))
+  }
+  await setInput('#map here')
+  await key('Enter')
+  await waitFor(`document.querySelector('.output').textContent.includes('already has you in A Quiet Glade')`)
+  assert.equal(Object.values(savedMap.rooms).filter((r) => r.name === 'A Quiet Glade').length, 1)
+  console.log('ok #map here adds the room you stand in, fills it in from a look, and refuses a duplicate')
   await js(`document.querySelector('.tab-close').click()`)
   await waitFor(`!document.querySelector('.command-input')`)
   assert.deepEqual(errors, [])
