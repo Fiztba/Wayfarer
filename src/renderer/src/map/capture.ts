@@ -374,9 +374,15 @@ export class RoomCapture {
   }
 }
 
-/** Movement-failure lines that mean the pending move did NOT happen. */
+/**
+ * Movement-failure lines that mean the pending move did NOT happen. The last
+ * few are Diku/SMAUG position refusals: a move typed mid-fight, while resting
+ * or asleep, or out of movement points never leaves the room either, and if
+ * it isn't matched here its pending entry lingers and the NEXT refusal (a
+ * closed door, say) gets pinned on the wrong direction.
+ */
 const MOVE_FAIL_PATTERNS =
-  /alas, you cannot go that way|you can'?t go that way|you cannot go there|there is no exit|you can'?t go in that direction|seems to be closed|is closed\.?$|the .{1,30} is closed|you slam into a wall/i
+  /alas, you cannot go that way|you can'?t go that way|you cannot go there|there is no exit|you can'?t go in that direction|seems to be closed|is closed\.?$|the .{1,30} is closed|you slam into a wall|^\s*no way!\s+you are still fighting|you feel too relaxed|^\s*in your dreams, or what|you'?d need to fly to go there|^\s*you are too exhausted\.?\s*$/i
 
 /** Closed-door subset of the failures (marks a door on the attempted exit). */
 const DOOR_FAIL_PATTERNS = /seems to be closed|is closed\.?$|the .{1,30} is closed/i

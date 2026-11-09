@@ -4,6 +4,7 @@
  */
 import {
   closedDoorName,
+  isMoveFailure,
   parseExitListLine,
   parseExitsLine,
   RoomCapture
@@ -836,6 +837,37 @@ function makeWorld() {
   tracker.onLine('Alas, you cannot go that way.')
   check('hard-block: walk halted', walker.walking, false)
   check('hard-block: reason reported', lines.some((t) => t.includes('the way is blocked')), true)
+}
+
+// ---- a move refused mid-fight must not leave a stale pending move ----
+// Dawn of Demise: moves typed during a fight were refused, then "w" bounced off
+// a shut gate, and the auto-open went north (the stale refused move).
+{
+  const model = new MapModel(emptyMap(), () => {})
+  const failed: string[] = []
+  const tracker: MapTracker = new MapTracker(model, {
+    info: () => {},
+    onMoveFailed: (dir, closedDoor) => failed.push(`${dir}${closedDoor ? ' door' : ''}`)
+  })
+  tracker.onLine('Stockade gatehouse')
+  tracker.onLine('Exits: south (west)')
+  tracker.onCommand('n')
+  tracker.onLine('No way!  You are still fighting!')
+  tracker.onCommand('s')
+  tracker.onLine('No way!  You are still fighting!')
+  tracker.onCommand('w')
+  tracker.onLine('The gate is closed.')
+  check('fight-refusal: each refusal consumes its own move', failed, ['n', 's', 'w door'])
+  check('fight-refusal: the door lands on the right exit', model.exitOf(tracker.currentRoom!, 'w')?.door, true)
+  check('fight-refusal: not on the wrong one', model.exitOf(tracker.currentRoom!, 'n')?.door ?? false, false)
+  check('fight-refusal: still knows where it is', tracker.currentRoom?.name, 'Stockade gatehouse')
+  failed.length = 0
+  for (const refusal of ['Nah... You feel too relaxed to do that..', 'In your dreams, or what?', 'You are too exhausted.', "You'd need to fly to go there."]) {
+    tracker.onCommand('s')
+    tracker.onLine(refusal)
+  }
+  check('position refusals: resting, asleep, out of moves, no flight', failed, ['s', 's', 's', 's'])
+  check('position refusals: chatter is not a refusal', isMoveFailure('Bob says, "no way, you are still fighting him?"'), false)
 }
 
 // ---- pop-out RPC: remote edits land identically on the real model ----

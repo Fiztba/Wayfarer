@@ -4,8 +4,9 @@
  * clickable. MXP links are a different thing: the server marks those up.
  *
  * Conservative on purpose. A bare host with no scheme only counts with a
- * well-known top-level domain, so "e.g." and "file.txt" stay text; a port
- * is not taken on a bare host, since "tbamud.com:9091" is a MUD, not a
+ * well-known top-level domain, so "e.g." and "file.txt" stay text, as does
+ * anything that reads as two sentences with the space missing ("the
+ * road.In the distance"); a port is not taken on a bare host, since "tbamud.com:9091" is a MUD, not a
  * web page, and the link is to the site alone; an address inside an email
  * is left alone; and trailing punctuation belongs to the sentence, not the
  * link, including a closing bracket the link did not open.
@@ -57,6 +58,9 @@ const TLDS = [
   'games', 'game', 'online', 'site', 'tech', 'wiki', 'blog', 'space', 'zone', 'world', 'live', 'chat'
 ]
 
+/** TLDs that are also everyday words: a sentence running on into one is likelier than a site. */
+const WORD_TLDS = new Set(['in', 'at', 'it', 'no', 'me', 'be', 'us'])
+
 const URL_RE = new RegExp(
   [
     // With a scheme: anything up to whitespace or a quote/bracket that never
@@ -96,12 +100,26 @@ export function findLinks(text: string): TextLink[] {
       raw = trimmed
     }
     if (raw.length === 0) continue
-    // A bare host needs at least a letter in its last label to be a site.
+    if (!/^(?:https?:\/\/|www\.)/i.test(raw) && !readsAsHost(raw)) continue
     const href = /^https?:\/\//i.test(raw) ? raw : `https://${raw}`
     out.push({ start, end: start + raw.length, href })
     URL_RE.lastIndex = start + raw.length
   }
   return out
+}
+
+/**
+ * Whether a scheme-less match is a site rather than two sentences that lost
+ * their space. A Capitalized ending starts a new sentence, though all caps is
+ * just a shouted address. An everyday-word ending needs a path or a longer
+ * host to back it up: "example.in/rules" and "forum.example.it", not "road.it".
+ */
+function readsAsHost(raw: string): boolean {
+  const slash = raw.indexOf('/')
+  const labels = (slash < 0 ? raw : raw.slice(0, slash)).split('.')
+  const tld = labels[labels.length - 1]
+  if (/^[A-Z]/.test(tld) && /[a-z]/.test(tld)) return false
+  return !WORD_TLDS.has(tld.toLowerCase()) || slash >= 0 || labels.length > 2
 }
 
 function count(s: string, ch: string): number {
