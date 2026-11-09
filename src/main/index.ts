@@ -186,24 +186,29 @@ app.whenReady().then(async () => {
   let manualUpdateCheck: Promise<string> | null = null
   // The manual check is available even when scheduled updates are disabled.
   autoUpdater.on('error', () => {}) // Request errors are returned to the button below.
+  const readyToInstall = (version: string): string => `Version ${version} is ready to install.`
   ipcMain.handle('app:check-update', () => {
-    if (updateReady) return `Version ${updateReady} is ready to install.`
     if (!app.isPackaged) return 'Update checks are available in installed builds.'
     if (manualUpdateCheck) return manualUpdateCheck
     manualUpdateCheck = (async () => {
       try {
         autoUpdater.autoDownload = true
+        // Always asks, even with a version already downloaded: a newer one may
+        // have come out since, and re-finding the same one reuses the download.
         const result = await autoUpdater.checkForUpdates()
-        if (!result) return 'Unable to check for updates right now.'
+        if (!result) return updateReady ? readyToInstall(updateReady) : 'Unable to check for updates right now.'
         if (result.downloadPromise) {
           await result.downloadPromise
           updateReady = result.updateInfo.version
           sessionWindows?.broadcast('app:update-ready', [updateReady])
-          return `Version ${updateReady} is ready to install.`
+          return readyToInstall(updateReady)
         }
-        return `You are up to date (v${app.getVersion()}).`
+        return updateReady ? readyToInstall(updateReady) : `You are up to date (v${app.getVersion()}).`
       } catch (error) {
-        return `Update check failed: ${String(error)}`
+        // Failing to look for something newer doesn't undo the download already here.
+        return updateReady
+          ? `${readyToInstall(updateReady)} Could not check for a newer one: ${String(error)}`
+          : `Update check failed: ${String(error)}`
       } finally {
         manualUpdateCheck = null
       }
@@ -220,6 +225,8 @@ app.whenReady().then(async () => {
   ipcMain.handle('copyover:restore', (e) => (e.sender === mainWindow?.webContents ? sessions.restore() : null))
   ipcMain.handle('copyover:resume', () => sessions.resume())
   ipcMain.handle('app:install-update', async () => {
+    // A check under way may be replacing the installer; install what it leaves.
+    if (manualUpdateCheck) await manualUpdateCheck
     if (!updateReady) return false
     if (preparingUpdate) return false
     preparingUpdate = true

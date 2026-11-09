@@ -69,10 +69,38 @@ const waitFor = async (test) => {
   assert.deepEqual(await checking, ['Version 99.0.0 is ready to install.', 'Version 99.0.0 is ready to install.'])
   assert.equal(checks, 1)
   assert.equal(await call('window.mud.updateState()'), '99.0.0')
+  // With a version waiting, a check still asks: something newer may be out.
+  let asked = 0
+  updater.checkForUpdates = async () => { asked++; return { updateInfo: { version: '99.1.0' }, downloadPromise: Promise.resolve([]) } }
+  assert.equal(await call('window.mud.checkForUpdate()'), 'Version 99.1.0 is ready to install.')
+  assert.equal(asked, 1, 'a waiting download must not stop the check')
+  assert.equal(await call('window.mud.updateState()'), '99.1.0')
+  // Nothing newer, or no way to tell: the download already here is still the answer.
+  updater.checkForUpdates = async () => ({ updateInfo: { version: app.getVersion() } })
+  assert.equal(await call('window.mud.checkForUpdate()'), 'Version 99.1.0 is ready to install.')
+  updater.checkForUpdates = async () => null
+  assert.equal(await call('window.mud.checkForUpdate()'), 'Version 99.1.0 is ready to install.')
+  updater.checkForUpdates = async () => { throw new Error('offline test') }
+  assert.match(await call('window.mud.checkForUpdate()'), /Version 99\.1\.0 is ready to install\. Could not check for a newer one: .*offline test/)
   assert.equal(quitRequests, 0, 'checking must not restart a live session')
+  // Installing waits for a check under way, whose download replaces the installer.
+  const realInstall = updater.quitAndInstall
+  let installs = 0, release
+  updater.quitAndInstall = () => { installs++ }
+  updater.checkForUpdates = async () => ({ updateInfo: { version: '99.2.0' }, downloadPromise: new Promise((resolve) => { release = resolve }) })
+  const ongoing = call('window.mud.checkForUpdate()')
+  await waitFor(() => !!release)
+  const installing = call('window.mud.installUpdate()')
+  await new Promise((resolve) => setTimeout(resolve, 150))
+  assert.equal(installs, 0, 'installing must wait for the check to finish')
+  release([])
+  assert.equal(await ongoing, 'Version 99.2.0 is ready to install.')
+  assert.equal(await installing, true)
+  assert.equal(installs, 1)
+  updater.quitAndInstall = realInstall
   if (packaged) Object.defineProperty(app, 'isPackaged', packaged)
   else delete app.isPackaged
-  console.log('ok manual update IPC handles failure, current version, shared download and ready state without restarting')
+  console.log('ok manual update IPC handles failure, current version, shared download, checks past a waiting version and ready state without restarting')
   await assert.rejects(call(`window.mud.profiles.save({host:'localhost',port:99999})`), /Port must/)
   await assert.rejects(call(`window.mud.profiles.save({host:'localhost',port:1.5})`), /Port must/)
   await assert.rejects(call(`window.mud.profiles.save({host:'',port:4000})`), /host name/)
