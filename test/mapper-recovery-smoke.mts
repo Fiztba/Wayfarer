@@ -65,8 +65,10 @@ function fixture(duplicateStreet = false) {
     f.tracker.onLine('Vines snake up from the ground and entangle Mystra, forcing Mystra to flee!')
     assert.equal(f.tracker.lost, true)
     f.tracker.onCommand('w'); f.see(title, street, 'east south west')
-    assert.equal(f.tracker.speculative, true)
-    assert.equal(f.tracker.speculation?.anchorRoomId, null)
+    // The street can only be one place, so she is found; how she got there is still not assumed.
+    assert.equal(f.tracker.speculative, false)
+    assert.equal(f.tracker.lost, false)
+    assert.equal(f.tracker.currentRoomId, 'street')
     f.tracker.onCommand('e'); f.see('Lantern Market', ['A market of copper lanterns.'], 'north west')
     f.tracker.onCommand('n'); f.see('Clock Tower', ['A tall clock overlooks the town.'], 'south')
     assert.equal(f.tracker.speculative, false)

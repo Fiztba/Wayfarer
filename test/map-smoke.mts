@@ -2196,5 +2196,134 @@ check('open cmd: no door, no command',
   check('reconcile: said so', infos.some((t) => t.includes('same server id')), true)
 }
 
+// ---- arriving with no direction typed, then walking into new rooms ----
+// Reported live: a character arrived somewhere by other means than a typed
+// direction, in a room that could only be one place. The position stayed a
+// guess, so the first step up into unmapped rooms threw the guess away
+// ("Mapper lost") and none of the rooms after it were drawn.
+{
+  const { model, tracker, infos } = makeWorld()
+  const see = (name: string, desc: string, exits: string) => {
+    tracker.onLine(name); tracker.onLine(desc); tracker.onLine(exits)
+  }
+  const HALL = 'Dusty banners hang from the rafters of this long guild hall.'
+  see('Town Square', 'A wide paved square lies open to the sky.', 'Exits: north')
+  tracker.onCommand('n')
+  see('Guild Hall', HALL, 'Exits: south up')
+  const hall = tracker.currentRoom!
+  tracker.onCommand('s')
+  see('Town Square', 'A wide paved square lies open to the sky.', 'Exits: north')
+
+  tracker.onCommand('recall')
+  see('Guild Hall', HALL, 'Exits: south up')
+  check('recall: the only room it can be is confirmed at once', tracker.speculative, false)
+  check('recall: standing in it', tracker.currentRoomId, hall.id)
+  check('recall: position saved', model.map.lastRoomId, hall.id)
+
+  tracker.onCommand('u')
+  see('The First Landing', 'Cold air rises past a narrow slit of a window here.', 'Exits: up down')
+  tracker.onCommand('u')
+  see('The Second Landing', 'A thin carpet muffles every step on this upper landing.', 'Exits: down')
+  check('recall: stays found in new rooms', tracker.lost, false)
+  check('recall: no scare about being lost', infos.some((t) => t.startsWith('Mapper lost')), false)
+  check('recall: both new rooms drawn', Object.keys(model.map.rooms).length, 4)
+  check('recall: drawn from the room it landed in', model.room(model.exitOf(hall, 'u')?.to ?? null)?.name, 'The First Landing')
+}
+{
+  // A new session on a map that holds no last position: the same, from login.
+  const first = makeWorld()
+  const see = (t: MapTracker, name: string, desc: string, exits: string) => { t.onLine(name); t.onLine(desc); t.onLine(exits) }
+  see(first.tracker, 'Quiet Chapel', 'Candles gutter before a plain stone altar.', 'Exits: east')
+  first.model.setLastRoom(null)
+  const tracker = new MapTracker(first.model, { info: () => {} })
+  see(tracker, 'Quiet Chapel', 'Candles gutter before a plain stone altar.', 'Exits: east')
+  check('login: known at once', [tracker.speculative, tracker.lost, tracker.currentRoom?.name], [false, false, 'Quiet Chapel'])
+  tracker.dispose()
+}
+{
+  // Rooms mapped before descriptions were recorded.
+  const { model, tracker } = makeWorld()
+  const see = (name: string, desc: string, exits: string) => { tracker.onLine(name); tracker.onLine(desc); tracker.onLine(exits) }
+  const old = model.createRoom({ name: 'Old Mill', x: 0, y: 0, z: 0, exits: [{ dir: 'e', to: null, door: false }] })
+  see('Old Mill', 'A great wheel turns slowly in the race outside.', 'Exits: east')
+  check('old room: a name nothing else has is enough', [tracker.speculative, tracker.currentRoomId], [false, old.id])
+  check('old room: and it learns what it looks like', (model.room(old.id)?.descHashes ?? []).length, 1)
+}
+{
+  const { model, tracker } = makeWorld()
+  const see = (name: string, desc: string, exits: string) => { tracker.onLine(name); tracker.onLine(desc); tracker.onLine(exits) }
+  model.createRoom({ name: 'Alley', x: 0, y: 0, z: 0, exits: [{ dir: 'e', to: null, door: false }] })
+  model.createRoom({ name: 'Alley', x: 9, y: 9, z: 0, descHashes: [hashText('A different alley altogether.')], exits: [{ dir: 'e', to: null, door: false }] })
+  see('Alley', 'Refuse is piled against the wall of this alley.', 'Exits: east')
+  check('old room: a shared name is still only a guess', tracker.speculative, true)
+}
+{
+  const { model, tracker } = makeWorld()
+  const see = (name: string, desc: string, exits: string) => { tracker.onLine(name); tracker.onLine(desc); tracker.onLine(exits) }
+  const SAME = 'Refuse is piled against the wall of this alley.'
+  model.createRoom({ name: 'Alley', x: 0, y: 0, z: 0, descHashes: [hashText(SAME)], exits: [{ dir: 'e', to: null, door: false }] })
+  model.createRoom({ name: 'Alley', x: 9, y: 9, z: 0, descHashes: [hashText(SAME)], exits: [{ dir: 'e', to: null, door: false }] })
+  see('Alley', SAME, 'Exits: east')
+  check('twins: two rooms alike stay a guess', tracker.speculative, true)
+}
+
+{
+  // No route to go on, and the first room could be either twin: a room that can only be one place settles it.
+  const { model, tracker } = makeWorld()
+  const see = (name: string, desc: string, exits: string) => { tracker.onLine(name); tracker.onLine(desc); tracker.onLine(exits) }
+  const SAME = 'Refuse is piled against the wall of this alley.'
+  const NOOK = 'A cobbler has set up his bench in this quiet nook.'
+  const a = model.createRoom({ name: 'Alley', x: 0, y: 0, z: 0, descHashes: [hashText(SAME)], exits: [{ dir: 'e', to: null, door: false }] })
+  model.createRoom({ name: 'Alley', x: 9, y: 9, z: 0, descHashes: [hashText(SAME)], exits: [{ dir: 'e', to: null, door: false }] })
+  const nook = model.createRoom({ name: 'Cobbler Nook', x: 1, y: 0, z: 0, descHashes: [hashText(NOOK)], exits: [{ dir: 'w', to: a.id, door: false }] })
+  model.linkRooms(a.id, 'e', nook.id, true)
+  see('Alley', SAME, 'Exits: east')
+  check('twins: unsure at first', tracker.speculative, true)
+  tracker.onCommand('e')
+  see('Cobbler Nook', NOOK, 'Exits: west')
+  check('twins: found at the first room that can only be one place', [tracker.speculative, tracker.currentRoomId], [false, nook.id])
+}
+
+// ---- a climb through identical landings ----
+// Reported live: several up exits in a row through new rooms. Every landing
+// looked like the ones below it, so the mapper guessed she had gone back down.
+{
+  const { model, tracker } = makeWorld()
+  const see = (name: string, desc: string, exits: string) => { tracker.onLine(name); tracker.onLine(desc); tracker.onLine(exits) }
+  const STAIR = 'A narrow stone stair winds around the inside of the tower wall.'
+  see('The Foot of the Stairs', 'A plain stone landing lies at the base of a tall tower.', 'Exits: up south')
+  let behind = 0
+  for (let i = 1; i <= 7; i++) {
+    tracker.onCommand('u')
+    see('A Spiral Stair', STAIR, 'Exits: up down')
+    behind = Math.max(behind, i - (tracker.currentRoom?.z ?? 0))
+  }
+  check('climb: never more than a floor behind', behind <= 1, true)
+  tracker.onCommand('u')
+  see('The Top of the Tower', 'The wind tears across this bare stone roof.', 'Exits: down')
+  check('climb: never lost', tracker.lost, false)
+  check('climb: settled at the top', [tracker.speculative, tracker.currentRoom?.name], [false, 'The Top of the Tower'])
+  check('climb: every floor drawn', Object.keys(model.map.rooms).length, 9)
+  check('climb: one floor apart', Object.values(model.map.rooms).map((r) => r.z).sort((a, b) => a - b), [0, 1, 2, 3, 4, 5, 6, 7, 8])
+  for (let i = 0; i < 8; i++) {
+    tracker.onCommand('d')
+    if (i < 7) see('A Spiral Stair', STAIR, 'Exits: up down')
+    else see('The Foot of the Stairs', 'A plain stone landing lies at the base of a tall tower.', 'Exits: up south')
+  }
+  check('climb: walks back down the rooms it drew', [tracker.currentRoom?.name, Object.keys(model.map.rooms).length], ['The Foot of the Stairs', 9])
+}
+{
+  // Only floors already passed are ruled out: a landing above is still worth a doubt.
+  const { model, tracker } = makeWorld()
+  const see = (name: string, desc: string, exits: string) => { tracker.onLine(name); tracker.onLine(desc); tracker.onLine(exits) }
+  const STAIR = 'A narrow stone stair winds around the inside of the tower wall.'
+  see('The Foot of the Stairs', 'A plain stone landing lies at the base of a tall tower.', 'Exits: up south')
+  const foot = tracker.currentRoom!
+  model.createRoom({ name: 'A Spiral Stair', x: foot.x, y: foot.y, z: foot.z + 1, zoneId: foot.zoneId, descHashes: [hashText(STAIR)], exits: [{ dir: 'u', to: null, door: false }, { dir: 'd', to: null, door: false }] })
+  tracker.onCommand('u')
+  see('A Spiral Stair', STAIR, 'Exits: up down')
+  check('climb: a landing above is still a candidate', tracker.speculative, true)
+}
+
 console.log(failures === 0 ? '\nALL PASS' : `\n${failures} FAILURES`)
 process.exit(failures === 0 ? 0 : 1)

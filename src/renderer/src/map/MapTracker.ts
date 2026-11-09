@@ -652,7 +652,10 @@ export class MapTracker implements TrackerControl {
     // is identification, not creation -- the rule onServerRoom already
     // states. Follow mode used to go lost here without even looking, on
     // rooms it knew perfectly well.
-    const candidates = this.candidatesFor(det)
+    // A climb can't arrive on a floor it has already passed. Stairwells are
+    // runs of identical rooms, so without this every new landing read as
+    // possibly one of the landings below it, and the walk stalled on a guess.
+    const candidates = this.candidatesFor(det).filter((c) => !this.floorPassed(current, dir, c))
     const replayMatch = this.replaying ? this.expectedCandidate(current, dir, det) : null
     if (replayMatch) {
       this.recordObservedArrival(current, { dir }, replayMatch)
@@ -720,6 +723,7 @@ export class MapTracker implements TrackerControl {
     if (this.lost) {
       // While lost we only re-anchor on an unambiguous fingerprint.
       const matches = this.candidatesFor(det)
+      if (this.snapTo(matches, det)) return
       if (matches.length > 0) {
         this.beginSpeculation(null, null, det, matches)
         return
@@ -749,6 +753,7 @@ export class MapTracker implements TrackerControl {
       } else {
         // Teleport/recall/death: try unambiguous snap, else flag.
         const matches = this.candidatesFor(det)
+        if (this.snapTo(matches, det)) return
         if (matches.length > 0) {
           this.beginSpeculation(null, null, det, matches)
         } else {
@@ -760,6 +765,7 @@ export class MapTracker implements TrackerControl {
 
     // No current room at all (fresh session).
     const matches = this.candidatesFor(det)
+    if (this.snapTo(matches, det)) return
     if (matches.length > 0) {
       this.beginSpeculation(null, null, det, matches)
     } else if (matches.length === 0 && this.mode === 'map' && this.isMapEmpty()) {
@@ -1014,6 +1020,9 @@ export class MapTracker implements TrackerControl {
   private advanceSpeculation(move: PendingMove | undefined, det: RoomDetection): void {
     const spec = this.speculation
     if (!spec) return
+    // Nothing is held back from a known start here, so the only question is
+    // where the player is now, and a room that can only be one place answers it.
+    if (!spec.anchorRoomId && !spec.approach && this.snapTo(this.candidatesFor(det), det)) return
     // An unexplored exit is missing data, not a failed prediction. A unique
     // description match at the expected position can be accepted after the
     // next distinct arrival, provided no saved destination contradicts it.
@@ -1420,6 +1429,34 @@ export class MapTracker implements TrackerControl {
     return !Object.values(this.map.rooms).some(
       (r) => r.id !== room.id && this.roomMatches(r, det)
     )
+  }
+
+  /**
+   * The one room on the map this can be, with no route to go on: its recorded
+   * description says so, or it has none yet and no other room shares its name.
+   * Holding that as a guess only ever cost something, since the first step
+   * into new rooms threw the guess away and nothing after it got mapped.
+   */
+  private snapTo(matches: MapRoom[], det: RoomDetection): boolean {
+    const room = matches.length === 1 ? matches[0] : null
+    if (!room) return false
+    if (!(det.descHash && room.descHashes?.includes(det.descHash)) && !this.canLearn(room, det)) return false
+    this.speculation = null
+    this.currentRoomId = room.id
+    this.lost = false
+    this.refreshExits(room, det)
+    this.syncName(room, det)
+    this.notify()
+    return true
+  }
+
+  /** Whether a vertical move can't have ended in `room`, on the wrong side of
+   *  where it started. Each zone draws on its own grid, so only rooms in this
+   *  one are compared, and the room itself stays possible: a move the mapper
+   *  didn't recognize as refused shows the same room again. */
+  private floorPassed(from: MapRoom, dir: Direction, room: MapRoom): boolean {
+    const climb = DIR_DELTA[dir][2]
+    return climb !== 0 && room.id !== from.id && room.zoneId === from.zoneId && (room.z - from.z) * climb <= 0
   }
 
   private isPlaceholder(room: MapRoom): boolean {
