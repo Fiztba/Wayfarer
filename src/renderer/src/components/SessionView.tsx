@@ -35,14 +35,77 @@ const MAX_INPUT_HEIGHT = 260
 
 type InputEl = HTMLTextAreaElement | HTMLInputElement
 
-/** True when the caret sits on the first line — where ↑ means "history". */
-function caretOnFirstLine(el: InputEl): boolean {
-  return el.value.lastIndexOf('\n', (el.selectionStart ?? 0) - 1) === -1
+/** Zero-width space: gives an otherwise empty marker span a box to measure. */
+const ZWSP = String.fromCharCode(0x200b)
+
+/** Styles that decide where a textarea's text wraps, copied onto the mirror. */
+const MIRROR_STYLES = [
+  'fontFamily', 'fontSize', 'fontWeight', 'fontStyle', 'fontVariant', 'fontStretch',
+  'fontFeatureSettings', 'fontKerning', 'letterSpacing', 'wordSpacing', 'lineHeight',
+  'textTransform', 'textIndent', 'tabSize', 'whiteSpace', 'wordBreak', 'overflowWrap',
+  'direction',
+] as const
+
+/**
+ * Which visual row the caret at `pos` is on, and how many rows the text
+ * fills — counting soft wraps, not just newlines. Measured on an off-screen
+ * copy of the textarea laid out at the same width with the same font.
+ */
+function caretRows(el: HTMLTextAreaElement, pos: number): { row: number; rows: number } {
+  const cs = getComputedStyle(el)
+  const mirror = document.createElement('div')
+  for (const p of MIRROR_STYLES) mirror.style[p] = cs[p]
+  const padX = parseFloat(cs.paddingLeft) + parseFloat(cs.paddingRight)
+  Object.assign(mirror.style, {
+    position: 'fixed',
+    left: '-9999px',
+    top: '0',
+    visibility: 'hidden',
+    boxSizing: 'content-box',
+    padding: '0',
+    border: '0',
+    // clientWidth leaves out the scrollbar, which narrows the wrap width too.
+    width: `${el.clientWidth - padX}px`,
+  })
+  const value = el.value
+  // The caret belongs to the row where the text after it starts — at a soft
+  // wrap that is the next row, which is where Chromium draws the caret.
+  const after = document.createElement('span')
+  after.textContent = value.slice(pos) || ZWSP
+  const end = document.createElement('span')
+  end.textContent = ZWSP
+  mirror.append(value.slice(0, pos), after, end)
+  document.body.appendChild(mirror)
+  try {
+    let lh = parseFloat(cs.lineHeight)
+    if (!Number.isFinite(lh)) lh = parseFloat(cs.fontSize) * 1.2
+    const top = mirror.getBoundingClientRect().top
+    const rowOf = (span: HTMLSpanElement): number => {
+      const rect = span.getClientRects()[0] ?? span.getBoundingClientRect()
+      return Math.floor((rect.top - top + 0.5) / lh)
+    }
+    return { row: rowOf(after), rows: rowOf(end) + 1 }
+  } finally {
+    mirror.remove()
+  }
 }
 
-/** True when the caret sits on the last line — where ↓ means "history". */
+/** True when the caret sits on the first visual row — where ↑ means "history". */
+function caretOnFirstLine(el: InputEl): boolean {
+  if (!(el instanceof HTMLTextAreaElement)) return true
+  const pos = el.selectionStart ?? 0
+  if (pos === 0) return true
+  return caretRows(el, pos).row === 0
+}
+
+/** True when the caret sits on the last visual row — where ↓ means "history". */
 function caretOnLastLine(el: InputEl): boolean {
-  return el.value.indexOf('\n', el.selectionEnd ?? 0) === -1
+  if (!(el instanceof HTMLTextAreaElement)) return true
+  const pos = el.selectionEnd ?? el.value.length
+  // Nothing after the caret, so nothing can sit on a row below it.
+  if (pos === el.value.length) return true
+  const { row, rows } = caretRows(el, pos)
+  return row >= rows - 1
 }
 
 /** Binary search: index of the line with id >= target (ids are ascending). */

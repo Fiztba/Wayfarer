@@ -85,7 +85,7 @@ export const HELP_TOPICS: HelpTopic[] = [
       },
       {
         list: [
-          'Command history: ↑ and ↓ cycle through previous commands; Esc clears the line. In a multi-line block the arrows move the caret first and only reach for history at the top and bottom of the text.',
+          'Command history: ↑ and ↓ cycle through previous commands; Esc clears the line. When a command runs over several lines, whether it wrapped or has line breaks, the arrows move the caret between those lines first and only reach for history from the top and bottom lines.',
           'After sending, your command stays selected so typing replaces it — or enable "Clear the input line after sending" in ⚙ Settings → General.',
           'Multiple commands: separate with semicolons — get sword;wield sword;kill troll.',
           'Multi-line: Shift+Enter (or Ctrl+Enter) adds a line break instead of sending; Enter always sends the whole block. Paste works too — see Pasting Scripts & Blocks.',
